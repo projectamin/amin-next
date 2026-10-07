@@ -1,0 +1,80 @@
+id = "io.projectamin.apps.shop-ui"
+version = "0.1.0-bootstrap+git-abc1234"
+authors = ["Alice Admin <alice@shop.example>", "Amin App Scaffolder (Tier-0 LLM)"]
+description = """
+Next.js 15 ecommerce checkout UI. Serves product catalogue, cart, checkout
+with Stripe webhooks.  Designed as the reference Amin-native App bundle:
+profiles are pure SAX filter graphs, budgets are declared, roles explicit.
+"""
+tier = "staging"                      # selects sandbox tier strict-cg2
+
+[schedule]
+replicas.min = 4
+replicas.max = 12
+cpu = "200%"                          # 2 vCPU-equivalent per replica
+mem = "4G"
+per_host_density = 64                # max 64 replicas on one bare-metal box
+anti_affinity = "rack"               # not two replicas share a rack
+
+[[storage]]
+name = "product-assets"
+size = "50G"
+class = "nvme"                       # ZFS dataset on NVMe pool
+backup = "daily+pitr7"               # daily ZFS snapshot + 7-day PITR
+
+[[storage]]
+name = "order-blobs"
+size = "200G"
+class = "hdd-ec"                     # erasure-coded 10+4 HDD tier
+backup = "geo-redundant"
+
+[[network.ports]]
+name = "http"
+number = 80
+public = true
+lb = "anycast"                       # XDP + BGP anycast VIP
+rate_limit_per_ip_rps = 500
+
+[[network.ports]]
+name = "https"
+number = 443
+public = true
+lb = "anycast"
+ssl_profile = "mozilla-modern-v7"
+waf_ruleset = "owasp-crs-4.0"
+
+[[iam.roles]]
+role = "blob.put"
+on = "blob:user-uploads/products/*"
+
+[[iam.roles]]
+role = "amin.command.exec:psql"
+on = "postgres:checkout-primary/orders"
+
+[[secrets]]
+name = "stripe_webhook_secret"
+kms_key = "prod-app-webhooks-01"
+source = "env"
+
+[[secrets]]
+name = "postgresql_checkout_password"
+kms_key = "prod-db-0042"
+source = "kms-wrap"
+
+[observability]
+slos = [
+  { name = "p95_latency_ms",  lte = 250,   window = "30d" },
+  { name = "error_rate_pct",  lte = 0.1,   window = "7d"  },
+  { name = "availability",    gte = "99.95", window = "30d" },
+]
+log_schema = "ecs-fields-v8"
+trace_sampling = 0.01               # 1% of requests get full OTel traces
+
+[billing]
+owner = "team:checkout"
+cost_center = "CC-1337-ECOM"
+
+[compliance]
+fedramp_mod = ["AC", "SC", "SI", "CM"]
+pci_dss = ["3.4", "6.5.10", "10.2"]
+soc2_cc  = ["CC6.1", "CC6.6", "CC7.2"]

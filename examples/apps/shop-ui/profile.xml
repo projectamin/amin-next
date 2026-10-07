@@ -1,0 +1,76 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<amin:profile xmlns:amin="http://projectamin.org/ns/2026/"
+              id="io.projectamin.apps.shop-ui.profile.v1"
+              signed_by="llm-tier0+alice@shop.example"
+              sandbox_tier="staging-cg2-strict">
+
+  <!-- ════════════════════════════════════════════════════════════════════
+       Amin 3.0 App Profile: shop-ui checkout frontend
+       Every element is a SAX event. Every filter sees every event.
+       Stream in → Filter graph → Stream out.
+       ════════════════════════════════════════════════════════════════════ -->
+
+  <!-- OS-conditional branches using existing Amin DNA.
+       <amin:linux> branch runs on $^O=linux, others are BYPASSED by
+       Amin::Cond::OS as SAX events stream through the graph. -->
+  <amin:cond name="os">
+
+    <amin:linux>
+
+      <!-- 1) Prepare the deployment directory. -->
+      <amin:command name="remove">
+        <amin:flag>rf</amin:flag>
+        <amin:param name="target">/srv/shop-ui/releases/next</amin:param>
+      </amin:command>
+
+      <amin:command name="mkdir">
+        <amin:flag name="mode">0750</amin:flag>
+        <amin:flag>p</amin:flag>
+        <amin:param name="target">/srv/shop-ui/releases/next</amin:param>
+        <amin:param name="target">/srv/shop-ui/releases/next/.next</amin:param>
+        <amin:param name="target">/srv/shop-ui/releases/next/public/assets</amin:param>
+        <amin:param name="target">/srv/shop-ui/releases/next/node_modules</amin:param>
+        <amin:shell>
+          <amin:param name="dir">/srv/shop-ui</amin:param>
+        </amin:shell>
+      </amin:command>
+
+      <!-- 2) Emit a startup banner — shows streaming output capability. -->
+      <amin:command name="echo">
+        <amin:flag>e</amin:flag>
+        <amin:param name="text">\033[32m[Amin 3.0]\033[0m deploying shop-ui \033[1m0.1.0\033[0m to $(hostname)</amin:param>
+      </amin:command>
+
+      <!-- 3) Example GCC-style streaming output simulation.
+              Use `find -maxdepth 3` which produces many lines of output
+              to exercise the line-by-line SAX streaming path.
+              Actual deploy would unpack tar, run npm ci, next build. -->
+      <amin:command name="echo">
+        <amin:param name="text">Building checkout frontend (placeholder for next build, simulating long gcc output):</amin:param>
+      </amin:command>
+
+    </amin:linux>
+
+    <amin:freebsd>
+      <amin:command name="mkdir">
+        <amin:flag>p</amin:flag>
+        <amin:param name="target">/usr/local/www/shop-ui</amin:param>
+      </amin:command>
+    </amin:freebsd>
+
+    <amin:posix>
+      <amin:command name="echo">
+        <amin:param name="text">Generic POSIX fallback branch: deploy via rsync ${DEPLOY_HOST}:/srv/shop-ui</amin:param>
+      </amin:command>
+    </amin:posix>
+
+  </amin:cond>
+
+  <!-- 4) Post-deploy smoke tests (Amin::Depend style would go here) -->
+  <amin:command name="echo">
+    <amin:param name="text">POST /healthz check → HTTP 200 (stub)</amin:param>
+  </amin:command>
+
+  <!-- SAX pipeline appends <amin:result kind=...> stream events as it runs.
+       Full output document is audit-log ready, hashable for provenance. -->
+</amin:profile>

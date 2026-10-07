@@ -1,0 +1,37 @@
+[workspace]
+resolver = "2"
+members  = ["crates/awp3", "crates/aminexec", "crates/bsax"]
+
+[workspace.package]
+edition      = "2021"
+rust-version = "1.80"
+license      = "BSD-2-Clause"
+homepage     = "https://projectamin.org"
+repository   = "https://github.com/projectamin/amin-3"
+
+[workspace.dependencies]
+blake3                = "1.5"
+
+# ── Wire + transport ─────────────────────────────────────────────────────
+quinn                 = { version = "0.11", default-features = false, features = ["runtime-tokio"] }
+rustls                = { version = "0.23", default-features = false }
+tokio                 = { version = "1",    default-features = false, features = ["rt-multi-thread","macros","net","sync","io-util"] }
+bytes                 = "1.6"
+http                  = "1"
+anyhow                = "1"
+thiserror             = "1"
+
+# ── Observability ────────────────────────────────────────────────────────
+tracing               = "0.1"
+tracing-subscriber    = { version = "0.3", features = ["env-filter"] }
+
+[profile.release]
+lto            = "fat"
+codegen-units  = 1
+panic          = "abort"
+strip          = "symbols"
+opt-level      = 3
+overflow-checks = true
+
+[profile.dev]
+overflow-checks = true

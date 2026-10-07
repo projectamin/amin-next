@@ -1,0 +1,35 @@
+[package]
+name         = "aminexec"
+version      = "0.1.0"
+description  = "Amin 3.0 execution dispatcher: per-process sandbox, cgroup metrics, platform trait stubs for Linux/FreeBSD/iOS/Android"
+edition.workspace      = true
+rust-version.workspace = true
+license.workspace      = true
+homepage.workspace     = true
+repository.workspace   = true
+
+[lib]
+name    = "aminexec"
+path    = "src/lib.rs"
+
+[[bin]]
+name    = "aminexec"
+path    = "src/main.rs"
+
+[features]
+default = []
+# Strong isolation on recent Linux kernels (>=6.2) — deps added as local-path crates later
+linux-strict  = []
+# POSIX minimal fallback — no sandbox, only fork/exec + rusage
+posix-minimal = []
+# Enables FFI bridging to Objective-C Runtime (iOS)
+ios-ffi       = []
+# Enables JNI binding to ART / Android Runtime
+android-jni   = []
+
+[dependencies]
+tokio.workspace           = true
+anyhow.workspace          = true
+thiserror.workspace       = true
+tracing.workspace         = true
+tracing-subscriber.workspace = true

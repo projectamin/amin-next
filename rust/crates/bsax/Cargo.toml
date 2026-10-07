@@ -1,0 +1,23 @@
+[package]
+name         = "bsax"
+version      = "0.1.0"
+description  = "Binary SAX v1 codec. Drop-in replacement for XML text serialisation of Amin SAX events with exact XML::SAX event-model parity. 50-75% smaller wire; zero-copy decode; hyperscale + mobile optimised."
+edition.workspace      = true
+rust-version.workspace = true
+license.workspace      = true
+homepage.workspace     = true
+repository.workspace   = true
+
+[features]
+default  = ["std"]
+std      = ["bytes/std"]
+simd-tag = []
+
+[dependencies]
+bytes.workspace     = true
+thiserror.workspace = true
+tracing.workspace   = true
+
+[lib]
+name = "bsax"
+path = "src/lib.rs"

@@ -1,0 +1,128 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Shop-UI Admin Bundle: profile + network-map + native-UI, all in ONE SAX pipeline.
+  Command equivalents (no doubledashes in XML comments per spec):
+    amin run    shop-ui/map+ui.xml          execute against live servers + TTY view
+    amin map    shop-ui/map+ui.xml out svg  render SVG network topology with status badges
+    amin ui     shop-ui/map+ui.xml os ios   produce SwiftUI View source files
+    amin ui     shop-ui/map+ui.xml os android produce Jetpack Compose Kotlin source
+
+  All four runs consume exactly the same input; the only difference is which
+  late-position filter is enabled in the Dispatcher chain.
+-->
+<amin:profile
+    xmlns:amin="http://projectamin.org/ns/2026/"
+    xmlns:ui="http://projectamin.org/ns/ui/1"
+    xmlns:map="http://projectamin.org/ns/map/1"
+    amin:id="io.projectamin.apps.shop-ui"
+    amin:version="0.1.0-bootstrap">
+
+  <!-- ═══════════════════════════════════════════════════════════════
+       1. UI LAYER  (consumed by Filter::UI::SwiftUIView / ComposeView)
+       Declarative view graph with SAX-event-to-SwiftUI publisher binds.
+       ═══════════════════════════════════════════════════════════════ -->
+  <ui:app amin:id="shop-ui" title="Amin Fabric — Shop">
+    <ui:scene id="servers">
+      <ui:list id="host-list" title="Fabric hosts">
+        <!-- for-each is evaluated at filter-graph build time; stream events
+             from <map:server> nodes bind SwiftUI Combine publishers here. -->
+        <ui:row for-each="//map:server">
+          <ui:badge   color="{./@status eq 'success' ? 'green' : 'yellow'}"
+                      label="{./@id}"/>
+          <ui:vstack  spacing="4">
+            <ui:text  kind="headline">{./@flavor}</ui:text>
+            <ui:sparkline bind="./stream[@channel='loadavg']" points="60"/>
+          </ui:vstack>
+          <ui:navigate to="server-detail-{@id}"/>
+        </ui:row>
+      </ui:list>
+    </ui:scene>
+    <ui:scene id="map">
+      <ui:card title="Network topology">
+        <ui:asyncimage url="bundle://out/map.svg"/>
+      </ui:card>
+    </ui:scene>
+  </ui:app>
+
+  <!-- ═══════════════════════════════════════════════════════════════
+       2. NETWORK MAP LAYER  (consumed by Filter::Map::Topology)
+       Declarative topology; status badges populated as result events
+       stream through from command execution below.
+       ═══════════════════════════════════════════════════════════════ -->
+  <map:region id="europe-west1" bg="#0a0f1c" accent="#00b4d8">
+    <map:server id="prod-edge-01"  flavor="c2.metal.24" location="eu-west-1a"/>
+    <map:server id="prod-edge-02"  flavor="c2.metal.24" location="eu-west-1b"/>
+    <map:server id="prod-app-01"   flavor="c3a.48vcpu"  location="eu-west-1a"/>
+    <map:server id="prod-app-02"   flavor="c3a.48vcpu"  location="eu-west-1b"/>
+    <map:server id="prod-db-01"    flavor="r7iz.32xlarge" location="eu-west-1a"/>
+    <map:server id="prod-store-01" flavor="i4i.32xlarge" location="eu-west-1a"/>
+
+    <map:bgp   id="primary-as" as_number="65001" export="default" import="0.0.0.0/0 le 24"/>
+    <map:link  a="prod-edge-01" b="prod-app-01"   cost="1"  color="#00b4d8"/>
+    <map:link  a="prod-edge-02" b="prod-app-02"   cost="1"  color="#00b4d8"/>
+    <map:link  a="prod-app-01"  b="prod-db-01"    cost="5"  color="#ffb703" latency_ms="0.4"/>
+    <map:link  a="prod-app-02"  b="prod-db-01"    cost="5"  color="#ffb703"/>
+    <map:link  a="prod-db-01"   b="prod-store-01" cost="10" color="#ef476f"   latency_ms="2.1"/>
+  </map:region>
+  <map:region id="ios-fleet" bg="#0d0d0d" accent="#f72585">
+    <!-- Mobile targets get their own region — iOS/Android don't route
+         through prod-edge; they connect via MDM proxy over AWP/3. -->
+    <map:server id="ios-store-3127"  flavor="apple-a17pro" location="mdm-eu-retail-07"/>
+    <map:server id="droid-scan-0088" flavor="snapdragon-8gen2" location="mdm-eu-logistics-03"/>
+  </map:region>
+
+  <!-- ═══════════════════════════════════════════════════════════════
+       3. COMMAND LAYER  (consumed by Cond::OS then Command::* filters)
+       Execution results propagate UP through the late filters, which
+       annotate the view graph + topology map with live status badges.
+       ═══════════════════════════════════════════════════════════════ -->
+  <amin:cond name="os">
+    <amin:linux>
+      <amin:command name="remove" target="/srv/shop-ui/tmp/cache.old"/>
+      <amin:command name="mkdir">
+        <amin:flag  name="parents"/>
+        <amin:flag  name="mode">0750</amin:flag>
+        <amin:param name="target">/srv/shop-ui/var</amin:param>
+        <amin:param name="target">/srv/shop-ui/spool</amin:param>
+        <amin:param name="target">/srv/shop-ui/secrets</amin:param>
+      </amin:command>
+      <amin:command name="echo">
+        <amin:param name="text">fabric boot: shop-ui linux fleet ✓</amin:param>
+        <amin:flag  name="n"/>
+      </amin:command>
+    </amin:linux>
+
+    <amin:ios>
+      <!-- iOS: entitlements applied via MDM declarative management;
+           then background-refresh cadence set via app group container. -->
+      <amin:command name="entitlements_apply" plist="ShopUI.entitlements"/>
+      <amin:command name="background_refresh" interval_seconds="300"/>
+      <amin:command name="data_protection" class="NSFileProtectionCompleteUnlessOpen"
+                    container="group.io.projectamin.apps.shop-ui"/>
+      <amin:command name="echo">
+        <amin:param name="text">fabric boot: shop-ui iOS fleet ✓</amin:param>
+      </amin:command>
+    </amin:ios>
+
+    <amin:android>
+      <!-- Android: content_resolver sets install-non-market (MDM),
+           WorkManager policy enforces periodic Amin App runs; SELinux
+           context set via runcon before each filter child. -->
+      <amin:command name="content_resolver_call">
+        <amin:param name="uri">content://settings/secure/install_non_market_apps</amin:param>
+        <amin:param name="value">1</amin:param>
+      </amin:command>
+      <amin:command name="workmanager_enqueue"
+                    worker="AminSyncWorker" repeat_minutes="15" flex_minutes="5"/>
+      <amin:command name="echo">
+        <amin:param name="text">fabric boot: shop-ui Android fleet ✓</amin:param>
+      </amin:command>
+    </amin:android>
+
+    <amin:posix>
+      <amin:command name="echo">
+        <amin:param name="text">fabric boot: shop-ui posix fallback ✓</amin:param>
+      </amin:command>
+    </amin:posix>
+  </amin:cond>
+</amin:profile>

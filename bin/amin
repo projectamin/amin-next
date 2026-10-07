@@ -1,0 +1,71 @@
+#!/usr/bin/env perl
+use v5.38; use warnings; use utf8;
+use experimental 'signatures';
+use Getopt::Long qw(:config auto_help auto_version);
+binmode STDOUT, ':encoding(UTF-8)';
+binmode STDERR, ':encoding(UTF-8)';
+
+use File::Basename qw(dirname);
+use lib dirname(__FILE__) . '/../perl-lib';
+
+our $VERSION = '3.0.0-bootstrap';
+my ($STREAM, $MAP_OUT, $UI_OS) = (0, 'svg', 'tty');
+GetOptions(
+    'stream!'  => \$STREAM,
+    'out=s'    => \$MAP_OUT,
+    'os=s'     => \$UI_OS,
+) or die "bad opts\n";
+
+my $MODE = { render => 1, dryrun => 1, run => 1, app => 1, map => 1, ui => 1 };
+sub usage ($exit = 2) {
+    say STDERR "Usage: $0 [--stream] <render|dryrun|run|app|map|ui> <path> [--out=svg|dot|xml] [--os=ios|android|html|tty]";
+    exit $exit;
+}
+
+my $mode = shift(@ARGV) // usage(2);
+my $path = shift(@ARGV) // usage(2);
+usage(2) unless $MODE->{$mode} && length($path) && -e $path;
+
+my ($LATE_MAP, $LATE_UI) = (1, 1);
+if    ($mode eq 'map') { $mode = 'render'; ($LATE_MAP, $LATE_UI) = (1, 0) }
+elsif ($mode eq 'ui')  { $mode = 'render'; ($LATE_MAP, $LATE_UI) = (0, 1) }
+
+if ($LATE_MAP) {
+    $MAP_OUT =~ /^(svg|dot|xml)$/ or die "--out must be svg|dot|xml\n";
+}
+if ($LATE_UI) {
+    $UI_OS   =~ /^(ios|android|html|tty)$/ or die "--os must be ios|android|html|tty\n";
+    $ENV{AMIN_OSTYPE} = $UI_OS if $UI_OS =~ /^(ios|android)$/;
+}
+
+if ($mode eq 'app') {
+    -d $path or die "App path must be a directory: $path\n";
+    $path .= '/profile.xml';
+    -f $path or die "App bundle missing profile.xml: $path\n";
+    $mode = 'render';
+}
+
+open(my $fh, "<:encoding(UTF-8)", $path) or die "Cannot read $path: $!";
+my $xml = do { local $/; <$fh> }; close $fh;
+
+use Amin;
+use Amin::Log::Standard;
+use Amin::Handler::Writer;
+
+my $log     = Amin::Log::Standard->new(stderr => 1);
+my $writer  = Amin::Handler::Writer->new(
+    indent    => 2,
+    ($STREAM ? (fh => *STDERR{IO}, autoflush => 1) : ()),
+);
+my $amin = Amin->new(Mode => $mode, Handler => $writer, Log => $log,
+    late_filters_enable => { map => $LATE_MAP, ui => $LATE_UI },
+    ui_os => $UI_OS, map_out => $MAP_OUT);
+
+my $out = $amin->parse($xml);
+if ($STREAM) {
+    STDOUT->flush;
+} else {
+    print $out if defined $out && length $out;
+}
+
+exit $log->error_count > 0 ? 1 : 0;

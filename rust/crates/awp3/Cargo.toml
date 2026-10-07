@@ -1,0 +1,27 @@
+[package]
+name         = "awp3"
+version      = "0.1.0"
+description  = "AWP/3 — Amin Wire Protocol v3: PQ-safe (ML-KEM-768 + X25519 hybrid) Noise_XKems framed transport"
+edition.workspace      = true
+rust-version.workspace = true
+license.workspace      = true
+homepage.workspace     = true
+repository.workspace   = true
+
+[features]
+default = []
+quic    = ["dep:quinn", "dep:rustls"]
+
+[dependencies]
+blake3.workspace       = true
+bytes.workspace        = true
+tokio.workspace        = true
+anyhow.workspace       = true
+thiserror.workspace    = true
+tracing.workspace      = true
+quinn                  = { workspace = true, optional = true }
+rustls                 = { workspace = true, optional = true }
+
+[lib]
+name = "awp3"
+path = "src/lib.rs"

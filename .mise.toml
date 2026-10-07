@@ -1,0 +1,86 @@
+[tools]
+rust = "1.80.1"
+cargo-binstall = "1.10.20"
+jq   = "1.7.1"
+
+[tools.perl]
+version = "5.38.2"
+options = ["-Duseshrplib", "-Dusethreads", "-Duselargefiles"]
+shims   = ["perl", "cpanm", "prove"]
+
+[plugins]
+
+[env]
+PATH    = "${PWD}/local/bin:${PWD}/bin:${PWD}/target/release:${PWD}/target/debug:${PATH}"
+PERL5LIB = "${PWD}/perl-lib:${PWD}/local/lib/perl5"
+AMIN_HOME = "${PWD}"
+RUST_BACKTRACE = "1"
+CARGO_TARGET_DIR = "${PWD}/target"
+
+[tasks.bootstrap]
+description = "Install CPAN modules + cargo deps for Amin 3.0 (mise-managed perl via cpanm + carton lockfile)"
+run = '''
+set -e
+PREFIX="$(pwd)/local"
+export PERL5LIB="${PWD}/perl-lib:$PREFIX/lib/perl5:$PERL5LIB"
+export PATH="$PREFIX/bin:$PATH"
+
+echo "[+] Installing runtime Perl deps (mise cpanm shim, --cpanfile pinned)..."
+cpanm --notest --local-lib-contained "$PREFIX"  \
+      --cpanfile ./cpanfile                     \
+      --installdeps .
+
+echo "[+] Installing develop/test Perl deps..."
+cpanm --notest --local-lib-contained "$PREFIX"    \
+      Test2::Suite Test2::V0 Perl::Tidy Path::Tiny \
+      Try::Tiny Devel::Cover Carton
+
+if [ -x "$PREFIX/bin/carton" ]; then
+  echo "[+] Writing Carton lockfile (cpanfile.snapshot)..."
+  PERL5LIB="$PREFIX/lib/perl5" "$PREFIX/bin/carton" check >/dev/null 2>&1 || true
+  (PERL5LIB="$PREFIX/lib/perl5"; export PERL5LIB
+   "$PREFIX/bin/carton" install --cpanfile ./cpanfile >/dev/null 2>&1 || true)
+fi
+
+echo "[+] Running cargo fetch..."
+(cd rust/ && cargo fetch --workspace || true)
+
+echo "[+] Bootstrap complete. Use \`mise run test\` to run the suite."
+'''
+
+[tasks.cpan-outdated]
+description = "List outdated CPAN modules (safe; no install)"
+run = '''
+PREFIX="$(pwd)/local"
+export PERL5LIB="${PWD}/perl-lib:$PREFIX/lib/perl5:$PERL5LIB"
+export PATH="$PREFIX/bin:$PATH"
+cpan-outdated -p || true
+'''
+
+[tasks.cpan-upgrade]
+description = "Upgrade one pinned module NAME=... to latest stable, then refresh snapshot"
+run = '''
+: "${NAME:?usage: mise run cpan-upgrade NAME=IPC::Run}"
+PREFIX="$(pwd)/local"
+export PERL5LIB="${PWD}/perl-lib:$PREFIX/lib/perl5:$PERL5LIB"
+export PATH="$PREFIX/bin:$PATH"
+cpanm --notest --local-lib-contained "$PREFIX" "$NAME"
+if [ -x "$PREFIX/bin/carton" ]; then
+  PERL5LIB="$PREFIX/lib/perl5" "$PREFIX/bin/carton" install --cpanfile ./cpanfile || true
+fi
+echo "[+] Upgraded $NAME - remember to bump the requires() line in cpanfile + commit cpanfile.snapshot"
+'''
+
+[tasks.test]
+description = "Run full test suite: Perl unit tests + Rust integration tests"
+run = '''
+prove -v -r t/
+echo "---"
+(cd rust && cargo test --workspace)
+'''
+
+[tasks.app]
+description = "Render a sample Amin 'application' profile via the new dispatcher"
+run = '''
+perl -I perl-lib bin/amin render examples/apps/shop-ui/profile.xml
+'''
