@@ -13,36 +13,70 @@ use Class::Tiny qw(fh autoflush), {
 
 # 4-bit NS_IDs MUST stay 1:1 with Rust bsax/src/lib.rs NS_ID enum.
 use constant {
-    NS_NONE => 0, NS_AMIN => 1, NS_UI => 2, NS_MAP => 3, NS_ESCAPE => 15,
+    NS_NONE    => 0,
+    NS_AMIN    => 1,
+    NS_UI      => 2,
+    NS_MAP     => 3,
+    NS_BITCACHE=> 4,   # http://projectamin.org/ns/bc/  (legacy Bitcache namespace URI)
+    NS_ESCAPE  => 15,
 };
 
 my %NS2ID = (
     'http://projectamin.org/ns/2026/'    => NS_AMIN,
     'http://projectamin.org/ns/ui/1'     => NS_UI,
     'http://projectamin.org/ns/map/1'    => NS_MAP,
+    'http://projectamin.org/ns/bc/'      => NS_BITCACHE,
     ''                                   => NS_NONE,
 );
 
 # NAME_ID closed-world vocabulary — 1:1 with Rust bsax/src/vocab.rs BY_ID.
-# Length intentionally self-sized so ESCAPE is always the first ID past the
-# last vocab slot (no manual 0..61 counting → zero collision risk).
-my @VOCAB = (
-    # amin core  (element + attribute LocalNames used by Amin::Command::* and
-    #             the 5-position SAX chain inner filters)
-    qw(profile result command stream status cond argv
-       id version kind rc pid duration exit_kind name target
-       channel dir mode level value type size),
-    # map:*      (Amin::Filter::Map::Topology element + attr LocalNames)
-    qw(region server link node a b cost phase flavor
-       latency_ms bw_gbps tier zone value),
-    # ui:*       (Amin::Filter::UI::SwiftUIView known-views + late-sax attrs)
-    qw(app scene list row column hstack vstack stack grid section
-       card progress alert sheet toolbar searchable item label
-       text badge sparkline button navigate image asyncimage
-       title spacing points for-each bind url),
-);
-use constant ESCAPE => do { my $n = scalar @VOCAB; $n };  # 1 LEB byte still (<128)
-my %ID; @ID{@VOCAB} = (0..$#VOCAB);
+#
+# ── NOTE on BEGIN ordering ─────────────────────────────────────────────────
+# In Perl, `use constant EXPR` has IMPLICIT BEGIN-time evaluation of EXPR.
+# If we naively write:
+#     my @VOCAB = (...);
+#     use constant ESCAPE => scalar @VOCAB;
+#     my %ID; @ID{@VOCAB} = (0..$#VOCAB);
+# The `use constant` RHS `scalar @VOCAB` runs at BEGIN BEFORE the list
+# assignment has happened (runs only at FILE runtime after BEGINs finish) →
+# ESCAPE would be 0, and %ID stays empty!  So: DECLARE the lexicals at file
+# scope, but INITIALIZE them (and the constant) inside a single explicit
+# BEGIN block so order is deterministic.
+my @VOCAB_DECL;  # unused after BEGIN; declared for scope only
+our %ID;         # runtime-accessible name→id map; populated in BEGIN below
+BEGIN {
+    my @VOCAB = (
+        # amin core  (element + attribute LocalNames used by Amin::Command::* and
+        #             the 5-position SAX chain inner filters)
+        qw(profile result command stream status cond argv
+           id version kind rc pid duration exit_kind name target
+           channel dir mode level value type size),
+        # map:*      (Amin::Filter::Map::Topology element + attr LocalNames)
+        qw(region server link node a b cost phase flavor
+           latency_ms bw_gbps tier zone value),
+        # ui:*       (Amin::Filter::UI::SwiftUIView known-views + late-sax attrs)
+        qw(app scene list row column hstack vstack stack grid section
+           card progress alert sheet toolbar searchable item label
+           text badge sparkline button navigate image asyncimage
+           title spacing points for-each bind url),
+        # bc:*       (projectamin/bitcache 2014 namespace LocalNames —
+        #             object envelope, signer envelope, mesh topology, slab lifecycle)
+        qw(object hash date signer networkmap server ip port search ref
+           refcount stripe parity redundancy slab snap gc pull push),
+        # ainit:*    (stage vocabulary for init-profile.xml PID 1 handoff)
+        qw(stage order node_id refused init_profile_ref slab_dev),
+        # exec+net   (Sandbox + Net::Fabric + expanded Command surface inner names)
+        qw(exec spawn signal sandbox cpu_max memory_high landlock_ro seccomp
+           vpc subnet lb vip backends netpolicy),
+    );
+    # ESCAPE constant via direct symbol-table import so subsequent runtime
+    # code (e.g. start_element L122) can say `ESCAPE` bareword.
+    require constant;
+    constant->import(ESCAPE => scalar @VOCAB);  # 1 LEB byte still (<128)
+    # Populate package %ID (declared `our` above) for runtime lookup.
+    %ID = ();
+    @ID{@VOCAB} = (0 .. $#VOCAB);
+}
 
 sub output ($s) { $s->buf }
 
@@ -104,6 +138,13 @@ sub start_element ($self, $el) {
     my $tag = chr (0x40 | 0x10 | $count_field);
     $self->_push($tag);
     $self->_push(chr(($ns_id & 0x0F) << 4));
+    if ($ns_id == NS_ESCAPE) {
+        # NS_ID=15 means the NamespaceURI was not in the Amin/MAP/UI/BITCACHE
+        # closed-world set; carry it as length-prefixed UTF-8 on the wire so
+        # Corp custom namespaces (DI-2 extensibility) survive BSAX roundtrip
+        # without Amin fork.
+        $self->_push(_leb(length($ns // '')) . ($ns // ''));
+    }
     $self->_push(_leb($name_id // ESCAPE));
     if (!defined $name_id) {
         $self->_push(_leb(length($ln)) . $ln);

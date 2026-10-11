@@ -6,31 +6,54 @@ use Amin qw(NS);
 use Amin::Util::Fold qw(_flags _vals);  # re-use allow-list contracts
 use Class::Tiny qw(Handler), {
     last_ns => 0+0,
+    last_ns_uri => '',   # set ONLY if last_ns == NS_ESCAPE (custom Corp URI)
     stack   => [],
 };
-
 # Mirrors of Amin::Handler::BSAX constants — MUST stay 1:1 with Handler::BSAX
 # and rust/crates/bsax/src/vocab.rs BY_ID slice.
-use constant { NS_NONE=>0, NS_AMIN=>1, NS_UI=>2, NS_MAP=>3, NS_ESCAPE=>15 };
-my %NSBYID = ( NS_NONE, '', NS_AMIN, NS(),
-   NS_UI,  'http://projectamin.org/ns/ui/1',
-   NS_MAP, 'http://projectamin.org/ns/map/1' );
-my @VOCAB = (
-    # amin core (Handler::BSAX 1:1 copy)
-    qw(profile result command stream status cond argv
-       id version kind rc pid duration exit_kind name target
-       channel dir mode level value type size),
-    # map:*
-    qw(region server link node a b cost phase flavor
-       latency_ms bw_gbps tier zone value),
-    # ui:*
-    qw(app scene list row column hstack vstack stack grid section
-       card progress alert sheet toolbar searchable item label
-       text badge sparkline button navigate image asyncimage
-       title spacing points for-each bind url),
+# and rust/crates/bsax/src/vocab.rs BY_ID slice.
+use constant {
+    NS_NONE=>0, NS_AMIN=>1, NS_UI=>2, NS_MAP=>3, NS_BITCACHE=>4, NS_ESCAPE=>15
+};
+my %NSBYID = (
+    NS_NONE, '',
+    NS_AMIN, NS(),
+    NS_UI,   'http://projectamin.org/ns/ui/1',
+    NS_MAP,  'http://projectamin.org/ns/map/1',
+    NS_BITCACHE, 'http://projectamin.org/ns/bc/',
 );
-use constant ESCAPE => do { my $n = scalar @VOCAB; $n };
-my %NAMEBYID; @NAMEBYID{0..$#VOCAB} = @VOCAB;
+# See Handler::BSAX comment for BEGIN-ordering explanation: `use constant` runs
+# its RHS at BEGIN so we must populate VOCAB first inside the same explicit BEGIN.
+our @NAMEBYID_BY_POS;  # placeholder; real data is the hash below
+our %NAMEBYID;         # id→name lookup, populated in BEGIN
+BEGIN {
+    my @VOCAB = (
+        # amin core (Handler::BSAX 1:1 copy)
+        qw(profile result command stream status cond argv
+           id version kind rc pid duration exit_kind name target
+           channel dir mode level value type size),
+        # map:*
+        qw(region server link node a b cost phase flavor
+           latency_ms bw_gbps tier zone value),
+        # ui:*
+        qw(app scene list row column hstack vstack stack grid section
+           card progress alert sheet toolbar searchable item label
+           text badge sparkline button navigate image asyncimage
+           title spacing points for-each bind url),
+        # bc:*  (projectamin/bitcache 2014 ns: object/signer/networkmap/slab)
+        qw(object hash date signer networkmap server ip port search ref
+           refcount stripe parity redundancy slab snap gc pull push),
+        # ainit stage (init-profile.xml PID 1 handoff)
+        qw(stage order node_id refused init_profile_ref slab_dev),
+        # exec+net sandbox/surface (Sandbox + Net::Fabric + expanded Command)
+        qw(exec spawn signal sandbox cpu_max memory_high landlock_ro seccomp
+           vpc subnet lb vip backends netpolicy),
+    );
+    require constant;
+    constant->import(ESCAPE => scalar @VOCAB);
+    %NAMEBYID = ();
+    @NAMEBYID{0 .. $#VOCAB} = @VOCAB;
+}
 
 # ── public entry: parse binary buffer, emit SAX events into $self->Handler ──
 sub parse_bytes ($self, $bytes) {
@@ -61,10 +84,22 @@ sub parse_bytes ($self, $bytes) {
         elsif ($kind == 0x40) {                                # StartEl
             my $ns_inline = ($flags & 0x10) != 0;
             my $ns_id = $self->{last_ns};
+            my $ns_uri = $self->{last_ns_uri} // '';
             if ($ns_inline) {
                 my $b = ord substr($bytes,$p++,1);
                 $ns_id = ($b >> 4) & 0x0F;
+                if ($ns_id == NS_ESCAPE) {
+                    # Custom Corp namespace (DI-2): length-prefixed UTF-8 URI
+                    # written by Amin::Handler::BSAX.  Fallback to empty string
+                    # if 0-length.
+                    my $l = _rd_leb(\$p, $bytes);
+                    $ns_uri = $l > 0 ? substr($bytes, $p, $l) : '';
+                    $p += $l;
+                } else {
+                    $ns_uri = $NSBYID{$ns_id} // '';
+                }
                 $self->{last_ns} = $ns_id;
+                $self->{last_ns_uri} = $ns_uri;
             }
             my $nid = _rd_leb(\$p, $bytes);
             my $ln = $NAMEBYID{$nid};
@@ -92,29 +127,43 @@ sub parse_bytes ($self, $bytes) {
                 if (!defined $an) { my $l=_rd_leb(\$p,$bytes); $an=substr($bytes,$p,$l); $p+=$l }
                 my $vl = _rd_leb(\$p,$bytes);
                 my $av = substr($bytes,$p,$vl); $p += $vl;
-                # Attribute namespace is derived from VOCAB section (0-22 amin,
-                # 23-36 map, 37+ ui) — NOT inherited from the parent element,
-                # because cross-namespace attrs like amin:id inside ui:app are
-                # common in the SAX pipeline (e.g. late filter overlays).
+                # Attribute namespace is derived from VOCAB REGION of the
+                # attribute NAME_ID, since the VOCAB is split contiguously:
+                #   0..22  amin core (NS_AMIN)
+                #  23..36  map       (NS_MAP)
+                #  37..67  ui        (NS_UI)
+                #  68..86  bc        (NS_BITCACHE)
+                #  87..106 ainit-stage + exec-net/sandbox — these attr names live
+                #          on amin:* elements so use NS_AMIN.
+                # Anything >= ESCAPE falls back to the parent element's NS
+                # (possibly a Corp custom escape URI).
                 my $a_ns;
-                if ($aid < 23)      { $a_ns = NS_AMIN }   # amin core 0..22
-                elsif ($aid < 37)   { $a_ns = NS_MAP }    # map 23..36
-                elsif ($aid < ESCAPE){ $a_ns = NS_UI }    # ui 37..ESCAPE-1
-                else                { $a_ns = $ns_id }   # unknown: use elem NS
-                my $a_uri = $NSBYID{$a_ns} // '';
-                my $a_pfx = $a_ns == NS_AMIN ? 'amin'
-                          : $a_ns == NS_UI   ? 'ui'
-                          : $a_ns == NS_MAP  ? 'map' : '';
+                if    ($aid < 23)      { $a_ns = NS_AMIN }
+                elsif ($aid < 37)      { $a_ns = NS_MAP }
+                elsif ($aid < 68)      { $a_ns = NS_UI }
+                elsif ($aid < 87)      { $a_ns = NS_BITCACHE }
+                elsif ($aid < ESCAPE)  { $a_ns = NS_AMIN }
+                else                   { $a_ns = $ns_id }   # unknown: inherit elem NS
+                # For custom escape NS, use the element's already-resolved
+                # $ns_uri (possibly the inline Corp URI) not the (undefined)
+                # $NSBYID{NS_ESCAPE} entry.
+                my $a_uri = ($a_ns == NS_ESCAPE)
+                    ? $ns_uri
+                    : ($NSBYID{$a_ns} // '');
+                my $a_pfx = $a_ns == NS_AMIN     ? 'amin'
+                          : $a_ns == NS_UI       ? 'ui'
+                          : $a_ns == NS_MAP      ? 'map'
+                          : $a_ns == NS_BITCACHE ? 'bc' : '';
                 my $a_qname = length($a_pfx) ? "$a_pfx:$an" : $an;
                 $attrs->{"{}$an"} = {
                     Name => $a_qname, LocalName => $an, Prefix => $a_pfx,
                     NamespaceURI => $a_uri, Value => $av,
                 };
             }
-            my $ns_uri = $NSBYID{$ns_id} // '';
             my $pfx = $ns_id == NS_AMIN ? 'amin'
                      : $ns_id == NS_UI   ? 'ui'
-                     : $ns_id == NS_MAP  ? 'map' : '';
+                     : $ns_id == NS_MAP  ? 'map'
+                     : $ns_id == NS_BITCACHE ? 'bc' : '';
             my $qname = length($pfx) ? "$pfx:$ln" : $ln;
             push @{$self->{stack}}, [$ln, $ns_uri, $qname, $pfx];
             $h->start_element({

@@ -142,7 +142,7 @@ impl<'a> Iterator for Decoder<'a> {
                 }
                 self.last_ns_id = ns_id;
                 let name_id = match self.leb_u32() { Ok(v)=>v, Err(e)=>return Some(Err(e)) };
-                if self.bounds.allow_vocab_only && name_id > 61 {
+                if self.bounds.allow_vocab_only && name_id >= crate::vocab::escape_id() {
                     return Some(Err(DecodeError::ProhibitedName(name_id, start)));
                 }
                 let n_attrs = if flags & 0x0F == 15 {
@@ -157,7 +157,7 @@ impl<'a> Iterator for Decoder<'a> {
                 let mut attrs = Vec::with_capacity(n_attrs.min(16));
                 for _ in 0..n_attrs {
                     let aid = match self.leb_u32() { Ok(v)=>v, Err(e)=>return Some(Err(e)) };
-                    if self.bounds.allow_vocab_only && aid > 61 {
+                    if self.bounds.allow_vocab_only && aid >= crate::vocab::escape_id() {
                         return Some(Err(DecodeError::ProhibitedName(aid, self.off)));
                     }
                     let val = match self.len_prefixed(self.bounds.value_max_bytes, DecodeError::ValueTooLong) {
@@ -212,7 +212,7 @@ mod tests {
             (vocab::by_name(b"duration").unwrap(), b"0.1"),
             (vocab::by_name(b"exit_kind").unwrap(), b"ok"),
         ];
-        encode::write_start_elem(&mut out, 1 /* NS_AMIN */, vocab::by_name(b"status").unwrap(), &attrs);
+        encode::write_start_elem(&mut out, crate::vocab::ns_id::AMIN, vocab::by_name(b"status").unwrap(), &attrs);
         encode::write_end_elem(&mut out);
         encode::write_end_doc(&mut out);
 

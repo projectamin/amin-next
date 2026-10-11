@@ -4,67 +4,21 @@ use Test2::V0;
 use File::Basename qw(dirname);
 use File::Temp qw(tempfile);
 use lib dirname(__FILE__) . '/../perl-lib';
-use lib '/tmp/amin-local/lib/perl5/x86_64-linux-gnu-thread-multi';
-use lib '/tmp/amin-local/lib/perl5';
 
-sub load ($mod) { eval "require $mod; $mod->import; 1" }
-ok(load('Amin::Handler::Writer'),  'load Writer');
-ok(load('Amin::Handler::BSAX'),    'load Handler::BSAX');
-ok(load('Amin::Generator::BSAX'),  'load Generator::BSAX');
-ok(load('XML::LibXML::SAX'),       'load XML::LibXML::SAX')
-    or skip_all('XML::LibXML::SAX required', 100);
-
-# Recording Handler — captures SAX events with NAME-sorted attrs for parity.
-package RecordingHandler {
-    use v5.38; use warnings;
-    our @Captured;
-    sub new ($class, %a) { bless \%a, $class }
-    sub start_document ($self,@) { push @Captured, 'start_document' }
-    sub end_document   ($self,@) { push @Captured, 'end_document' }
-    sub end_element    ($self,$e) {
-        my $eln = $e->{LocalName} // $e->{Name} // '';
-        $eln =~ s/^[^:]+://;
-        push @Captured, [end_element => {
-            LocalName    => $eln,
-            NamespaceURI => $e->{NamespaceURI} // '',
-        }];
-    }
-    sub characters     ($self,$d) {
-        my $t = $d->{Data} // '';
-        return unless length $t;
-        # Normalize whitespace: Writer pretty-prints with indent/newline padding
-        # around element content (e.g. "\n      gcc ...  \n"); the binary path
-        # stores only the semantic character data.  Trim both so parity holds.
-        $t =~ s/^\s+|\s+$//g;
-        return unless length $t;
-        push @Captured, [characters => $t];
-    }
-    sub start_element  ($self,$e) {
-        my @attrs;
-        for my $a (values %{ $e->{Attributes} // {} }) {
-            # Drop xmlns:* namespace declarations — carried in BSAX via 4-bit
-            # NS_ID inline bits, not as data attributes.
-            my $n = $a->{Name} // '';
-            next if $n =~ /^xmlns/;
-            my $v = $a->{Value} // '';
-            next unless length($v) || defined $a->{Value};
-            # Semantic-local: strip any colon-prefix portion from LocalName
-            # (different SAX parsers expose "prefix:name" vs {Prefix,name}
-            # differently; contract parity is local-part + value only).
-            my $ln = $a->{LocalName} // $n;
-            $ln =~ s/^[^:]+://;
-            push @attrs, { LocalName => $ln, Value => $v };
-        }
-        @attrs = sort { $a->{LocalName} cmp $b->{LocalName} } @attrs;
-        my $eln = $e->{LocalName} // $e->{Name} // '';
-        $eln =~ s/^[^:]+://;
-        push @Captured, [start_element => {
-            LocalName => $eln,
-            NamespaceURI => $e->{NamespaceURI} // '',
-            Attributes  => \@attrs,
-        }];
+BEGIN {
+    my @need = qw(Amin::Handler::Writer  Amin::Handler::BSAX
+                  Amin::Generator::BSAX  XML::LibXML::SAX
+                  Amin::Test::RecordingHandler);
+    for my $mod (@need) {
+        eval "require $mod; $mod->import; 1"
+            or skip_all("Missing required dependency: $mod  — $@");
     }
 }
+
+# Amin::Test::RecordingHandler replaces the ~50-line duplicated inline
+# RecordingHandler class that historically lived here and in t/12.
+# Event access API: $r->captured  → arrayref  (filter-local; no our @CAPTURE
+# pollution between subtests, no manual `@Captured = ()` reset needed).
 
 # ── Shared NS + element builder
 my $NS_AMIN = 'http://projectamin.org/ns/2026/';
@@ -139,24 +93,24 @@ ok length($XML) > length($BIN),
    " B (" . int(100*length($BIN)/length($XML)) . "% of XML)";
 
 # 3. XML decode → capture (tempfile to avoid in-memory-unicode-open issues)
-@RecordingHandler::Captured = ();
+my @xml;
 {
     my ($fh, $path) = tempfile(UNLINK => 1, TMPDIR => 1);
     print $fh $XML; close $fh;
-    my $h = RecordingHandler->new;
+    my $h = Amin::Test::RecordingHandler->new;
     my $p = XML::LibXML::SAX->new(Handler => $h);
     $p->parse_file($path);
+    @xml = $h->captured->@*;
 }
-my @xml = @RecordingHandler::Captured;
 
 # 4. BSAX decode → capture
-@RecordingHandler::Captured = ();
+my @bin;
 {
-    my $h = RecordingHandler->new;
+    my $h = Amin::Test::RecordingHandler->new;
     my $g = Amin::Generator::BSAX->new(Handler => $h);
     $g->parse_bytes($BIN);
+    @bin = $h->captured->@*;
 }
-my @bin = @RecordingHandler::Captured;
 
 # 5. Strip duplicate start_document/end_document events (XML parser can emit
 #    extras via parse_file internal prolog handling; we care about event parity
@@ -177,13 +131,13 @@ for my $i (0..$#xml) {
 }
 
 # 6. XML fallback → same as XML parser
-@RecordingHandler::Captured = ();
+my @fb;
 {
-    my $h = RecordingHandler->new;
+    my $h = Amin::Test::RecordingHandler->new;
     my $g = Amin::Generator::BSAX->new(Handler => $h);
     $g->parse_bytes($XML);
+    @fb = strip_doc_bookends($h->captured->@*);
 }
-my @fb = strip_doc_bookends(@RecordingHandler::Captured);
 is scalar(@fb), scalar(@xml), "XML fallback produces same event count";
 
 done_testing();

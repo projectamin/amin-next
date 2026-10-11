@@ -48,12 +48,15 @@
 //! ### NAME_ID space (closed-world IDs = 1 byte LEB128; ESCAPE = BY_ID.len())
 //!
 //! ```text
-//!   0..20  Amin core: profile result command stream status cond argv
+//!   0..22  Amin core: profile result command stream status cond argv
 //!                     id version kind rc pid duration exit_kind name target
 //!                     channel dir mode level value type size
-//!  21..34  map:*     : region server link node a b cost phase flavor
+//!  23..36  map:*     : region server link node a b cost phase flavor
 //!                     latency_ms bw_gbps tier zone  (note: status shared with amin core)
-//!  35..61  ui:*      : 25-entry vocabulary per Amin::Filter::UI::SwiftUIView
+//!  37..67  ui:*      : 31-entry vocabulary per Amin::Filter::UI::SwiftUIView
+//!  68..86  bc:*      : projectamin/bitcache 2014 ns — object/signer/networkmap/slab ops
+//!  87..92  ainit:*   : init-profile.xml stage vocabulary (PID 1 handoff)
+//!  93..106 exec-net  : Sandbox + Net::Fabric + expanded Command surface names
 //!      ESCAPE        → NAME_ID:LEB = BY_ID.len() then LEN_PREFIXED(utf8 raw name) follows
 //! ```
 //!
@@ -61,7 +64,9 @@
 //!
 //! ```text
 //! 0 = none   1 = http://projectamin.org/ns/2026/
-//! 2 = ui/1   3 = map/1   4..14 reserved   15 = escape → LEN_PREFIXED(URI string)
+//! 2 = ui/1   3 = map/1   4 = bc/ (Bitcache 2014 legacy)   5..14 reserved
+//! 15 = escape → LEN_PREFIXED(URI string) — used by third-party corp
+//!             custom namespaces without Amin fork (see spec DI-2)
 //! ```
 //!
 //! ## Safety properties (P/B/N decode path)
