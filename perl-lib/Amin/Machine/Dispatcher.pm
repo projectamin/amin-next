@@ -37,6 +37,9 @@ BEGIN {
     require Amin::Filter::Init::ProfileValidator;
     __PACKAGE__->register('Amin::Filter::Init::ProfileValidator',
         element => 'stage',   namespace => NS(),                        position => 'begin');
+    require Amin::Schedule::Placement;
+    __PACKAGE__->register('Amin::Schedule::Placement',
+        element => undef,     namespace => NS(),                        position => 'begin');
     require Amin::Filter::Map::Topology;
     __PACKAGE__->register('Amin::Filter::Map::Topology',
         element => undef,   namespace => 'http://projectamin.org/ns/map/1',
