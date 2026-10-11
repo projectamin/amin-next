@@ -56,6 +56,11 @@ sub end_element ($self, @) {
 sub characters ($self, $d) {
     my $t = $d->{Data} // '';
     return unless length $t;
+    my $top = $self->stack->[-1];
+    if ($top && $top->[0] =~ /:stream$/) {
+        $self->_push(_e($t));
+        return;
+    }
     my $pad = ' ' x ($self->depth * $self->indent);
     $self->_push("$pad$_\n") for map _e($_), split /\n/, $t;
 }

@@ -6,14 +6,7 @@ use lib dirname(__FILE__) . '/../perl-lib';
 
 use Amin::Cond::OS;
 use Amin qw(NS);
-
-{
-    package # hide from pause
-        Capture;
-    sub new { bless [], shift }
-    sub AUTOLOAD { my $m = our $AUTOLOAD; $m =~ s/.*:://; return if $m eq 'DESTROY';
-                   my ($s, @a) = @_; push @$s, [$m, @a]; return wantarray ? () : undef }
-}
+require Amin::Test::StreamCapture;
 
 my @BRANCHES = (
     ['linux',       1,  'always pass linux  on $^O=linux'],
@@ -25,11 +18,9 @@ my @BRANCHES = (
     ['posix',       1,  'posix passes on all hosts'],
 );
 
-for my $case (@BRANCHES) {
-    my ($tag, $pass, $desc) = @$case;
-    my $cap = Capture->new;
-    my $c   = Amin::Cond::OS->new(
-        Handler => $cap,
+sub run_case ($tag, $inner_handler) {
+    my $c = Amin::Cond::OS->new(
+        Handler => $inner_handler,
         Log     => do { require Amin::Log::Standard;
                         Amin::Log::Standard->new(stderr => 0) });
     $c->start_element({ NamespaceURI => NS(), LocalName => $tag,
@@ -44,11 +35,17 @@ for my $case (@BRANCHES) {
                       Name => 'amin:command', Prefix => 'amin' });
     $c->end_element({ NamespaceURI => NS(), LocalName => $tag,
                       Name => "amin:$tag", Prefix => 'amin' });
+}
 
-    my $events = scalar @$cap;
+for my $case (@BRANCHES) {
+    my ($tag, $pass, $desc) = @$case;
+    my $cap = Amin::Test::StreamCapture->new;
+    run_case($tag, $cap);
+
+    my $events = scalar $cap->captured->@*;
     if ($pass) {
         cmp_ok($events, '>=', 4, "$desc: events forwarded (start+chars+2end)");
-        my @ce = grep { $_->[0] eq 'characters' } @$cap;
+        my @ce = grep { $_->[0] eq 'characters' } $cap->captured->@*;
         is(scalar @ce, 1, "$desc: characters forwarded exactly once");
         is($ce[0][1]{Data}, 'inner text', "$desc: characters payload untouched");
     } else {
@@ -56,7 +53,7 @@ for my $case (@BRANCHES) {
     }
 }
 
-my $cap = Capture->new;
+my $cap = Amin::Test::StreamCapture->new;
 my $c = Amin::Cond::OS->new(Handler => $cap,
     Log => Amin::Log::Standard->new(stderr=>0));
 $c->start_element({ NamespaceURI => NS(), LocalName => 'linux', Prefix=>'amin',
@@ -75,7 +72,7 @@ $c->end_element  ({ NamespaceURI => NS(), LocalName => 'linux',
 sub e { +{ Name => "amin:$_[0]", Prefix => 'amin', NamespaceURI => NS(),
            Attributes => {} } }
 
-my @forwarded_names = map { $_->[1]{LocalName} // () } grep { $_->[0] eq 'start_element' } @$cap;
+my @forwarded_names = map { $_->[1]{LocalName} // () } grep { $_->[0] eq 'start_element' } $cap->captured->@*;
 is(\@forwarded_names, ['linux', 'outer_pass'],
    'nested bypass: linux tag + outer_pass pass; nested freebsd + inner_drop dropped');
 

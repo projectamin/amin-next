@@ -1,24 +1,104 @@
 #!/usr/bin/env perl
 use v5.38; use warnings; use utf8;
 use experimental 'signatures';
+BEGIN {
+    use File::Basename qw(dirname);
+    use Cwd qw(abs_path);
+    use Config;
+    my $root = abs_path(dirname(__FILE__) . '/..');
+
+    unless ($ENV{_AMIN_EXECED}) {
+        my $mise_shim = $ENV{HOME} . '/.local/share/mise/shims/perl';
+        if (-x $mise_shim && $^X =~ m{^/(usr|bin|sbin|opt)}) {
+            $ENV{_AMIN_EXECED} = 1;
+            exec $mise_shim, __FILE__, @ARGV
+                or die "exec mise perl ($mise_shim) failed: $!";
+        }
+        for my $d (glob($ENV{HOME} . '/.local/share/mise/installs/perl/*/*/bin/perl'),
+                   glob($ENV{HOME} . '/.local/share/mise/installs/perl/*/bin/perl')) {
+            if (-x $d) {
+                $ENV{_AMIN_EXECED} = 1;
+                exec $d, __FILE__, @ARGV
+                    or die "exec mise perl ($d) failed: $!";
+            }
+        }
+    }
+
+    # cpanm --local-lib-contained installs to three sub-paths under ./local:
+    #   lib/perl5                    (pure-perl dists, shared arch)
+    #   lib/perl5/$Config{archname}  (XS modules, compiled for this perl's arch)
+    #   lib/perl5/$perlver/$archname (old-style local::lib layout, just in case)
+    my $arch = $Config{archname};
+    my ($perlver) = $^V =~ /^v(\d+\.\d+\.\d+)/;
+    unshift @INC,
+        "$root/perl-lib",
+        "$root/local/lib/perl5",
+        "$root/local/lib/perl5/$arch",
+        (defined $perlver ? ("$root/local/lib/perl5/$perlver",
+                             "$root/local/lib/perl5/$perlver/$arch") : ());
+}
 use Getopt::Long qw(:config auto_help auto_version);
 binmode STDOUT, ':encoding(UTF-8)';
 binmode STDERR, ':encoding(UTF-8)';
 
-use File::Basename qw(dirname);
-use lib dirname(__FILE__) . '/../perl-lib';
-
 our $VERSION = '3.0.0-bootstrap';
-my ($STREAM, $MAP_OUT, $UI_OS) = (0, 'svg', 'tty');
+my ($LEGACY, $STREAM_OPT, $MAP_OUT, $UI_OS) = (0, 1, 'svg', 'tty');
+my (@INC_EXTRA, @W_PERM, @W_BEG, @W_MID, @W_LATE, @W_END);
 GetOptions(
-    'stream!'  => \$STREAM,
-    'out=s'    => \$MAP_OUT,
-    'os=s'     => \$UI_OS,
+    'legacy-processing!' => \$LEGACY,
+    'stream!'            => \$STREAM_OPT,
+    'out=s'              => \$MAP_OUT,
+    'os=s'               => \$UI_OS,
+    'inc=s@'             => \@INC_EXTRA,
+    'with-permanent=s'   => sub { push @W_PERM, split /,/, $_[1] },
+    'with-begin=s'       => sub { push @W_BEG,  split /,/, $_[1] },
+    'with-middle=s'      => sub { push @W_MID,  split /,/, $_[1] },
+    'with-late=s'        => sub { push @W_LATE, split /,/, $_[1] },
+    'with-end=s'         => sub { push @W_END,  split /,/, $_[1] },
 ) or die "bad opts\n";
+
+for my $p (@INC_EXTRA) {
+    -d $p or die "--inc path '$p' is not a directory\n";
+    unshift @INC, $p;
+}
+if (@W_PERM || @W_BEG || @W_MID || @W_LATE || @W_END) {
+    require Amin::Machine::Dispatcher;
+    my $_reg = sub {
+        my ($pos, $list) = @_;
+        for my $cls (@$list) {
+            (my $mod = "$cls.pm") =~ s{::}{/}g;
+            eval { require $mod }
+                or die "Cannot load --with-${pos} filter '$cls': $@";
+            $cls->can('start_element')
+                or die "Filter '$cls' cannot SAX handler (no start_element)\n";
+            Amin::Machine::Dispatcher->register($cls, position => $pos);
+        }
+    };
+    $_reg->('permanent' => \@W_PERM);
+    $_reg->('begin'     => \@W_BEG);
+    $_reg->('middle'    => \@W_MID);
+    $_reg->('late'      => \@W_LATE);
+    $_reg->('end'       => \@W_END);
+}
+
+my $STREAM = $LEGACY ? 0 : $STREAM_OPT;
 
 my $MODE = { render => 1, dryrun => 1, run => 1, app => 1, map => 1, ui => 1 };
 sub usage ($exit = 2) {
-    say STDERR "Usage: $0 [--stream] <render|dryrun|run|app|map|ui> <path> [--out=svg|dot|xml] [--os=ios|android|html|tty]";
+    say STDERR "Usage: $0 [--legacy-processing|--no-stream] <render|dryrun|run|app|map|ui> <path> [--out=svg|dot|xml] [--os=ios|android|html|tty]";
+    say STDERR "    --legacy-processing   (alias for --no-stream) buffer and emit the full XML";
+    say STDERR "                          after parsing (traditional Amin behaviour) instead of";
+    say STDERR "                          streaming SAX events live to stdout (the default)";
+    say STDERR "    --no-stream           disable live streaming; output XML only after parse";
+    say STDERR "";
+    say STDERR "  DI-2 filter extensibility (Corp third-party filters WITHOUT Amin source fork:";
+    say STDERR "    --inc DIR             prepend DIR to \@INC (repeatable)";
+    say STDERR "    --with-permanent=LIST comma-separated filter classes to register";
+    say STDERR "                          at the permanent (non-bypassable trust position";
+    say STDERR "    --with-begin=LIST     classes at begin position (routing / auth/placement)";
+    say STDERR "    --with-middle=LIST    classes at middle position (commands/sandbox/network)";
+    say STDERR "    --with-late=LIST      classes at late position (UI aggregation / billing report";
+    say STDERR "    --with-end=LIST       classes at end position (fanout / multi-handler)";
     exit $exit;
 }
 
@@ -55,7 +135,7 @@ use Amin::Handler::Writer;
 my $log     = Amin::Log::Standard->new(stderr => 1);
 my $writer  = Amin::Handler::Writer->new(
     indent    => 2,
-    ($STREAM ? (fh => *STDERR{IO}, autoflush => 1) : ()),
+    ($STREAM ? (fh => *STDOUT{IO}, autoflush => 1) : ()),
 );
 my $amin = Amin->new(Mode => $mode, Handler => $writer, Log => $log,
     late_filters_enable => { map => $LATE_MAP, ui => $LATE_UI },

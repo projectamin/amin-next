@@ -9,7 +9,7 @@ my $ROOT = path(dirname(__FILE__))->parent->absolute;
 my $amin = "$ROOT/bin/amin";
 chmod 0755, $amin unless -x $amin;
 $ENV{PERL5LIB} = join ':', "$ROOT/perl-lib",
-    (grep length, map "$_/lib/perl5", "/tmp/amin-local", $ENV{LOCAL_LIBDIR} // ());
+    (grep length, map "$_/lib/perl5", grep defined, $ENV{LOCAL_LIBDIR} // ());
 
 sub run_amin (@cmd) {
     open(my $p, '-|', @cmd) or die "popen $cmd[0]: $!";
@@ -54,13 +54,13 @@ is($r{rc}, 0, 'dryrun → exit 0');
 like($r{out}, qr{<amin:stream amin:channel="argv">}, 'dryrun has argv stream');
 
 %r = do {
-    my $out = `$amin --stream run "$tmpd/profile.xml" 2>&1`;
+    my $out = `$amin run "$tmpd/profile.xml" 2>&1`;
     (rc => $? >> 8, out => $out);
 };
-is($r{rc}, 0, '--stream run → exit 0');
+is($r{rc}, 0, 'run (streaming default) → exit 0');
 like($r{out}, qr{<amin:status\b[^>]*amin:kind="success"},
-     '--stream run produces final success status element');
+     'run produces final success status element (default streaming)');
 my $prologs =()= $r{out} =~ /^<\?xml /gms;
-cmp_ok($prologs, '>=', 1, '--stream mode emits XML (at least one prolog)');
+cmp_ok($prologs, '>=', 1, 'streaming default emits XML (at least one prolog)');
 
 done_testing;
