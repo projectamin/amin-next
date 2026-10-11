@@ -3,8 +3,11 @@
 /local/
 /local-lib/
 /extlib/
+/lib/
 /.cpanm/
+/.cache/
 /cpanfile.snapshot
+/perl-local/
 # Build artifacts
 /Makefile
 /Makefile.old
@@ -46,6 +49,7 @@ cover_db/
 *.iml
 .DS_Store
 Thumbs.db
+.trae/
 
 # ── Amin runtime artifacts ──────────────────────────────────────────
 # *.aminsig detached signatures written for releases; dev signatures are fine

@@ -1,0 +1,72 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<amin:profile xmlns:amin="http://projectamin.org/ns/2026/"
+              xmlns:bc="http://projectamin.org/ns/bc/"
+              xmlns:map="http://projectamin.org/ns/map/1"
+              amin:version="3.0.0"
+              amin:kind="metal-init-profile"
+              amin:id="metal-region-us-east-1a-9a5b0c3d">
+
+  <bc:object bc:hash="9f2d8a7b3c4e5f60123456789abcdef0123456789abcdef0123456789abcdef0"
+             bc:size="4096">
+  </bc:object>
+
+  <amin:stage amin:order="1"
+              amin:name="hwcheck"
+              amin:node_id="9a5b0c3d2e1f4a6b8c0d9e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5b6c7d8e9f0a1b"
+              amin:refused="false"
+              amin:slab_dev="/dev/nvme0n1p2">
+    Fingerprint: CPU=EPYC-9654 x96c, DIMM=12x32GB-DDR5-5600, NVMe=2x7.68TB, NIC=2x200GbE-ConnectX-7
+  </amin:stage>
+
+  <amin:stage amin:order="2"
+              amin:name="fw-update"
+              amin:init_profile_ref="bitcache:blake3:111122223333444455556666777788889999aaaabbbbccccddddeeeeffff0000">
+    <bc:object bc:hash="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+               bc:size="147456" />
+    <bc:object bc:hash="bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+               bc:size="81920" />
+    <bc:object bc:hash="cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+               bc:size="524288" />
+  </amin:stage>
+
+  <amin:stage amin:order="3"
+              amin:name="storage-init"
+              amin:slab_dev="/dev/nvme0n1p2"
+              amin:init_profile_ref="bitcache:blake3:0101010101010101010101010101010101010101010101010101010101010101">
+    Slab layout: 16 KB header, O_DIRECT blksize=4096, shmem index size=128 MB, gc_threshold=0.85
+  </amin:stage>
+
+  <amin:stage amin:order="4"
+              amin:name="mesh-join"
+              amin:node_id="9a5b0c3d2e1f4a6b8c0d9e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5b6c7d8e9f0a1b">
+    <bc:networkmap>
+      <bc:server bc:name="tor-peer-01" bc:ip="10.0.0.1" bc:port="4433" />
+      <bc:server bc:name="tor-peer-02" bc:ip="10.0.0.2" bc:port="4433" />
+      <bc:server bc:name="tor-peer-03" bc:ip="10.0.0.3" bc:port="4433" />
+    </bc:networkmap>
+  </amin:stage>
+
+  <amin:stage amin:order="5"
+              amin:name="supervisor"
+              amin:init_profile_ref="bitcache:blake3:111122223333444455556666777788889999aaaabbbbccccddddeeeeffff0000">
+    <amin:filter amin:class="Amin::Billing::CgroupV2"
+                 amin:position="permanent"
+                 amin:namespaces="http://projectamin.org/ns/2026/" />
+    <amin:filter amin:class="Amin::Audit::Seal"
+                 amin:position="permanent"
+                 amin:namespaces="http://projectamin.org/ns/2026/, http://projectamin.org/ns/bc/" />
+    <amin:filter amin:class="Amin::Quota::Enforce"
+                 amin:position="permanent"
+                 amin:namespaces="http://projectamin.org/ns/2026/" />
+    <amin:filter amin:class="Amin::Schedule::Placement"
+                 amin:position="begin"
+                 amin:namespaces="http://projectamin.org/ns/2026/, http://projectamin.org/ns/map/1" />
+  </amin:stage>
+
+  <amin:stage amin:order="6"
+              amin:name="workload-ready"
+              amin:node_id="9a5b0c3d2e1f4a6b8c0d9e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5b6c7d8e9f0a1b">
+    Advertise `kind=workload_ready` to all 3 ToR peers; accept tenant profile submissions on :4433 control plane.
+  </amin:stage>
+
+</amin:profile>

@@ -2,12 +2,17 @@
 # Amin 3.0 CPAN runtime requirements  (DSL parsed by Carton/Module::CPANfile)
 # ═══════════════════════════════════════════════════════════════════════════
 #
-# Managed by mise: `[tools.perl]` ships the cpanm and prove SHIMS; PERL5LIB is
-# pre-set by [env] line to $PWD/local/lib/perl5.  To install: `mise run bootstrap`
-# (uses cpanm --cpanfile ./cpanfile --installdeps . for reproducibility).
+# No version pins — latest stable from CPAN is pulled at bootstrap time.
+# To reproduce a known-good install later, `carton install` writes
+# cpanfile.snapshot during `mise run bootstrap`; commit that snapshot and
+# use `carton install --deployment` to replay it exactly.
 #
-# Format (DSL):   requires "Module::Name",  "VERSION";
-#                 on develop => sub { requires "Dev::Only", "VERSION" };
+# Install:
+#     mise run bootstrap
+# Auto-triggered after `mise install` via [hooks.post_install] in .mise.toml.
+#
+# Format (DSL):   requires "Module::Name";           # latest, no pin
+#                 on develop => sub { requires … };
 # Forward-declared for `perl -c` linting (actual subs from Module::CPANfile):
 use strict;
 use warnings;
@@ -15,26 +20,27 @@ use v5.38;
 sub requires; sub on; sub recommends; sub suggests; sub conflicts; sub feature;
 
 # ═════ runtime (hard required for bin/amin + perl-lib/ Amin:: namespace) ══
-requires 'Class::Tiny',           '1.008';
-requires 'IPC::Run',              '20231003.0';
-requires 'XML::SAX',              '1.02';
-requires 'XML::SAX::Base',        '1.09';
-requires 'XML::NamespaceSupport', '1.12';
-requires 'XML::LibXML',           '2.0210';
-requires 'XML::LibXML::SAX',      '2.0210';
-requires 'XML::Filter::XInclude', '1.19';
-requires 'Safe',                  '2.44';
-requires 'Opcode',                '1.66';
-requires 'HTTP::Tiny',            '0.088';
-requires 'Getopt::Long',          '2.54';
+requires 'Class::Tiny';
+requires 'IPC::Run';
+requires 'XML::SAX';
+requires 'XML::SAX::Base';
+requires 'XML::NamespaceSupport';
+requires 'XML::LibXML';
+requires 'XML::LibXML::SAX';
+requires 'XML::Filter::XInclude';
+requires 'Safe';
+requires 'HTTP::Tiny';
+requires 'MIME::Base64';
+requires 'Digest::BLAKE3';
+requires 'Crypt::ML-DSA';
 
 # ═════ develop/test only (needed for `mise run test` / prove) ═════════════
 on 'develop' => sub {
-    requires 'Test2::Suite',        '0.000159';
-    requires 'Test2::V0',           '0.000159';
-    requires 'Perl::Tidy',          '20240903';
-    requires 'Path::Tiny',          '0.144';
-    requires 'Try::Tiny',           '0.31';
-    requires 'Devel::Cover',        '1.40';
-    requires 'Carton',              'v1.0.35';
+    requires 'Test2::Suite';
+    requires 'Test2::V0';
+    requires 'Perl::Tidy';
+    requires 'Path::Tiny';
+    requires 'Try::Tiny';
+    requires 'Devel::Cover';
+    requires 'Carton';
 };
