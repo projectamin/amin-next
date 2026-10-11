@@ -1,0 +1,32 @@
+[package]
+name        = "bitcache"
+version.workspace = true
+edition.workspace     = true
+rust-version.workspace= true
+license.workspace     = true
+homepage.workspace    = true
+repository.workspace  = true
+
+[package.metadata.docs.rs]
+all-features = true
+
+[dependencies]
+blake3 = { workspace = true }
+bytes  = { workspace = true }
+thiserror = { workspace = true }
+anyhow    = { workspace = true }
+tracing   = { workspace = true }
+ml-dsa    = { workspace = true }
+reed-solomon-16 = { workspace = true }
+clap      = { version = "4", features = ["derive"] }
+getrandom = { version = "0.2", features = ["std"] }
+rand      = "0.8"
+sha2      = "0.10"
+
+[[bin]]
+name = "bctool"
+path = "src/bin/bctool.rs"
+
+[dev-dependencies]
+tempfile  = "3"
+rand      = "0.8"
