@@ -28,6 +28,8 @@ BEGIN {
         element => 'spawn',   namespace => NS(), position => 'middle');
     require Amin::Command::Signal;  __PACKAGE__->register('Amin::Command::Signal',
         element => 'signal',  namespace => NS(), position => 'middle');
+    require Amin::Sandbox;         __PACKAGE__->register('Amin::Sandbox',
+        element => 'sandbox', namespace => NS(), position => 'middle');
     require Amin::Cond::OS;         __PACKAGE__->register('Amin::Cond::OS',
         element => undef,   namespace => NS(),                        position => 'begin');
     require Amin::Filter::Init::ProfileValidator;
