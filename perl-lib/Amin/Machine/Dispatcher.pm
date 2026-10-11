@@ -54,6 +54,9 @@ BEGIN {
         element => undef,   namespace => 'http://projectamin.org/ns/ui/1',
         namespaces => [NS(), 'http://projectamin.org/ns/ui/1'],
         position => 'late');
+    require Amin::Filter::Billing::CgroupV2;
+    __PACKAGE__->register('Amin::Filter::Billing::CgroupV2',
+        element => undef, namespace => NS(), position => 'end');
 }
 
 sub new ($class, %o) {
