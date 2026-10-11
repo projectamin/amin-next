@@ -1,6 +1,6 @@
 # Amin
 
-> The Cloud Stripper platform — a unified, SAX-streamed, PQ-safe edge+datacenter control plane that treats XML pipelines, native OS isolation, and binary wire protocols as first-class citizens.
+> The Cloud Optimisation platform — a unified, SAX-streamed, PQ-safe edge+datacenter control plane that treats XML pipelines, native OS isolation, and binary wire protocols as first-class citizens.
 
 Amin is a *profile execution fabric*, not a config manager, not a PaaS, not a templating engine.  The same profile that builds a custom Linux image, configures a switch port, provisions a host, and renders the admin console's topology view is one XML document processed by one SAX filter graph — and the output of that graph is itself valid SAX, so you can feed it right back in and the fabric will still enforce every contract and trust boundary.
 
