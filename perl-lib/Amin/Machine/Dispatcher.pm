@@ -14,6 +14,8 @@ sub register ($pkg, $class, %meta) {
 }
 
 BEGIN {
+    require Amin::Auth::ZCap;       __PACKAGE__->register('Amin::Auth::ZCap',
+        element => undef,   namespace => NS(),                        position => 'begin');
     require Amin::Command::Mkdir;   __PACKAGE__->register('Amin::Command::Mkdir',
         element => 'command', namespace => NS(), name => 'mkdir',   position => 'middle');
     require Amin::Command::Echo;    __PACKAGE__->register('Amin::Command::Echo',
