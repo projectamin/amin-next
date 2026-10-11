@@ -1,12 +1,9 @@
 package Amin::Command::Echo;
 use v5.38; use warnings; use utf8; use experimental 'signatures';
-use parent 'Amin::Elt';
+use parent 'Amin::Command::Pass';
 use Amin::Util::Fold qw(_flags);
 
-sub name    { 'echo'    }
-sub element { 'command' }
-
-sub on_command_close ($self) { $self->execute; return; }
+sub name { 'echo' }
 
 sub build_argv ($self) {
     ('echo', _flags([qw(n e)], $self->flags),

@@ -30,25 +30,22 @@ isa_ok($bare_chain, ['Amin::Auth::ZCap'],
        'late=00 composes ZCap (outermost) → Cond::OS → ProfileValidator → Placement inward');
 
 my $mid = [ map { $_->{class} } $reg->{middle}->@* ];
-like($mid, array {
-    item 'Amin::Command::Mkdir';
-    item 'Amin::Command::Echo';
-    item 'Amin::Command::Remove';
-    item 'Amin::Command::Exec';
-    item 'Amin::Command::Spawn';
-    item 'Amin::Command::Signal';
-    item 'Amin::Sandbox';
-    item 'Amin::Net::Fabric';
-    item 'Amin::Filter::Storage::Bitcache';
-    end;
-}, 'middle position: (Mkdir/Echo/Remove/Exec/Spawn/Signal) + Sandbox (6) + Net::Fabric (7, wraps commands BEFORE Bitcache innermost (8)');
-is(scalar($reg->{middle}->@*), 9, 'middle position count = 9 after AC-NF-1 (AC-1 rule)');
-is($reg->{middle}[6]{class}, 'Amin::Sandbox',
-    'middle idx 6 = Sandbox (AC-NF-1 ordering)');
-is($reg->{middle}[7]{class}, 'Amin::Net::Fabric',
-    'middle idx 7 = Net::Fabric (between Sandbox 6 / Bitcache 8 — wraps after cgroup first)');
-is($reg->{middle}[8]{class}, 'Amin::Filter::Storage::Bitcache',
-    'middle idx 8 = Bitcache (innermost of middle array)');
+is($reg->{middle}[0]{class},  'Amin::Command::Addr2line', 'middle idx 0 = Addr2line (alphabetical)');
+is($reg->{middle}[1]{class},  'Amin::Command::Ar',        'middle idx 1 = Ar');
+is($reg->{middle}[2]{class},  'Amin::Command::As',        'middle idx 2 = As');
+is($reg->{middle}[3]{class},  'Amin::Command::Autoconf',  'middle idx 3 = Autoconf');
+is($reg->{middle}[4]{class},  'Amin::Command::Automake',  'middle idx 4 = Automake');
+is($reg->{middle}[5]{class},  'Amin::Command::Autoreconf','middle idx 5 = Autoreconf');
+my $last = $#{$reg->{middle}};
+is($reg->{middle}[$last-5]{class}, 'Amin::Command::Exec',    'middle idx -6 = Exec');
+is($reg->{middle}[$last-4]{class}, 'Amin::Command::Spawn',   'middle idx -5 = Spawn');
+is($reg->{middle}[$last-3]{class}, 'Amin::Command::Signal',  'middle idx -4 = Signal');
+is($reg->{middle}[$last-2]{class}, 'Amin::Sandbox',          'middle idx -3 = Sandbox (AC-NF-1 ordering)');
+is($reg->{middle}[$last-1]{class}, 'Amin::Net::Fabric',      'middle idx -2 = Net::Fabric');
+is($reg->{middle}[$last]{class},   'Amin::Filter::Storage::Bitcache',
+    'middle idx -1 = Bitcache (innermost of middle array)');
+is(scalar($reg->{middle}->@*), 273,
+    'middle position count = 273 (267 commands + Exec/Spawn/Signal + Sandbox/Net/Bitcache)');
 
 is($reg->{begin}[0]{class}, 'Amin::Auth::ZCap',
     'begin idx 0 = Auth::ZCap (outermost, fires first auth boundary)');

@@ -71,7 +71,7 @@ sub end_element ($self, $el) {
         my $want_el = $self->element // '';
         if (_mine($el) && (!length($want_el) || $want_el eq $ln)
             && defined($self->{_matched_name})
-            && (!defined($self->name) || $self->{_matched_name} eq $self->name)) {
+            && defined($self->name) && $self->{_matched_name} eq $self->name) {
             $self->on_command_close;
             $self->{_cap} = 0; $self->{_matched_name} = undef;
             %{$self->{_last_child_name} //= {}} = ();
@@ -82,18 +82,12 @@ sub end_element ($self, $el) {
 }
 
 # Hook overridden by Exec (short-lived run) vs Spawn (pidfd-persistent long-running).
-# Amin::Elt base implementation is intentionally a no-op so existing pure
-# command-capture subclasses (Mkdir / Echo / Remove in tests) can override with
-# their own exec surface.
+# Amin::Elt base implementation is a no-op; command subclasses (Pass) override to
+# call $self->execute.
 sub on_command_close ($self) { return; }
 
-# LEGACY backward-compat helper for direct execute() calls on Amin::Elt
-# subclasses (e.g. t/07-elt-exec.t StubEcho which inherits Amin::Elt directly,
-# not Amin::Command::Exec).  Implements the exact same short-lived semantics
-# as Amin::Command::Execute, but as a package-method so the subclass's own
-# build_argv is found via normal method lookup (no re-bless hacks needed).
-# Deliberately matches the 2026-09 legacy emit shape exactly so old tests
-# keep passing unchanged.
+# Short-lived synchronous execute: dryrun emits result/status without spawning;
+# run mode spawns via _ipc_run_sync with streaming stdout/stderr.
 sub execute ($self) {
     my @cmd = $self->build_argv or return;
     my $log  = $self->Log;
@@ -132,31 +126,11 @@ sub execute ($self) {
     return;
 }
 
-# LEGACY wrappers used only by old Stub* test packages that imported names
-# from t/07-elt-exec.t era.  New code should use _result_start +
-# _result_status_and_close directly.
-sub _emit_start ($self, $kind, $argv) {
-    $self->_result_start($kind, $argv);
-}
-sub _emit_end ($self, $kind, $rc, $argv, $out, $err) {
-    $self->_result_status_and_close(
-        kind => $kind, rc => $rc,
-        pid => $self->{_pid}, duration => defined $self->{_duration}
-            ? sprintf('%.3f', $self->{_duration}) : (),
-        exit_kind => $self->{_exit_kind} // (),
-    );
-}
-sub _emit ($self, $kind, $argv, $rc, $out='', $err='') {
-    $self->_emit_start($kind, $argv);
-    $self->_emit_end($kind, $rc, $argv, $out, $err);
-}
-
 sub build_argv ($self) { () }
 
 sub _mine ($e) { ($e->{NamespaceURI}//'') eq NS() }
 sub _named ($e,$n) {
-    !defined $n
-        || (length($n) && ($e->{Attributes}{'{}name'}{Value}//'') eq $n);
+    defined $n && length($n) && ($e->{Attributes}{'{}name'}{Value}//'') eq $n;
 }
 sub _trim ($s)  { $s =~ s/^\s+|\s+$//gr }
 sub _chomp ($s) { local $_ = $s; s/\s+\z//r }
