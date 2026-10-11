@@ -14,6 +14,7 @@ quic    = ["dep:quinn", "dep:rustls"]
 
 [dependencies]
 blake3.workspace       = true
+cpufeatures.workspace  = true
 bytes.workspace        = true
 tokio.workspace        = true
 anyhow.workspace       = true

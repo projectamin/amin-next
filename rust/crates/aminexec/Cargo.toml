@@ -33,3 +33,19 @@ anyhow.workspace          = true
 thiserror.workspace       = true
 tracing.workspace         = true
 tracing-subscriber.workspace = true
+libc.workspace            = true
+tempfile.workspace        = true
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+base64 = "0.22"
+
+[build-dependencies]
+# Placeholder build deps for BPF programs. We intentionally do NOT pull in
+# libbpf-cargo at build time because it requires clang on the host, and the
+# vendor assumption was false (see spec OQ-1 fallback path). Instead BPF
+# clsact programs are pre-compiled as base64-encoded byte blobs inside
+# linux.rs BPF_PROG_P2C_EWMA_BYTES / BPF_PROG_NETPOLICY_BYTES constants —
+# pure Rust build, zero clang dep (resolves spec OQ-1 into fallback).
+#
+# libbpf-cargo = { version = "0.22" }
+# libbpf-sys = { version = "1.4", features = ["vendored"] }

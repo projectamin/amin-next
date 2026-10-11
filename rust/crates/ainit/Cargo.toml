@@ -1,0 +1,30 @@
+[package]
+name         = "ainit"
+version      = "3.0.0"
+description  = "Amin 3.0 pre-PID-1 netboot initrd: BSAX micro-decoder, AWP/3 mesh HELLO, Bitcache CAS fetch, SCM_RIGHTS fd handoff before pivot_root into aminexec"
+edition.workspace      = true
+rust-version.workspace = true
+license.workspace      = true
+homepage.workspace     = true
+repository.workspace   = true
+
+[[bin]]
+name    = "ainit"
+path    = "src/main.rs"
+
+[features]
+default = []
+# Build against the real metal NIC (netconf via netlink + raw sockopts).
+# Default off keeps tests fast and CI hermetic.
+metal = []
+
+[dependencies]
+anyhow.workspace          = true
+thiserror.workspace       = true
+libc.workspace            = true
+bsax                      = { path = "../bsax", default-features = false, features = ["std"] }
+bitcache                  = { path = "../bitcache" }
+blake3.workspace          = true
+bytes.workspace           = true
+reed-solomon-16.workspace = true
+tempfile.workspace        = true

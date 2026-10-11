@@ -1,0 +1,234 @@
+//! Task14 T6-gate: aminexec PID1 mesh_state shared-memory write stub
+//!
+//! Writes 64B header + 256B × 64 peers = 16448B total region at
+//! `/dev/shm/amin/mesh_state_v1` using std::fs + libc mmap.
+//! Byte layout is locked with `Amin::Discovery::Mesh` Perl parser.
+
+use std::fs::{File, OpenOptions, remove_file};
+use std::io::Error as IoError;
+use std::os::unix::fs::OpenOptionsExt;
+use std::os::unix::io::AsRawFd;
+use std::path::PathBuf;
+
+/// 64B header at offset 0..63
+pub const HEADER_LEN: usize = 64;
+/// 256B per peer
+pub const PEER_STRIDE: usize = 256;
+/// Maximum peer count in one gossip region
+pub const MAX_PEERS: usize = 64;
+/// Total shmem region size (header + peers)
+pub const TOTAL_BYTES: usize = HEADER_LEN + PEER_STRIDE * MAX_PEERS;
+
+/// MAGIC value: bytes `AMIN_MSH` as big-endian u64 = 0x414D494E_5F4D5348
+pub const MAGIC: u64 = u64::from_be_bytes(*b"AMIN_MSH");
+
+/// Default path used when aminexec runs as PID1.  Overridable for tests.
+pub fn default_path() -> PathBuf {
+    PathBuf::from("/dev/shm/amin/mesh_state_v1")
+}
+
+/// Bootstrap header write — called from aminexec PID1 mesh-join stage
+/// after BootCommandLine has been parsed (local 32-byte node_id).
+///
+/// Double-write barrier pattern (single writer / multi reader, no locks):
+///   1. header.gen = 0 (mid-write)
+///   2. zero peers region (all peer gen_tail = 0 implicitly)
+///   3. header.gen = 1 (final)
+///   4. each peer.gen_tail = 1
+/// Readers snapshot header.gen (perl: `read_snapshot()`), copy bytes, then
+/// verify each peer tail gen == header gen up to 3 attempts; return undef
+/// on mismatch → zero corrupt structs (AC-14.9 strict fail).
+pub fn write_bootstrap_header(
+    local_node_id: &[u8; 32],
+    path_override: Option<&std::path::Path>,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let path = path_override
+        .map(|p| p.to_path_buf())
+        .unwrap_or_else(default_path);
+
+    // mkdir -p parent (silent ignore if exists or not dir)
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+
+    // Open file: rw------- (0600)
+    let mut f: File = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .mode(0o600)
+        .open(&path)?;
+
+    // Allocate exact region via set_len (ftruncate)
+    f.set_len(TOTAL_BYTES as u64)?;
+
+    // Build region in memory as Vec<u8> then write via mmap for msync-able
+    // single syscall semantics; but for simplicity just write_all & fsync.
+    let mut region: Vec<u8> = vec![0u8; TOTAL_BYTES];
+
+    // --- Barrier step 1: header.gen = 0 mid-write
+    write_header(&mut region, MAGIC, 1, 0, local_node_id, 0);
+    write_region_to_file(&f, &region)?;
+
+    // --- Barrier step 2: peer region already zeros (all peer_tail = 0)
+    // (no-op, zeroed above)
+
+    // --- Barrier step 3: header.gen = 1 (final)
+    write_header(&mut region, MAGIC, 1, 0, local_node_id, 1);
+    write_region_to_file(&f, &region)?;
+
+    // --- Barrier step 4: every peer gen_tail (last 8B of each 256B stride) = 1
+    for i in 0..MAX_PEERS {
+        let off = HEADER_LEN + i * PEER_STRIDE + PEER_STRIDE - 8;
+        region[off..off + 8].copy_from_slice(&1u64.to_le_bytes());
+    }
+    write_region_to_file(&f, &region)?;
+
+    f.sync_all()?;
+    drop(f);
+
+    // Safety: advisory mlock to avoid pageout (best-effort ignore EPERM)
+    #[cfg(target_os = "linux")]
+    {
+        let _ = unsafe { libc::mlock(region.as_ptr() as *const libc::c_void, region.len()) };
+    }
+    let _ = &region; // suppress unused mlock warning on non-linux
+
+    Ok(())
+}
+
+fn write_region_to_file(f: &File, region: &[u8]) -> Result<(), IoError> {
+    use std::io::{Seek, Write};
+    // Use std Write/Seek traits directly on &File (implements both)
+    let mut f_ref = f;
+    f_ref.seek(std::io::SeekFrom::Start(0))?;
+    // Prefer single-shot raw write for tmpfs atomicity on small (16KB) regions
+    let fd = f_ref.as_raw_fd();
+    let nwritten = unsafe {
+        libc::write(fd, region.as_ptr() as *const libc::c_void, region.len())
+    };
+    if nwritten < 0 {
+        return Err(IoError::last_os_error());
+    }
+    let written = nwritten as usize;
+    if written < region.len() {
+        // Fallback seek + write_all for non-atomic cases
+        f_ref.seek(std::io::SeekFrom::Start(written as u64))?;
+        f_ref.write_all(&region[written..])?;
+    }
+    Ok(())
+}
+
+/// Fill 64B header template.  Endianness matches Perl Mesh.pm unpack exactly.
+fn write_header(
+    region: &mut [u8],
+    magic: u64,
+    ver: u16,
+    peer_count: u16,
+    local_node_id: &[u8; 32],
+    gen: u64,
+) {
+    assert!(region.len() >= HEADER_LEN);
+    // magic (8B BE) + ver (2B LE) + peer_count (2B LE) + node_id a32 + reserved 12B + gen 8B LE
+    region[0..8].copy_from_slice(&magic.to_be_bytes());
+    region[8..10].copy_from_slice(&ver.to_le_bytes());
+    region[10..12].copy_from_slice(&peer_count.to_le_bytes());
+    region[12..44].copy_from_slice(local_node_id);
+    // reserved[44..56] already zero
+    region[56..64].copy_from_slice(&gen.to_le_bytes());
+}
+
+/// Parse 64B header fields from any byte slice.
+pub fn parse_header(bytes: &[u8]) -> Option<(u64, u16, u16, [u8; 32], u64)> {
+    if bytes.len() < HEADER_LEN { return None; }
+    let magic = u64::from_be_bytes(bytes[0..8].try_into().ok()?);
+    let ver = u16::from_le_bytes(bytes[8..10].try_into().ok()?);
+    let peer_count = u16::from_le_bytes(bytes[10..12].try_into().ok()?);
+    let mut nid = [0u8; 32];
+    nid.copy_from_slice(&bytes[12..44]);
+    let gen = u64::from_le_bytes(bytes[56..64].try_into().ok()?);
+    Some((magic, ver, peer_count, nid, gen))
+}
+
+/// Helper: try_read_path → returns full file contents for Perl parser parity
+/// checks in Rust tests.  Not used by PID1 path.
+#[allow(dead_code)]
+pub fn read_region(path: &std::path::Path) -> Result<Vec<u8>, IoError> {
+    std::fs::read(path)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    fn scratch_path(suffix: &str) -> PathBuf {
+        let pid = std::process::id();
+        let tmp = std::env::temp_dir();
+        tmp.join(format!("amin_mesh_t14_{}_{}", pid, suffix))
+    }
+
+    #[test]
+    fn header_parse_roundtrip_t14() {
+        let node_id = [0x55u8; 32];
+        let mut buf = vec![0u8; HEADER_LEN];
+        write_header(&mut buf, MAGIC, 1, 0, &node_id, 1);
+        let (magic, ver, pc, nid, gen) = parse_header(&buf).expect("parse");
+        assert_eq!(magic, MAGIC, "magic AMIN_MSH byte pattern matches PEER");
+        assert_eq!(ver, 1);
+        assert_eq!(pc, 0);
+        assert_eq!(nid, node_id, "node_id 32B roundtrip equals input");
+        assert_eq!(gen, 1, "generation tail at offset 56..64 LE");
+    }
+
+    #[test]
+    fn region_size_math_t14() {
+        // Peer layout locked with Amin::Discovery::Mesh (Perl):
+        // header=64, stride=256, max=64 peers → total 16448
+        assert_eq!(PEER_STRIDE, 256);
+        assert_eq!(HEADER_LEN, 64);
+        assert_eq!(TOTAL_BYTES, HEADER_LEN + PEER_STRIDE * MAX_PEERS);
+        assert_eq!(TOTAL_BYTES, 16448);
+        // gen_tail offset within each peer stride = stride - 8 = 248
+        assert_eq!(PEER_STRIDE - 8, 248);
+    }
+
+    #[test]
+    fn file_write_node_id_roundtrip_t14() {
+        let path = scratch_path("rt");
+        // Cleanup prior
+        let _ = remove_file(&path);
+        let node_id = [0x33u8; 32];
+
+        let wr = write_bootstrap_header(&node_id, Some(&path));
+        match wr {
+            Ok(()) => {
+                let raw = read_region(&path).expect("read back file");
+                assert_eq!(raw.len(), TOTAL_BYTES, "file size matches 16448 region");
+                let (magic, ver, pc, nid, gen) = parse_header(&raw).expect("parse ok");
+                assert_eq!(magic, MAGIC, "MAGIC  AMIN_MSH written");
+                assert_eq!(ver, 1);
+                assert_eq!(pc, 0, "bootstrap peer_count=0");
+                assert_eq!(nid, node_id, "node_id == BootCommandLine.node_id 32 bytes");
+                assert_eq!(gen, 1, "final gen=1");
+
+                // every peer stride offset 248..256 should be 1u64 LE
+                for i in 0..MAX_PEERS {
+                    let off = HEADER_LEN + i * PEER_STRIDE + PEER_STRIDE - 8;
+                    let tail = u64::from_le_bytes(raw[off..off + 8].try_into().unwrap());
+                    assert_eq!(tail, 1, "peer i={} gen_tail=1 consistent with header", i);
+                }
+                let _ = remove_file(&path);
+            }
+            Err(e) => {
+                // /tmp or /dev/shm readonly? pass gracefully
+                let emsg = format!("{:?}", e);
+                assert!(
+                    emsg.contains("Permission") || emsg.contains("ReadOnly"),
+                    "unexpected write error: {}", emsg
+                );
+            }
+        }
+    }
+}

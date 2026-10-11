@@ -25,10 +25,12 @@
 //! - JNI / ART bridge  — default on Android for commands that need runtime
 //! - LibcNative        — no fork at all; run mkdir/unlink/echo via direct libc
 
-#![cfg_attr(not(feature = "posix-minimal"), forbid(unsafe_code))]
+#![cfg_attr(not(any(feature = "posix-minimal", feature = "linux-strict")), deny(unsafe_code))]
 #![warn(clippy::pedantic, missing_docs)]
 
 pub mod platform;
+pub mod pid1;
+pub mod mesh_state;
 
 /// Protocol version mirrored with the Perl Amin facade.
 pub const AMIN_EXEC_ABI: u32 = 0x0001_0000;
