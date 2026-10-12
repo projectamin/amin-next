@@ -20,8 +20,9 @@ my $late = [ map { $_->{class} } $reg->{late}->@* ];
 like($late, array {
     item 'Amin::Filter::Map::Topology';
     item 'Amin::Filter::UI::SwiftUIView';
+    item 'Amin::AI::Graph';
     end;
-}, 'late position = Map::Topology + UI::SwiftUIView');
+}, 'late position = Map::Topology + UI::SwiftUIView + AI::Graph');
 
 my $bare_chain = Amin::Machine::Dispatcher::_build_chain(
     Amin::Handler::Writer->new, Amin::Log::Standard->new(stderr=>0), 'render',
@@ -37,15 +38,18 @@ is($reg->{middle}[3]{class},  'Amin::Command::Autoconf',  'middle idx 3 = Autoco
 is($reg->{middle}[4]{class},  'Amin::Command::Automake',  'middle idx 4 = Automake');
 is($reg->{middle}[5]{class},  'Amin::Command::Autoreconf','middle idx 5 = Autoreconf');
 my $last = $#{$reg->{middle}};
-is($reg->{middle}[$last-5]{class}, 'Amin::Command::Exec',    'middle idx -6 = Exec');
-is($reg->{middle}[$last-4]{class}, 'Amin::Command::Spawn',   'middle idx -5 = Spawn');
-is($reg->{middle}[$last-3]{class}, 'Amin::Command::Signal',  'middle idx -4 = Signal');
-is($reg->{middle}[$last-2]{class}, 'Amin::Sandbox',          'middle idx -3 = Sandbox (AC-NF-1 ordering)');
-is($reg->{middle}[$last-1]{class}, 'Amin::Net::Fabric',      'middle idx -2 = Net::Fabric');
+is($reg->{middle}[$last-8]{class}, 'Amin::Command::Exec',    'middle idx -9 = Exec');
+is($reg->{middle}[$last-7]{class}, 'Amin::Command::Spawn',   'middle idx -8 = Spawn');
+is($reg->{middle}[$last-6]{class}, 'Amin::Command::Signal',  'middle idx -7 = Signal');
+is($reg->{middle}[$last-5]{class}, 'Amin::Sandbox',          'middle idx -6 = Sandbox (AC-NF-1 ordering)');
+is($reg->{middle}[$last-4]{class}, 'Amin::Net::Fabric',      'middle idx -5 = Net::Fabric');
+is($reg->{middle}[$last-3]{class}, 'Amin::AI::Inference',    'middle idx -4 = AI::Inference');
+is($reg->{middle}[$last-2]{class}, 'Amin::AI::Embed',        'middle idx -3 = AI::Embed (RAG memory ingest)');
+is($reg->{middle}[$last-1]{class}, 'Amin::AI::Memory',       'middle idx -2 = AI::Memory (RAG retrieval)');
 is($reg->{middle}[$last]{class},   'Amin::Filter::Storage::Bitcache',
     'middle idx -1 = Bitcache (innermost of middle array)');
-is(scalar($reg->{middle}->@*), 275,
-    'middle position count = 275 (267 commands + UCC::Sales/UCC::Instruments + Exec/Spawn/Signal + Sandbox/Net/Bitcache)');
+is(scalar($reg->{middle}->@*), 278,
+    'middle position count = 278 (267 commands + UCC::Sales/UCC::Instruments + Exec/Spawn/Signal + Sandbox/Net + AI::Inference/Embed/Memory + Bitcache)');
 
 is($reg->{begin}[0]{class}, 'Amin::Auth::ZCap',
     'begin idx 0 = Auth::ZCap (outermost, fires first auth boundary)');
@@ -57,9 +61,11 @@ is($reg->{begin}[3]{class}, 'Amin::UCC::General',
     'begin idx 3 = UCC::General (Art.1 transaction form validation)');
 is($reg->{begin}[4]{class}, 'Amin::UCC::Credit',
     'begin idx 4 = UCC::Credit (Art.5 LC authorization / presentation scope)');
-is($reg->{begin}[5]{class}, 'Amin::Schedule::Placement',
-    'begin idx 5 = Schedule::Placement (innermost begin, wraps AFTER profile/zcap/ucc, before middle)');
-is(scalar($reg->{begin}->@*), 6, 'begin position count = 6 (ZCap→Cond→Profile→UCC::General→UCC::Credit→Placement)');
+is($reg->{begin}[5]{class}, 'Amin::AI::Gate',
+    'begin idx 5 = AI::Gate (model allowlist + ZCap scope check before placement)');
+is($reg->{begin}[6]{class}, 'Amin::Schedule::Placement',
+    'begin idx 6 = Schedule::Placement (innermost begin, wraps AFTER profile/zcap/ucc/ai-gate, before middle)');
+is(scalar($reg->{begin}->@*), 7, 'begin position count = 7 (ZCap→Cond→Profile→UCC::General→UCC::Credit→AI::Gate→Placement)');
 
 my $chain = Amin::Machine::Dispatcher::_build_chain(
     Amin::Handler::Writer->new,

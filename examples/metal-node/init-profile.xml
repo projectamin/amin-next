@@ -10,6 +10,16 @@
              bc:size="4096">
   </bc:object>
 
+  <bc:object bc:kind="machine-spec"
+             bc:hash="a1b2c3d4e5f60123456789abcdef0123456789abcdef0123456789abcdef01234"
+             bc:size="18432">
+    <bc:signer bc:name="amin-release-2026"
+               bc:date="2026-01-15"
+               bc:keyref="MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE...">
+      <bc:signature>MEYCIQD...==</bc:signature>
+    </bc:signer>
+  </bc:object>
+
   <amin:stage amin:order="1"
               amin:name="hwcheck"
               amin:node_id="9a5b0c3d2e1f4a6b8c0d9e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5b6c7d8e9f0a1b"

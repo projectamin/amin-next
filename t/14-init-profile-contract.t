@@ -64,7 +64,7 @@ sub count_elements_xmllibxml ($xml_string) {
     # ── 9.1a: XML::LibXML structural parse ──────────────────────────────
     my $before = count_elements_xmllibxml($xml);
     is($before->{stage},    6, '9.1a: 6 stage elements total (1..=6)');
-    is($before->{object},   4, '9.1a: 4 bc:object envelope refs (1 outer + 3 fw-update)');
+    is($before->{object},   5, '9.1a: 5 bc:object envelope refs (1 outer + 1 machine-spec + 3 fw-update)');
     is($before->{server},   3, '9.1a: 3 bc:server ToR peers in stage-4 mesh-join');
     is($before->{filter},   4, '9.1a: 4 amin:filter registrations in stage-5 supervisor');
 
@@ -76,7 +76,7 @@ sub count_elements_xmllibxml ($xml_string) {
     ok(length($pure_out) > 500, '9.1b: Writer produced output string');
     my $after = count_elements_xmllibxml($pure_out);
     is($after->{stage},    6, '9.1b: roundtrip 6 stages');
-    is($after->{object},   4, '9.1b: roundtrip 4 bc:object');
+    is($after->{object},   5, '9.1b: roundtrip 5 bc:object');
     is($after->{server},   3, '9.1b: roundtrip 3 bc:server');
     is($after->{filter},   4, '9.1b: roundtrip 4 amin:filter');
     my @names = sort keys %{{ map { $_ => 1 } (keys %$before, keys %$after) }};

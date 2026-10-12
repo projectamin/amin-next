@@ -25,6 +25,13 @@ sub _load ($self) {
     if (defined $self->{xml}) {
         return $self->{xml};
     }
+    if (defined $self->{bc_hash} && length $self->{bc_hash}) {
+        $self->{_from_bitcache} = 1;
+        my $raw = $self->_bctool_get($self->{bc_hash});
+        return undef unless defined $raw && length $$raw;
+        return undef unless $self->_bctool_verify;
+        return $$raw;
+    }
     for my $candidate ($self->_candidates) {
         next unless defined $candidate && length $candidate;
         if (-f $candidate) {
@@ -58,13 +65,21 @@ sub _parse ($self, $xml) {
         name      => undef,
     };
     if (!defined $xml || !length $xml) {
-        $result->{allowed} = $self->_allow_all_registered;
+        if ($self->{_from_bitcache}) {
+            $result->{allowed} = {};
+        } else {
+            $result->{allowed} = $self->_allow_all_registered;
+        }
         return $result;
     }
     require XML::LibXML;
     my $doc = eval { XML::LibXML->load_xml(string => $xml) };
     if ($@ || !$doc) {
-        $result->{allowed} = $self->_allow_all_registered;
+        if ($self->{_from_bitcache}) {
+            $result->{allowed} = {};
+        } else {
+            $result->{allowed} = $self->_allow_all_registered;
+        }
         return $result;
     }
     my %allowed;
@@ -73,7 +88,8 @@ sub _parse ($self, $xml) {
         next unless defined $class && length $class;
         $allowed{$class} = 1;
     }
-    $result->{allowed} = (scalar keys %allowed) ? \%allowed : $self->_allow_all_registered;
+    $result->{allowed} = (scalar keys %allowed) ? \%allowed
+        : ($self->{_from_bitcache} ? {} : $self->_allow_all_registered);
 
     for my $tag (qw(handler log generator)) {
         my ($node) = $doc->findnodes("//$tag");
@@ -95,6 +111,80 @@ sub _parse ($self, $xml) {
         $result->{name} = $t if length $t;
     }
     return $result;
+}
+
+sub _bctool ($self) {
+    state $default = do {
+        require File::Basename;
+        require Cwd;
+        my $root = Cwd::abs_path(File::Basename::dirname(__FILE__)
+            . '/../../../rust/target/debug/bctool');
+        (defined $root && -x $root) ? $root : 'bctool';
+    };
+    return $self->{bctool_path} if defined $self->{bctool_path};
+    return $default;
+}
+
+sub _slab ($self) {
+    state $default = do {
+        require File::Temp;
+        File::Temp::tempdir(CLEANUP => 1) . '/default.slab';
+    };
+    my $p = $self->{slab_path};
+    return (defined $p && length $p) ? $p : $default;
+}
+
+sub _bctool_get ($self, $hash) {
+    return unless defined $hash && length($hash) == 64;
+    require IPC::Run;
+    my $bctool = $self->_bctool;
+    my $slab   = $self->_slab;
+    my ($in, $out, $err) = ('', '', '');
+    my $h = IPC::Run::harness(
+        [$bctool, 'get', '--slab', $slab, '--hash', $hash],
+        \$in, \$out, \$err, debug => 0);
+    eval { IPC::Run::start($h); IPC::Run::finish($h) };
+    my $rc = $? >> 8;
+    if ($@ || $rc != 0) {
+        return;
+    }
+    return \$out;
+}
+
+sub _bctool_verify ($self) {
+    my $name = $self->{signer_name};
+    my $ts   = $self->{signer_ts};
+    my $sig  = $self->{signer_sig};
+    return 0 unless defined $name && length $name;
+    return 0 unless defined $ts   && length $ts;
+    return 0 unless defined $sig  && length $sig;
+
+    my $vk = $self->{signer_vk};
+    unless (defined $vk && length $vk) {
+        my $ta = $self->{trust_anchor_dir};
+        return 0 unless defined $ta && length $ta;
+        require Digest::SHA;
+        my $hex = Digest::SHA::sha256_hex($name);
+        $vk = "$ta/$hex.vk";
+        return 0 unless -f $vk;
+    }
+
+    require IPC::Run;
+    my $bctool = $self->_bctool;
+    my $slab   = $self->_slab;
+    my ($in, $out, $err) = ('', '', '');
+    my $h = IPC::Run::harness(
+        [$bctool, 'verify',
+            '--slab', $slab,
+            '--hash', $self->{bc_hash},
+            '--name', $name,
+            '--ts',   $ts,
+            '--vk',   $vk,
+            '--sig',  $sig],
+        \$in, \$out, \$err, debug => 0);
+    eval { IPC::Run::start($h); IPC::Run::finish($h) };
+    my $rc = $? >> 8;
+    return ($rc == 0) ? 1 : 0;
 }
 
 sub _allow_all_registered ($self) {

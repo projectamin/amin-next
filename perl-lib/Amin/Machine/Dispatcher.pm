@@ -318,6 +318,15 @@ BEGIN {
         element => 'sandbox', namespace => NS(), position => 'middle');
     require Amin::Net::Fabric;     __PACKAGE__->register('Amin::Net::Fabric',
         element => undef, namespace => NS(), position => 'middle');
+    require Amin::AI::Inference;   __PACKAGE__->register('Amin::AI::Inference',
+        element => 'request', namespace => 'http://projectamin.org/ns/ai/1',
+        position => 'middle');
+    require Amin::AI::Embed;       __PACKAGE__->register('Amin::AI::Embed',
+        element => 'embed', namespace => 'http://projectamin.org/ns/ai/1',
+        position => 'middle');
+    require Amin::AI::Memory;      __PACKAGE__->register('Amin::AI::Memory',
+        element => 'query', namespace => 'http://projectamin.org/ns/ai/1',
+        position => 'middle');
     require Amin::Cond::OS;         __PACKAGE__->register('Amin::Cond::OS',
         element => undef,   namespace => NS(),                        position => 'begin');
     require Amin::Filter::Init::ProfileValidator;
@@ -330,6 +339,10 @@ BEGIN {
     require Amin::UCC::Credit;
     __PACKAGE__->register('Amin::UCC::Credit',
         element => 'lc',      namespace => 'http://projectamin.org/ns/ucc/1',
+        position => 'begin');
+    require Amin::AI::Gate;
+    __PACKAGE__->register('Amin::AI::Gate',
+        element => 'request', namespace => 'http://projectamin.org/ns/ai/1',
         position => 'begin');
     require Amin::Schedule::Placement;
     __PACKAGE__->register('Amin::Schedule::Placement',
@@ -348,12 +361,20 @@ BEGIN {
         element => undef,   namespace => 'http://projectamin.org/ns/ui/1',
         namespaces => [NS(), 'http://projectamin.org/ns/ui/1'],
         position => 'late');
+    require Amin::AI::Graph;
+    __PACKAGE__->register('Amin::AI::Graph',
+        element => undef, namespace => 'http://projectamin.org/ns/ai/1',
+        position => 'late');
     require Amin::Filter::Billing::CgroupV2;
     __PACKAGE__->register('Amin::Filter::Billing::CgroupV2',
         element => undef, namespace => NS(), position => 'end');
     require Amin::UCC::Settlement;
     __PACKAGE__->register('Amin::UCC::Settlement',
         element => undef, namespace => 'http://projectamin.org/ns/ucc/1',
+        position => 'end');
+    require Amin::AI::Provenance;
+    __PACKAGE__->register('Amin::AI::Provenance',
+        element => undef, namespace => 'http://projectamin.org/ns/ai/1',
         position => 'end');
 }
 
@@ -382,6 +403,14 @@ sub _resolve_spec ($o) {
         my $ms = Amin::Machine::MachineSpec->new(
             (exists $o->{machine_spec_xml}  ? (xml  => delete $o->{machine_spec_xml})  : ()),
             (exists $o->{machine_spec_path} ? (path => delete $o->{machine_spec_path}) : ()),
+            (exists $o->{bc_hash}           ? (bc_hash      => delete $o->{bc_hash})           : ()),
+            (exists $o->{slab_path}         ? (slab_path    => delete $o->{slab_path})         : ()),
+            (exists $o->{bctool_path}       ? (bctool_path  => delete $o->{bctool_path})       : ()),
+            (exists $o->{signer_name}       ? (signer_name  => delete $o->{signer_name})       : ()),
+            (exists $o->{signer_ts}         ? (signer_ts    => delete $o->{signer_ts})         : ()),
+            (exists $o->{signer_vk}         ? (signer_vk    => delete $o->{signer_vk})         : ()),
+            (exists $o->{signer_sig}        ? (signer_sig   => delete $o->{signer_sig})        : ()),
+            (exists $o->{trust_anchor_dir}  ? (trust_anchor_dir => delete $o->{trust_anchor_dir}) : ()),
         );
         $spec = $ms->spec;
     }

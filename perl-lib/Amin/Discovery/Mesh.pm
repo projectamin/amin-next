@@ -110,8 +110,8 @@ sub _read_attempt ($self, $path) {
         length($buf) >= $off + STRIDE or return undef;
         my $peer_bytes = substr($buf, $off, STRIDE);
         my ($pnid, $tlen, $tbytes, $zlen, $zbytes, $load, $fmem, $fssd,
-            $hr0,$hr1,$hr2,$hr3, $pad, $tgen)
-          = unpack('a32 v a24 v a24 C V V a32 a32 a32 a32 a27 Q>',
+            $hr0,$hr1,$hr2,$hr3, $fvram, $accel, $aitier, $pad, $tgen)
+          = unpack('a32 v a24 v a24 C V V a32 a32 a32 a32 V C C a21 Q>',
                    $peer_bytes);
         my $tier = substr($tbytes, 0, ($tlen//0));
         utf8::decode($tier) if defined $tier;
@@ -126,6 +126,9 @@ sub _read_attempt ($self, $path) {
             free_mem_MB  => $fmem,
             free_ssd_GB  => $fssd,
             hot_refs     => [$hr0,$hr1,$hr2,$hr3],
+            free_vram_MB => $fvram // 0,
+            accelerator  => $accel // 0,
+            ai_tier      => $aitier // 0,
             generation   => $tgen,
         };
         $off += STRIDE;

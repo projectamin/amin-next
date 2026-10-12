@@ -9,6 +9,7 @@
   <filter class="Amin::Filter::Init::ProfileValidator" position="begin" element="stage" namespace="http://projectamin.org/ns/2026/" />
   <filter class="Amin::UCC::General" position="begin" element="transaction" namespace="http://projectamin.org/ns/ucc/1" />
   <filter class="Amin::UCC::Credit" position="begin" element="lc" namespace="http://projectamin.org/ns/ucc/1" />
+  <filter class="Amin::AI::Gate" position="begin" element="request" namespace="http://projectamin.org/ns/ai/1" />
   <filter class="Amin::Schedule::Placement" position="begin" namespace="http://projectamin.org/ns/2026/" />
   <filter class="Amin::Command::Addr2line" position="middle" element="command" name="addr2line" namespace="http://projectamin.org/ns/2026/" />
   <filter class="Amin::Command::Ar" position="middle" element="command" name="ar" namespace="http://projectamin.org/ns/2026/" />
@@ -284,9 +285,14 @@
   <filter class="Amin::Command::Signal" position="middle" element="signal" namespace="http://projectamin.org/ns/2026/" />
   <filter class="Amin::Sandbox" position="middle" element="sandbox" namespace="http://projectamin.org/ns/2026/" />
   <filter class="Amin::Net::Fabric" position="middle" namespace="http://projectamin.org/ns/2026/" />
+  <filter class="Amin::AI::Inference" position="middle" element="request" namespace="http://projectamin.org/ns/ai/1" />
+  <filter class="Amin::AI::Embed" position="middle" element="embed" namespace="http://projectamin.org/ns/ai/1" />
+  <filter class="Amin::AI::Memory" position="middle" element="query" namespace="http://projectamin.org/ns/ai/1" />
   <filter class="Amin::Filter::Storage::Bitcache" position="middle" element="object" namespace="http://projectamin.org/ns/bc/" />
   <filter class="Amin::Filter::Map::Topology" position="late" namespace="http://projectamin.org/ns/map/1" />
   <filter class="Amin::Filter::UI::SwiftUIView" position="late" namespace="http://projectamin.org/ns/ui/1" />
+  <filter class="Amin::AI::Graph" position="late" namespace="http://projectamin.org/ns/ai/1" />
   <filter class="Amin::Filter::Billing::CgroupV2" position="end" namespace="http://projectamin.org/ns/2026/" />
   <filter class="Amin::UCC::Settlement" position="end" namespace="http://projectamin.org/ns/ucc/1" />
+  <filter class="Amin::AI::Provenance" position="end" namespace="http://projectamin.org/ns/ai/1" />
 </machine>
