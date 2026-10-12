@@ -15,22 +15,31 @@ require XML::LibXML::SAX;
 sub new ($class, %opts) {
     my $self = bless {
         mode                => $opts{Mode}    // 'render',
-        handler             => $opts{Handler} // Amin::Handler::Writer->new,
-        log                 => $opts{Log}     // Amin::Log::Standard->new,
+        handler             => $opts{Handler},
+        log                 => $opts{Log},
         late_filters_enable => $opts{late_filters_enable} // { map => 1, ui => 1 },
         ui_os               => $opts{ui_os}   // 'tty',
         map_out             => $opts{map_out} // 'svg',
+        machine_spec        => $opts{machine_spec},
+        machine_spec_xml    => $opts{machine_spec_xml},
+        machine_spec_path   => $opts{machine_spec_path},
     }, $class;
     return $self;
 }
 
 sub parse ($self, $xml) {
     my $machine = Amin::Machine::Dispatcher->new(
-        Handler => $self->{handler}, Log => $self->{log}, Mode => $self->{mode},
+        Mode => $self->{mode},
         late_filters_enable => $self->{late_filters_enable},
+        (defined $self->{handler}           ? (Handler => $self->{handler})           : ()),
+        (defined $self->{log}               ? (Log     => $self->{log})               : ()),
+        (defined $self->{machine_spec}      ? (machine_spec      => $self->{machine_spec})      : ()),
+        (defined $self->{machine_spec_xml}  ? (machine_spec_xml  => $self->{machine_spec_xml})  : ()),
+        (defined $self->{machine_spec_path} ? (machine_spec_path => $self->{machine_spec_path}) : ()),
     );
     XML::LibXML::SAX->new(Handler => $machine)->parse_string($xml);
-    $self->{handler}->can('output') && return $self->{handler}->output;
+    my $h = $machine->Handler;
+    $h->can('output') && return $h->output;
     return;
 }
 

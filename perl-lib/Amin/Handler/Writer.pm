@@ -5,7 +5,7 @@ use parent 'XML::SAX::Base';
 use Amin qw(NS);
 use Class::Tiny qw(fh autoflush), {
     depth   => 0,
-    stack   => [],
+    stack   => sub { [] },
     buf     => '',
     indent  => 2,
 };

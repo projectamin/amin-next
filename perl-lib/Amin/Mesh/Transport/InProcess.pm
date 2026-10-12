@@ -6,6 +6,7 @@ sub dispatch_spawn_remote ($self, $peer_ids, $bsax_bytes, $context = {}) { ... }
 package Amin::Mesh::Transport::InProcess;
 use v5.38; use warnings; use utf8; use experimental 'signatures';
 
+use Amin qw(NS);
 use Class::Tiny qw(cancel_count dispatch_count last_dispatched),
 { _handles  => sub { +[] } };
 
@@ -36,19 +37,68 @@ sub _spawn_handle ($peer_id, $bsax_bytes, $context) {
             require Time::HiRes;
             Time::HiRes::usleep($delay_ms * 1000);
         }
-        (my $bsax_out = $bsax_bytes // '') =~ s/&/&amp;/g; $bsax_out =~ s/</&lt;/g; $bsax_out =~ s/>/&gt;/g;
         my $peer_attr = _safe_peer_attr($peer_id);
-        my $out = '';
-        $out .= qq{<?xml version="1.0"?>\n}
-             .  qq{<amin:root xmlns:amin="http://projectamin.org/ns/2026/">}
-             .  qq{<amin:result kind="running" id="s" peer="}._xml_esc($peer_attr).qq{">}
-             .  qq{<amin:stream channel="pid">4242</amin:stream>}
-             .  qq{<amin:stream channel="spawn">$bsax_out</amin:stream>}
-             .  qq{<amin:stream channel="out">hello $extra</amin:stream>}
-             .  qq{<amin:status rc="$rc" exit_kind="$kind"></amin:status>}
-             .  qq{</amin:result>}
-             .  qq{</amin:root>};
-        syswrite($tx, $out);
+        require Amin::Handler::Writer;
+        my $w = Amin::Handler::Writer->new(indent => 0);
+        $w->start_document;
+        $w->start_element({
+            NamespaceURI => NS, LocalName => 'root', Name => 'amin:root',
+            Prefix => 'amin',
+            Attributes => {
+                '{http://www.w3.org/2000/xmlns/}amin' => {
+                    Name => 'xmlns:amin', LocalName => 'amin', Prefix => 'xmlns',
+                    NamespaceURI => 'http://www.w3.org/2000/xmlns/',
+                    Value => NS,
+                },
+            },
+        });
+        $w->start_element({
+            NamespaceURI => NS, LocalName => 'result', Name => 'amin:result',
+            Prefix => 'amin',
+            Attributes => _sax_attrs({ kind => 'running', id => 's', peer => $peer_attr }),
+        });
+        $w->start_element({
+            NamespaceURI => NS, LocalName => 'stream', Name => 'amin:stream',
+            Prefix => 'amin',
+            Attributes => _sax_attrs({ channel => 'pid' }),
+        });
+        $w->characters({ Data => '4242' });
+        $w->end_element({
+            NamespaceURI => NS, LocalName => 'stream', Name => 'amin:stream',
+            Prefix => 'amin' });
+        $w->start_element({
+            NamespaceURI => NS, LocalName => 'stream', Name => 'amin:stream',
+            Prefix => 'amin',
+            Attributes => _sax_attrs({ channel => 'spawn' }),
+        });
+        $w->characters({ Data => $bsax_bytes // '' });
+        $w->end_element({
+            NamespaceURI => NS, LocalName => 'stream', Name => 'amin:stream',
+            Prefix => 'amin' });
+        $w->start_element({
+            NamespaceURI => NS, LocalName => 'stream', Name => 'amin:stream',
+            Prefix => 'amin',
+            Attributes => _sax_attrs({ channel => 'out' }),
+        });
+        $w->characters({ Data => "hello $extra" });
+        $w->end_element({
+            NamespaceURI => NS, LocalName => 'stream', Name => 'amin:stream',
+            Prefix => 'amin' });
+        $w->start_element({
+            NamespaceURI => NS, LocalName => 'status', Name => 'amin:status',
+            Prefix => 'amin',
+            Attributes => _sax_attrs({ rc => $rc, exit_kind => $kind }),
+        });
+        $w->end_element({
+            NamespaceURI => NS, LocalName => 'status', Name => 'amin:status',
+            Prefix => 'amin' });
+        $w->end_element({
+            NamespaceURI => NS, LocalName => 'result', Name => 'amin:result',
+            Prefix => 'amin' });
+        $w->end_element({
+            NamespaceURI => NS, LocalName => 'root', Name => 'amin:root',
+            Prefix => 'amin' });
+        syswrite($tx, $w->output);
         close $tx;
         POSIX::_exit(0);
     }
@@ -60,10 +110,13 @@ sub _spawn_handle ($peer_id, $bsax_bytes, $context) {
     );
 }
 
-sub _xml_esc ($s) {
-    $s //= '';
-    $s =~ s/&/&amp;/g; $s =~ s/</&lt;/g; $s =~ s/"/&quot;/g;
-    return $s;
+sub _sax_attrs ($hash) {
+    my $uri = NS;
+    +{ map {;
+        "{$uri}$_" => { Name => "amin:$_", LocalName => $_, Prefix => 'amin',
+                        NamespaceURI => $uri,
+                        Value => defined $hash->{$_} ? "$hash->{$_}" : '' }
+    } keys %$hash };
 }
 
 sub _safe_peer_attr ($peer_id) {

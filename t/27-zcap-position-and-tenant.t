@@ -72,7 +72,7 @@ sub attr_val ($el, $want) {
 # ── Z1: Dispatcher begin[] count + idx0 = ZCap ──
 {
     my $reg = \%Amin::Machine::Dispatcher::FILTERS;
-    is(scalar($reg->{begin}->@*), 4, 't27-Z1: begin[] count = 4 (ZCap/Cond/Validator/Placement)');
+    is(scalar($reg->{begin}->@*), 6, 't27-Z1: begin[] count = 6 (ZCap/Cond/Validator/UCC::General/UCC::Credit/Placement)');
     is($reg->{begin}[0]{class}, 'Amin::Auth::ZCap',
         't27-Z1: begin idx 0 = Auth::ZCap (outermost auth boundary)');
 }

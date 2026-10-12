@@ -43,12 +43,14 @@ binmode STDERR, ':encoding(UTF-8)';
 
 our $VERSION = '3.0.0-bootstrap';
 my ($LEGACY, $STREAM_OPT, $MAP_OUT, $UI_OS) = (0, 1, 'svg', 'tty');
+my ($MACHINE_SPEC);
 my (@INC_EXTRA, @W_PERM, @W_BEG, @W_MID, @W_LATE, @W_END);
 GetOptions(
     'legacy-processing!' => \$LEGACY,
     'stream!'            => \$STREAM_OPT,
     'out=s'              => \$MAP_OUT,
     'os=s'               => \$UI_OS,
+    'machine-spec=s'     => \$MACHINE_SPEC,
     'inc=s@'             => \@INC_EXTRA,
     'with-permanent=s'   => sub { push @W_PERM, split /,/, $_[1] },
     'with-begin=s'       => sub { push @W_BEG,  split /,/, $_[1] },
@@ -130,16 +132,28 @@ my $xml = do { local $/; <$fh> }; close $fh;
 
 use Amin;
 use Amin::Log::Standard;
-use Amin::Handler::Writer;
+use Amin::Machine::MachineSpec;
 
 my $log     = Amin::Log::Standard->new(stderr => 1);
-my $writer  = Amin::Handler::Writer->new(
+
+my $ms = Amin::Machine::MachineSpec->new(
+    (defined $MACHINE_SPEC ? (path => $MACHINE_SPEC) : ()));
+my $spec = $ms->spec;
+
+my $handler_class = ($spec->{handler} && $spec->{handler}{class})
+    ? $spec->{handler}{class} : 'Amin::Handler::Writer';
+(my $handler_file = "$handler_class.pm") =~ s{::}{/}g;
+eval { require $handler_file };
+die "Cannot load machine-spec handler '$handler_class': $@" if $@;
+
+my $writer  = $handler_class->new(
     indent    => 2,
     ($STREAM ? (fh => *STDOUT{IO}, autoflush => 1) : ()),
 );
 my $amin = Amin->new(Mode => $mode, Handler => $writer, Log => $log,
     late_filters_enable => { map => $LATE_MAP, ui => $LATE_UI },
-    ui_os => $UI_OS, map_out => $MAP_OUT);
+    ui_os => $UI_OS, map_out => $MAP_OUT,
+    (defined $MACHINE_SPEC ? (machine_spec_path => $MACHINE_SPEC) : ()));
 
 my $out = $amin->parse($xml);
 if ($STREAM) {

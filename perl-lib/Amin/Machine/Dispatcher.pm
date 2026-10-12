@@ -7,10 +7,15 @@ use Amin qw(NS);
 use Class::Tiny qw(Handler Log Mode), { chain => undef };
 
 our %FILTERS;
+our %RUNTIME_ALLOWED;
+my $CATALOG_FROZEN = 0;
+
+INIT { $CATALOG_FROZEN = 1 }
 
 sub register ($pkg, $class, %meta) {
     my $pos = delete($meta{position}) // 'middle';
     push $FILTERS{$pos}->@*, { class => $class, meta => \%meta };
+    $RUNTIME_ALLOWED{$class} = 1 if $CATALOG_FROZEN;
 }
 
 BEGIN {
@@ -295,6 +300,14 @@ BEGIN {
             element => "command", namespace => NS(), name => $name, position => "middle");
     }
 
+    require Amin::UCC::Sales;
+    __PACKAGE__->register('Amin::UCC::Sales',
+        element => 'sale',    namespace => 'http://projectamin.org/ns/ucc/1',
+        position => 'middle');
+    require Amin::UCC::Instruments;
+    __PACKAGE__->register('Amin::UCC::Instruments',
+        element => 'instrument', namespace => 'http://projectamin.org/ns/ucc/1',
+        position => 'middle');
     require Amin::Command::Exec;    __PACKAGE__->register('Amin::Command::Exec',
         element => 'exec',    namespace => NS(), position => 'middle');
     require Amin::Command::Spawn;   __PACKAGE__->register('Amin::Command::Spawn',
@@ -310,6 +323,14 @@ BEGIN {
     require Amin::Filter::Init::ProfileValidator;
     __PACKAGE__->register('Amin::Filter::Init::ProfileValidator',
         element => 'stage',   namespace => NS(),                        position => 'begin');
+    require Amin::UCC::General;
+    __PACKAGE__->register('Amin::UCC::General',
+        element => 'transaction', namespace => 'http://projectamin.org/ns/ucc/1',
+        position => 'begin');
+    require Amin::UCC::Credit;
+    __PACKAGE__->register('Amin::UCC::Credit',
+        element => 'lc',      namespace => 'http://projectamin.org/ns/ucc/1',
+        position => 'begin');
     require Amin::Schedule::Placement;
     __PACKAGE__->register('Amin::Schedule::Placement',
         element => undef,     namespace => NS(),                        position => 'begin');
@@ -330,13 +351,67 @@ BEGIN {
     require Amin::Filter::Billing::CgroupV2;
     __PACKAGE__->register('Amin::Filter::Billing::CgroupV2',
         element => undef, namespace => NS(), position => 'end');
+    require Amin::UCC::Settlement;
+    __PACKAGE__->register('Amin::UCC::Settlement',
+        element => undef, namespace => 'http://projectamin.org/ns/ucc/1',
+        position => 'end');
 }
 
 sub new ($class, %o) {
     my $self = bless { %o }, $class;
+    my $spec = _resolve_spec(\%o);
+    $self->{machine_spec} = $spec;
+    $self->{Handler} //= _instantiate_handler($spec->{handler});
+    $self->{Log}     //= _instantiate_log($spec->{log});
     $self->{chain} = _build_chain($self->Handler, $self->Log, $self->Mode // 'render',
-        $self->{late_filters_enable} // { map => 1, ui => 1 });
+        $self->{late_filters_enable} // { map => 1, ui => 1 }, $spec->{allowed});
     return $self;
+}
+
+sub _resolve_spec ($o) {
+    my $raw = delete $o->{machine_spec};
+    my $spec;
+    if ($raw && ref $raw eq 'HASH') {
+        if (exists $raw->{allowed}) {
+            $spec = $raw;
+        } else {
+            $spec = { allowed => $raw };
+        }
+    } else {
+        require Amin::Machine::MachineSpec;
+        my $ms = Amin::Machine::MachineSpec->new(
+            (exists $o->{machine_spec_xml}  ? (xml  => delete $o->{machine_spec_xml})  : ()),
+            (exists $o->{machine_spec_path} ? (path => delete $o->{machine_spec_path}) : ()),
+        );
+        $spec = $ms->spec;
+    }
+    if (%RUNTIME_ALLOWED) {
+        $spec->{allowed} = { $spec->{allowed}->%*, %RUNTIME_ALLOWED };
+    }
+    return $spec;
+}
+
+sub _instantiate_handler ($h) {
+    return undef unless $h && ref $h eq 'HASH' && $h->{class};
+    (my $file = "$h->{class}.pm") =~ s{::}{/}g;
+    eval { require $file };
+    return undef if $@;
+    return $h->{class}->new($h->{attrs} ? $h->{attrs}->%* : ());
+}
+
+sub _instantiate_log ($l) {
+    return undef unless $l && ref $l eq 'HASH' && $l->{class};
+    (my $file = "$l->{class}.pm") =~ s{::}{/}g;
+    eval { require $file };
+    return undef if $@;
+    return $l->{class}->new($l->{attrs} ? $l->{attrs}->%* : ());
+}
+
+sub _generator_class ($g) {
+    return undef unless $g && ref $g eq 'HASH' && $g->{class};
+    (my $file = "$g->{class}.pm") =~ s{::}{/}g;
+    eval { require $file };
+    return $@ ? undef : $g->{class};
 }
 
 for my $m (qw(start_document end_document
@@ -350,27 +425,34 @@ sub run ($pkg_or_self, %o) {
     my $mode      = $o{mode}      // 'render';
     my $late_en   = $o{late_filters_enable} // { map => 1, ui => 1 };
     my $source    = $o{source_xml}  // die "Dispatcher->run needs source_xml";
-    my $Handler   = $o{Handler}    // Amin::Handler::Writer->new(indent => 2);
-    my $Log       = $o{Log}        // Amin::Log::Standard->new(stderr => 0);
+    my $spec      = _resolve_spec(\%o);
+    my $Handler   = $o{Handler} // _instantiate_handler($spec->{handler})
+                    // do { require Amin::Handler::Writer; Amin::Handler::Writer->new(indent => 2) };
+    my $Log       = $o{Log}     // _instantiate_log($spec->{log})
+                    // do { require Amin::Log::Standard; Amin::Log::Standard->new(stderr => 0) };
+    my $gen_class = _generator_class($spec->{generator}) // 'XML::LibXML::SAX';
     my $self;
     if (ref($pkg_or_self)) { $self = $pkg_or_self; $self->{Mode} = $mode;
         $self->{Handler} //= $Handler; $self->{Log} //= $Log;
-        $self->{chain} = _build_chain($self->Handler, $self->Log, $mode, $late_en);
+        $self->{machine_spec} = $spec;
+        $self->{chain} = _build_chain($self->Handler, $self->Log, $mode, $late_en, $spec->{allowed});
     } else {
-        $self = bless({ Mode => $mode, Handler => $Handler, Log => $Log }, $pkg_or_self);
-        $self->{chain} = _build_chain($self->Handler, $self->Log, $mode, $late_en);
+        $self = bless({ Mode => $mode, Handler => $Handler, Log => $Log, machine_spec => $spec }, $pkg_or_self);
+        $self->{chain} = _build_chain($self->Handler, $self->Log, $mode, $late_en, $spec->{allowed});
     }
-    require XML::LibXML::SAX;
-    XML::LibXML::SAX->new(Handler => $self)->parse_string($source);
+    (my $gen_file = "$gen_class.pm") =~ s{::}{/}g;
+    eval { require $gen_file };
+    $gen_class->new(Handler => $self)->parse_string($source);
     $self->Handler->can('output') && return $self->Handler->output;
     return;
 }
 
-sub _build_chain ($h, $l, $mode, $late_enable = {}) {
+sub _build_chain ($h, $l, $mode, $late_enable = {}, $allowed = undef) {
     my $head = $h;
     for my $pos (qw(end late middle begin permanent)) {
         my $filters = $FILTERS{$pos} // [];
         for my $f (reverse @$filters) {
+            next if defined $allowed && !$allowed->{$f->{class}};
             next if $pos eq 'late' && (
                 ($f->{class} =~ /::Map::/ && !$late_enable->{map}) ||
                 ($f->{class} =~ /::UI::/  && !$late_enable->{ui}));

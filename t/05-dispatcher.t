@@ -44,8 +44,8 @@ is($reg->{middle}[$last-2]{class}, 'Amin::Sandbox',          'middle idx -3 = Sa
 is($reg->{middle}[$last-1]{class}, 'Amin::Net::Fabric',      'middle idx -2 = Net::Fabric');
 is($reg->{middle}[$last]{class},   'Amin::Filter::Storage::Bitcache',
     'middle idx -1 = Bitcache (innermost of middle array)');
-is(scalar($reg->{middle}->@*), 273,
-    'middle position count = 273 (267 commands + Exec/Spawn/Signal + Sandbox/Net/Bitcache)');
+is(scalar($reg->{middle}->@*), 275,
+    'middle position count = 275 (267 commands + UCC::Sales/UCC::Instruments + Exec/Spawn/Signal + Sandbox/Net/Bitcache)');
 
 is($reg->{begin}[0]{class}, 'Amin::Auth::ZCap',
     'begin idx 0 = Auth::ZCap (outermost, fires first auth boundary)');
@@ -53,9 +53,13 @@ is($reg->{begin}[1]{class}, 'Amin::Cond::OS',
     'begin idx 1 = Cond::OS (after ZCap drops non-compliant elements)');
 is($reg->{begin}[2]{class}, 'Amin::Filter::Init::ProfileValidator',
     'begin idx 2 = ProfileValidator (before Placement, validates init-stage first)');
-is($reg->{begin}[3]{class}, 'Amin::Schedule::Placement',
-    'begin idx 3 = Schedule::Placement (innermost begin, wraps AFTER profile/zcap, before middle)');
-is(scalar($reg->{begin}->@*), 4, 'begin position count = 4 (AC-14.1 Placement idx3 — wrap chain: ZCap→Cond→Profile→Placement)');
+is($reg->{begin}[3]{class}, 'Amin::UCC::General',
+    'begin idx 3 = UCC::General (Art.1 transaction form validation)');
+is($reg->{begin}[4]{class}, 'Amin::UCC::Credit',
+    'begin idx 4 = UCC::Credit (Art.5 LC authorization / presentation scope)');
+is($reg->{begin}[5]{class}, 'Amin::Schedule::Placement',
+    'begin idx 5 = Schedule::Placement (innermost begin, wraps AFTER profile/zcap/ucc, before middle)');
+is(scalar($reg->{begin}->@*), 6, 'begin position count = 6 (ZCap→Cond→Profile→UCC::General→UCC::Credit→Placement)');
 
 my $chain = Amin::Machine::Dispatcher::_build_chain(
     Amin::Handler::Writer->new,

@@ -138,7 +138,7 @@ sub start_element ($self, $el) {
             seq              => $seq,
             clamped_redundancy => scalar(@topn),
         });
-        $self->_spawn_capture_begin($attrs, \@topn, $ln);
+        $self->_spawn_capture_begin($el, $attrs, \@topn, $ln);
         return;
     }
     if (($self->{_cap} // 0) > 0) {
@@ -175,11 +175,12 @@ sub end_element ($self, $el) {
     return $self->SUPER::end_element($el) unless ($self->{_cap_suppress} // 0) > 0;
 }
 
-sub _spawn_capture_begin ($self, $attrs, $topn_peers, $root_ln = 'spawn') {
+sub _spawn_capture_begin ($self, $root_el, $attrs, $topn_peers, $root_ln = 'spawn') {
     $self->{_cap} = 1;
     $self->{_cap_suppress} = 1;
     $self->{_buf} = '';
-    $self->{_capture} = { attrs => $attrs, peers => $topn_peers, events => [],
+    $self->{_capture} = { attrs => $attrs, peers => $topn_peers,
+                          events => [{ type => 'start', el => $root_el }],
                           root_ln => $root_ln };
 }
 
@@ -347,32 +348,18 @@ sub _redundancy_count ($self, $attrs, $eligible_count) {
 }
 
 sub _serialize_capture_to_canonical ($self, $capture) {
-    my $xml = '';
+    require Amin::Handler::Writer;
+    my $w = Amin::Handler::Writer->new(indent => 0);
     for my $ev (@{$capture->{events}}) {
         if ($ev->{type} eq 'start') {
-            my $el = $ev->{el};
-            my $ln = $el->{LocalName} // '';
-            my $attrs = $el->{Attributes} // {};
-            my $attr_str = '';
-            for my $k (sort keys %$attrs) {
-                my $a = $attrs->{$k};
-                next unless ref $a eq 'HASH';
-                my $an = $a->{Name} // $a->{LocalName} // $k;
-                my $av = $a->{Value} // '';
-                $av =~ s/&/&amp;/g; $av =~ s/</&lt;/g; $av =~ s/"/&quot;/g;
-                $attr_str .= qq{ $an="$av"};
-            }
-            $xml .= length($ln) ? "<amin:$ln$attr_str>" : "<start/>";
+            $w->start_element($ev->{el});
         } elsif ($ev->{type} eq 'end') {
-            my $ln = $ev->{el}{LocalName} // '';
-            $xml .= length($ln) ? "</amin:$ln>" : "</end>";
+            $w->end_element($ev->{el});
         } else {
-            my $d = $ev->{data} // '';
-            $d =~ s/&/&amp;/g; $d =~ s/</&lt;/g;
-            $xml .= $d;
+            $w->characters({ Data => $ev->{data} // '' });
         }
     }
-    return $xml;
+    return $w->output;
 }
 
 sub _build_context ($self) {
