@@ -50,6 +50,7 @@ cover_db/
 .DS_Store
 Thumbs.db
 .trae/
+.freebuff
 
 # ── Amin runtime artifacts ──────────────────────────────────────────
 # *.aminsig detached signatures written for releases; dev signatures are fine
