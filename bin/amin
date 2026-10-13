@@ -85,9 +85,9 @@ if (@W_PERM || @W_BEG || @W_MID || @W_LATE || @W_END) {
 
 my $STREAM = $LEGACY ? 0 : $STREAM_OPT;
 
-my $MODE = { render => 1, dryrun => 1, run => 1, app => 1, map => 1, ui => 1 };
+my $MODE = { render => 1, dryrun => 1, run => 1, app => 1, map => 1, ui => 1, motd => 1 };
 sub usage ($exit = 2) {
-    say STDERR "Usage: $0 [--legacy-processing|--no-stream] <render|dryrun|run|app|map|ui> <path> [--out=svg|dot|xml] [--os=ios|android|html|tty]";
+    say STDERR "Usage: $0 [--legacy-processing|--no-stream] <render|dryrun|run|app|map|ui|motd> [<path>] [--out=svg|dot|xml] [--os=ios|android|html|tty]";
     say STDERR "    --legacy-processing   (alias for --no-stream) buffer and emit the full XML";
     say STDERR "                          after parsing (traditional Amin behaviour) instead of";
     say STDERR "                          streaming SAX events live to stdout (the default)";
