@@ -177,18 +177,7 @@ sub on_command_close ($self) {
     );
 }
 
-sub _blake3_file {
-    my ($file) = @_;
-    return undef unless -f $file;
-    open my $fh, '<:raw', $file or return undef;
-    my $ctx = Digest::BLAKE3::hash_ctx();
-    my $buf;
-    while (read($fh, $buf, 65536)) {
-        Digest::BLAKE3::update($ctx, $buf);
-    }
-    close $fh;
-    return Digest::BLAKE3::finalize_hex($ctx);
-}
+
 
 sub _bctool_push {
     my ($bctool, $slab, $file, $hash) = @_;
