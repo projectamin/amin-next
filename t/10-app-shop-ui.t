@@ -45,11 +45,15 @@ if ($^O eq 'linux') {
     cmp_ok($nr_remove, '>=', 1, 'at least 1 <amin:command name=remove> in rendered output');
     cmp_ok($nr_mkdir,  '>=', 1, 'at least 1 <amin:command name=mkdir>  in rendered output');
     cmp_ok($nr_echo,   '>=', 3, 'at least 3 <amin:command name=echo>   in rendered output');
+} elsif ($^O eq 'darwin') {
+    # darwin host: linux/freebsd branches bypassed, amin:darwin branch enters.
+    is($nr_remove, 0, 'linux-only remove command bypassed on darwin');
+    cmp_ok($nr_mkdir, '>=', 1, 'darwin branch mkdir rendered on darwin host');
+    cmp_ok($nr_echo,  '>=', 2, 'darwin branch echo + post-deploy echo survive branching');
 } else {
-    # Non-Linux host: linux/freebsd branches are bypassed by Cond::OS; the
-    # posix fallback branch (1 echo) plus the post-deploy echo survive.
-    is($nr_remove, 0, 'linux-only remove command bypassed on non-linux host');
-    is($nr_mkdir,  0, 'linux-only mkdir command bypassed on non-linux host');
+    # Other non-linux posix host: only the posix fallback branch enters.
+    is($nr_remove, 0, 'linux-only remove command bypassed on posix fallback');
+    is($nr_mkdir,  0, 'linux-only mkdir command bypassed on posix fallback');
     cmp_ok($nr_echo, '>=', 2, 'posix fallback + post-deploy echo survive branching');
 }
 
