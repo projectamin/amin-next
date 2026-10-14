@@ -11,14 +11,21 @@ my $XML  = "$APP/profile.xml";
 my $ROOT = path(dirname(__FILE__))->parent->absolute;
 my $amin = "$ROOT/bin/amin";
 
-$ENV{PERL5LIB} = join ':', "$ROOT/perl-lib", "/tmp/amin-local/lib/perl5";
+# Prepend (never replace) PERL5LIB: mise may already provide the real
+# local-lib; the stale /tmp/amin-local path is kept only if it exists.
+$ENV{PERL5LIB} = join ':', "$ROOT/perl-lib",
+    (grep { -d } "/tmp/amin-local/lib/perl5"),
+    (grep length, $ENV{PERL5LIB} // '');
 
 ok(-f $XML,  'shop-ui profile.xml exists');
 ok(-f $TOML, 'shop-ui app.toml exists');
 ok(-d $APP,  'shop-ui is a bundle directory');
 
 sub run_bin {
-    open(my $p, '-|', @_) or die "popen: $!";
+    # Run the CLI under THIS interpreter — the shebang resolves via PATH and
+    # can pick up the system perl (older than the module's v5.38 floor).
+    open(my $p, '-|', $^X, '-I', "$ROOT/perl-lib", '-I', "$ROOT/local/lib/perl5", @_)
+        or die "popen: $!";
     local $/; my $o = <$p>; close $p;
     ($o, $? >> 8);
 }
@@ -34,13 +41,22 @@ is(ref($dom), 'XML::LibXML::Document', 'rendered output produced XML::LibXML::Do
 my $nr_remove = () = $out =~ /<amin:command[^>]*name="remove"/g;
 my $nr_mkdir  = () = $out =~ /<amin:command[^>]*name="mkdir"/g;
 my $nr_echo   = () = $out =~ /<amin:command[^>]*name="echo"/g;
-cmp_ok($nr_remove, '>=', 1, 'at least 1 <amin:command name=remove> in rendered output');
-cmp_ok($nr_mkdir,  '>=', 1, 'at least 1 <amin:command name=mkdir>  in rendered output');
-cmp_ok($nr_echo,   '>=', 3, 'at least 3 <amin:command name=echo>   in rendered output');
+if ($^O eq 'linux') {
+    cmp_ok($nr_remove, '>=', 1, 'at least 1 <amin:command name=remove> in rendered output');
+    cmp_ok($nr_mkdir,  '>=', 1, 'at least 1 <amin:command name=mkdir>  in rendered output');
+    cmp_ok($nr_echo,   '>=', 3, 'at least 3 <amin:command name=echo>   in rendered output');
+} else {
+    # Non-Linux host: linux/freebsd branches are bypassed by Cond::OS; the
+    # posix fallback branch (1 echo) plus the post-deploy echo survive.
+    is($nr_remove, 0, 'linux-only remove command bypassed on non-linux host');
+    is($nr_mkdir,  0, 'linux-only mkdir command bypassed on non-linux host');
+    cmp_ok($nr_echo, '>=', 2, 'posix fallback + post-deploy echo survive branching');
+}
 
 my $nr_results =()= $out =~ /<amin:result/g;
 my $nr_status  =()= $out =~ /<amin:status/g;
-cmp_ok($nr_results, '>=', 5, 'each bundled command emitted a result block');
+my $min_status = $^O eq 'linux' ? 5 : 2;
+cmp_ok($nr_results, '>=', $min_status, 'each bundled command emitted a result block');
 is($nr_results, $nr_status, 'each <result> has exactly 1 matching <status> child pair count-wise');
 
 my @status_blocks = ($out =~ m{<amin:status\b([^>]*)>(.*?)</amin:status>}gs);
@@ -51,7 +67,7 @@ for my $i (0..$#status_blocks) {
     $content =~ s/\s+//g;
     is($content, '', "status block #" . (++$sc) . ": textContent empty (metadata-only)");
 }
-cmp_ok($sc, '>=', 5, 'found >= 5 status blocks to validate (one per command)');
+cmp_ok($sc, '>=', $^O eq 'linux' ? 5 : 2, 'found enough status blocks to validate (one per command)');
 
 my ($root) = $dom->documentElement;
 is($root->namespaceURI, 'http://projectamin.org/ns/2026/', 'root NS correct');

@@ -8,17 +8,20 @@ use lib dirname(__FILE__) . '/../perl-lib';
 my $ROOT = path(dirname(__FILE__))->parent->absolute;
 my $amin = "$ROOT/bin/amin";
 chmod 0755, $amin unless -x $amin;
-$ENV{PERL5LIB} = join ':', "$ROOT/perl-lib",
-    (grep length, map "$_/lib/perl5", grep defined, $ENV{LOCAL_LIBDIR} // ());
+$ENV{PERL5LIB} = join ':', "$ROOT/perl-lib", "$ROOT/local/lib/perl5",
+    (grep length, $ENV{PERL5LIB} // '');
 
-sub run_amin (@cmd) {
-    open(my $p, '-|', @cmd) or die "popen $cmd[0]: $!";
+# Run the CLI under THIS interpreter — the shebang resolves via PATH and can
+# pick up the system perl (older than the module's v5.38 floor).
+sub run_amin ($bin, @cmd) {
+    open(my $p, '-|', $^X, '-I', "$ROOT/perl-lib", '-I', "$ROOT/local/lib/perl5", $bin, @cmd)
+        or die "popen $bin: $!";
     local $/; my $out = <$p>; close $p;
     (rc => $? >> 8, out => $out // '');
 }
 
 my %r;
-%r = do { my $out = `$amin 2>&1`; (rc => $? >> 8, out => $out // '') };
+%r = do { my $out = `$^X -I "$ROOT/perl-lib" -I "$ROOT/local/lib/perl5" $amin 2>&1`; (rc => $? >> 8, out => $out // '') };
 isnt($r{rc}, 0, 'no args → non-zero exit');
 like($r{out} // '', qr/Usage:/, 'no args → prints Usage message (combined stream)');
 
@@ -54,7 +57,7 @@ is($r{rc}, 0, 'dryrun → exit 0');
 like($r{out}, qr{<amin:stream amin:channel="argv">}, 'dryrun has argv stream');
 
 %r = do {
-    my $out = `$amin run "$tmpd/profile.xml" 2>&1`;
+    my $out = `$^X -I "$ROOT/perl-lib" -I "$ROOT/local/lib/perl5" $amin run "$tmpd/profile.xml" 2>&1`;
     (rc => $? >> 8, out => $out);
 };
 is($r{rc}, 0, 'run (streaming default) → exit 0');

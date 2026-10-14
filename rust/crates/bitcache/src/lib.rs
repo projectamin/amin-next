@@ -24,6 +24,6 @@ mod error;
 pub use error::{BitcacheError, Result};
 pub use slab::{ObjRef, SlabFile};
 pub use index::{IdxEntry, ShmemIndex};
-pub use signer::{BcSignature, Keypair, SignedEnvelope, base64_encode, base64_decode, rfc3339_now, MLDSA87_SIG_LEN, MLDSA87_VK_LEN, MLDSA87_SK_LEN};
+pub use signer::{BcSignature, Keypair, SignedEnvelope, base64_encode, base64_decode, rfc3339_now, MLDSA87_SIG_LEN, MLDSA87_VK_LEN, MLDSA87_SK_LEN, ZcapGrant, zcap_token_bytes, epoch_now};
 pub use stripe::{StripeEncoder, StripeDecoder};
 pub use trust_anchor::TrustAnchor;

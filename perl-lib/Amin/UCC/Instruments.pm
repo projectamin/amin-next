@@ -10,7 +10,7 @@ use constant {
 };
 
 sub _can_verify {
-    state $cv = eval { require Crypt::ML_DSA; 1 } || 0;
+    state $cv = eval { require Amin::Crypto::ML_DSA; 1 } || 0;
     return $cv;
 }
 
@@ -44,7 +44,7 @@ sub on_article_close ($self, $el) {
             my $raw_sig = MIME::Base64::decode_base64($sig);
             my $raw_vk  = MIME::Base64::decode_base64($vk);
             my $msg     = join("\0", $maker, $payee, $amount, $kind) . 'amin.ucc.art3.v1';
-            eval { $sig_ok = Crypt::ML_DSA::verify_87($raw_vk, $raw_sig, $msg); 1 }
+            eval { $sig_ok = Amin::Crypto::ML_DSA::verify_87($raw_vk, $raw_sig, $msg); 1 }
                 or do { $sig_ok = 0 };
         }
     }

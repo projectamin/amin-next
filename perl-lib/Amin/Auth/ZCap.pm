@@ -1,4 +1,5 @@
 package Amin::Auth::ZCap;
+
 use v5.38; use warnings; use utf8;
 use experimental 'signatures';
 use parent 'XML::SAX::Base';
@@ -7,21 +8,6 @@ use Amin qw(NS);
 use Class::Tiny qw(Handler Log Mode Name Element
     zcap_attr zcap_cmdline trust_anchor_vks enforce), {
     enforce    => 1,
-    _element_seq => 0,
-    _vpc_open    => 0,
-    _zcap       => undef,
-    _stack      => sub { [] },
-    _tier_set   => sub { +{} },
-    _zone_set   => sub { +{} },
-    _netpol_set => sub { +{} },
-    _suppress   => sub { +{} },
-    _tenant_injected => 0,
-    _first_root_stage_seen => 0,
-    _enforce_check_done    => 0,
-    _doc_error_status_emitted => 0,
-    _doc_zcap_error_rc     => undef,
-    _doc_zcap_error_msg    => undef,
-    _doc_zcap_error_kind   => undef,
 };
 
 use constant {
@@ -40,6 +26,26 @@ my %ALLOWED_LOCALNAMES = map { $_ => 1 }
        tenant status result);
 
 my $NS = NS();
+
+# ── Mesh trust anchors ─────────────────────────────────────────────────────
+# VKs (raw 2592-byte FIPS-204 encoded ML-DSA-87 public keys) registered at
+# boot by the process authority (ainit / mesh join) — the run-time counterpart
+# of the on-disk trust-anchor directory.  ZCap is verify-only: it never derives
+# trust from document/clickstream data, only from anchors registered here (or
+# passed per-instance via the trust_anchor_vks attribute).
+my @TRUST_ANCHORS;
+
+sub register_trust_anchor ($pkg_or_class, $vk) {
+    return unless defined $vk && length $vk;
+    push @TRUST_ANCHORS, $vk;
+    return;
+}
+
+sub registered_trust_anchors ($pkg_or_class) {
+    return [ map { $_ } @TRUST_ANCHORS ];
+}
+
+sub clear_trust_anchors ($pkg_or_class) { @TRUST_ANCHORS = (); return; }
 
 sub BUILDARGS ($class, %o) { $o{enforce} //= 1; \%o; }
 
@@ -148,8 +154,11 @@ sub _compute_scope_hash ($self, $parsed) {
     $buf .= pack('V',  $parsed->{vpc_quota});
     $buf .= pack('C',  $parsed->{memory_tier});
     $buf .= "amin.zcap.v1";
+
     if (__PACKAGE__->can_verify) {
-        return Digest::BLAKE3::blake3($buf);
+        my $hasher = Digest::BLAKE3::->new();
+        $hasher->add($buf);
+        return $hasher->hexdigest();
     } else {
         use bytes;
         my $fallback = "\x00" x 32;
@@ -306,10 +315,11 @@ sub _process_doc_zcap_token_from_attr ($self, $attrs) {
         return 1;
     }
     my $anchors = $self->trust_anchor_vks // [];
-    if (@$anchors == 0) {
-        push @$anchors, "\x00" x MLDSA87_VK_LEN; # dummy all-zero test anchor
+    my @combined = ($anchors->@*, __PACKAGE__->registered_trust_anchors->@*);
+    if (@combined == 0) {
+        push @combined, "\x00" x MLDSA87_VK_LEN; # dummy all-zero test anchor
     }
-    my ($ok, $code, $detail, $parsed) = $self->_verify_token($token, $anchors);
+    my ($ok, $code, $detail, $parsed) = $self->_verify_token($token, \@combined);
     if (!$ok) {
         $self->{_doc_zcap_error_rc}   = ($code eq 'unknown_kid') ? RC_UNKNOWN_KID
                                       : ($code eq 'bad_sig')     ? RC_BAD_SIG

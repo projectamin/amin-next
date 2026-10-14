@@ -37,6 +37,18 @@ enum Cmd {
              #[arg(long)] name: String, #[arg(long)] ts: u64,
              #[arg(long)] vk: String,
              #[arg(long)] sig: String },
+    /// Issue a signed zcap.v1 boot-authority token (Amin::Auth::ZCap
+    /// wire format).  Signs with the ML-DSA-87 key from `--sk` (32-byte
+    /// Seed as written by `genkey`) and prints the standard-base64 token.
+    ZcapToken { #[arg(long)] sk: String,
+                #[arg(long)] tenant: String,
+                #[arg(long)] ts: Option<u64>,
+                #[arg(long = "tier")]    tiers:   Vec<String>,
+                #[arg(long = "zone")]    zones:   Vec<String>,
+                #[arg(long = "netpol")]  netpols: Vec<String>,
+                #[arg(long)] max_redundancy: u8,
+                #[arg(long)] vpc_quota: u32,
+                #[arg(long)] memory_tier: u8 },
 }
 
 fn die(code: i32, s: impl std::fmt::Display) -> ! {
@@ -160,6 +172,30 @@ fn main() {
                 Ok(())  => { println!("verify\tOK"); std::process::exit(0) }
                 Err(e)  => { eprintln!("verify FAIL: {e}"); std::process::exit(7) }
             }
+        }
+
+        Cmd::ZcapToken { sk, tenant, ts, tiers, zones, netpols,
+                         max_redundancy, vpc_quota, memory_tier } => {
+            let sk_bytes = std::fs::read(&sk)
+                .unwrap_or_else(|e| die(30, format!("open sk {sk}: {e}")));
+            let kp = Keypair::from_sk_bytes(&sk_bytes)
+                .unwrap_or_else(|e| die(31, format!("parse sk: {e}")));
+            let grant = bitcache::ZcapGrant {
+                tiers,
+                zones,
+                netpolicies: netpols,
+                max_redundancy,
+                vpc_quota,
+                memory_tier,
+                tenant_id: tenant,
+                ts: ts.unwrap_or_else(bitcache::epoch_now),
+            };
+            let token = bitcache::zcap_token_bytes(&kp, &grant)
+                .unwrap_or_else(|e| die(34, format!("zcap-token: {e}")));
+            println!("token\t{}", base64_encode(&token));
+            println!("vk\t{}",    base64_encode(&kp.verifying_key_bytes()));
+            println!("ts\t{}",    grant.ts);
+            println!("sighex\t{}", grant.scope_hash_hex());
         }
     }
 }

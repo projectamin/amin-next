@@ -13,27 +13,24 @@ use Amin::Schedule::Placement;
 require MIME::Base64;
 
 sub build_zcap_token (%o) {
-    my @tiers  = $o{tiers}  ? @{$o{tiers}}  : qw(metal-96c metal-32c metal-16c);
-    my @zones  = $o{zones}  ? @{$o{zones}}  : qw(us-east-1 t33-zone);
-    my @netps  = $o{netpols}? @{$o{netpols}}: qw(vpc-a);
-    my $max_r  = $o{max_redundancy} // 255;
-    my $vpc_q  = $o{vpc_quota} // 4;
-    my $mem_t  = $o{memory_tier} // 1;
-    my $tenant = $o{tenant_id} // 't-tenant-redundancy';
-    my $ts     = $o{ts} // 1735689600;
-    my $vk     = $o{vk}  // ("\x00" x 2592);
-    my $sig    = $o{sig} // ("\xcc" x 4627);
-    my $tier_data = join('', map { pack('v', length($_)) . $_ } @tiers);
-    my $zone_data = join('', map { pack('v', length($_)) . $_ } @zones);
-    my $netp_data = join('', map { pack('v', length($_)) . $_ } @netps);
-    $max_r = 255 if $max_r > 255;
-    my $bytes = $sig . $vk . ("\x00" x 32) . pack('Q<', $ts)
-              . pack('v', scalar @tiers) . pack('v', scalar @zones)
-              . pack('v', scalar @netps) . pack('C', $max_r)
-              . pack('V', $vpc_q) . pack('C', $mem_t)
-              . pack('v', length($tenant)) . $tenant
-              . $tier_data . $zone_data . $netp_data;
-    return MIME::Base64::encode_base64($bytes, '');
+    # Real e2e: ML-DSA-87 signature issued by the Rust toolchain (bctool) —
+    # the same production signer — verifies against Amin::Auth::ZCap with
+    # the VK registered as a mesh trust anchor.  Falls back to the legacy
+    # structural placeholder when no signer binary is present.
+    my %o = (
+        tiers          => [qw(metal-96c metal-32c metal-16c)],
+        zones          => [qw(us-east-1 t33-zone)],
+        netpols        => [qw(vpc-a)],
+        max_redundancy => 255,
+        vpc_quota      => 4,
+        memory_tier    => 1,
+        tenant_id      => 't-tenant-redundancy',
+        ts             => 1735689600,
+        @_,
+    );
+    $o{max_redundancy} = 255 if $o{max_redundancy} > 255;
+    require Amin::Test::ZCapSign;
+    return Amin::Test::ZCapSign::make_zcap_token(%o);
 }
 
 sub attr_val ($el, $want) {

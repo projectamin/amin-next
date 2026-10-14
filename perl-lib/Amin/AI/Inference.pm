@@ -1,6 +1,6 @@
 package Amin::AI::Inference;
 use v5.38; use warnings; use utf8; use experimental 'signatures';
-use parent 'Amin::AI::Article';
+use parent 'Amin::AI';
 
 use Amin::AI qw(AI_NS);
 use Amin::AI::ModelRegistry;

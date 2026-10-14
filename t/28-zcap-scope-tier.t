@@ -9,42 +9,23 @@ use Amin::Machine::Dispatcher;
 require MIME::Base64;
 
 sub build_zcap_token (%o) {
-    my @tiers  = $o{tiers}  ? @{$o{tiers}}  : qw(metal-32c metal-16c);
-    my @zones  = $o{zones}  ? @{$o{zones}}  : qw(us-east-1 us-west-2);
-    my @netps  = $o{netpols}? @{$o{netpols}}: qw(vpc-a vpc-b);
-    my $max_r  = $o{max_redundancy} // 3;
-    my $vpc_q  = $o{vpc_quota} // 4;
-    my $mem_t  = $o{memory_tier} // 1;
-    my $tenant = $o{tenant_id} // 't-tenant-0123456789abc';
-    my $ts     = $o{ts} // 1735689600;
-    my $vk     = $o{vk} // ("\x00" x 2592);
-    my $sig    = $o{sig} // ("\xaa" x 4627);
-    my $tier_data = join('', map { pack('v', length($_)) . $_ } @tiers);
-    my $zone_data = join('', map { pack('v', length($_)) . $_ } @zones);
-    my $netp_data = join('', map { pack('v', length($_)) . $_ } @netps);
-    my $scope_buf = $tier_data . $zone_data . $netp_data
-        . pack('C', $max_r) . pack('V', $vpc_q) . pack('C', $mem_t)
-        . 'amin.zcap.v1';
-    my $scope_hash = "\x00" x 32;
-    { use feature 'bitwise'; no warnings 'experimental::bitwise'; use bytes;
-      for my $c (split //, $scope_buf) { $scope_hash ^.= ($c x int(32/length($c)+1)); } }
-    $scope_hash = substr($scope_hash, 0, 32);
-    my $bytes = '';
-    $bytes .= $sig;
-    $bytes .= $vk;
-    $bytes .= $scope_hash;
-    $bytes .= pack('Q<', $ts);
-    $bytes .= pack('v',  scalar @tiers);
-    $bytes .= pack('v',  scalar @zones);
-    $bytes .= pack('v',  scalar @netps);
-    $bytes .= pack('C',  $max_r);
-    $bytes .= pack('V',  $vpc_q);
-    $bytes .= pack('C',  $mem_t);
-    $bytes .= pack('v',  length($tenant)) . $tenant;
-    $bytes .= $tier_data;
-    $bytes .= $zone_data;
-    $bytes .= $netp_data;
-    return MIME::Base64::encode_base64($bytes, '');
+    # Real e2e: ML-DSA-87 signature issued by the Rust toolchain (bctool) —
+    # the same production signer — verifies against Amin::Auth::ZCap with
+    # the VK registered as a mesh trust anchor.  Falls back to the legacy
+    # structural placeholder when no signer binary is present.
+    my %o = (
+        tiers          => [qw(metal-32c metal-16c)],
+        zones          => [qw(us-east-1 us-west-2)],
+        netpols        => [qw(vpc-a vpc-b)],
+        max_redundancy => 3,
+        vpc_quota      => 4,
+        memory_tier    => 1,
+        tenant_id      => 't-tenant-0123456789abc',
+        ts             => 1735689600,
+        @_,
+    );
+    require Amin::Test::ZCapSign;
+    return Amin::Test::ZCapSign::make_zcap_token(%o);
 }
 
 # ── Z3: Tier/redundancy/memory violation → rc=-5121 scope_violation drop ──

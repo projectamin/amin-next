@@ -81,15 +81,26 @@ export PKG_CONFIG_PATH="${pkg_prefix_lib}:${PKG_CONFIG_PATH:-}"
 # (Crypt::Liboqs::Sign needs the liboqs C library; nothing on CPAN provides
 #  ML-DSA-87 without it)
 if [ ! -f "$PREFIX/lib/liboqs.a" ] && [ ! -f "$PREFIX/lib/liboqs.dylib" ]; then
+  # 0.16.0 = FIPS-204 **final** ML-DSA (0.10.0 shipped the draft; its
+  # signatures are incompatible with the ml-dsa crate / FIPS-204 final —
+  # same key and sig lengths, different math — and its keypair path was
+  # crash-prone in this environment)
   echo "[+] Building liboqs from source into $PREFIX (no system package needed)..."
   OQS_SRC="$(pwd)/.cache/liboqs-src"
   OQS_BUILD="$(pwd)/.cache/liboqs-build"
   mkdir -p "$OQS_SRC" "$OQS_BUILD" "$PREFIX"
-  curl -sSL https://github.com/open-quantum-safe/liboqs/archive/refs/tags/0.10.0.tar.gz \
+  curl -sSL https://github.com/open-quantum-safe/liboqs/archive/refs/tags/0.16.0.tar.gz \
     | tar -xz -C "$OQS_SRC" --strip-components=1
+  # OpenSSL-free build: otherwise the static archive drags OpenSSL's private
+  # CRYPTO_* allocator symbols in, and the Perl viewer bundle persists
+  # `symbol not found … _CRYPTO_free` at dlopen.
   (cd "$OQS_BUILD" && cmake "$OQS_SRC" -DCMAKE_INSTALL_PREFIX="$PREFIX" -DCMAKE_BUILD_TYPE=Release \
-    -DBUILD_SHARED_LIBS=OFF -DCMAKE_POSITION_INDEPENDENT_CODE=ON && make -j$(sysctl -n hw.ncpu 2>/dev/null || echo 4) && make install)
+    -DBUILD_SHARED_LIBS=OFF -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
+    -DOQS_USE_OPENSSL=OFF && make -j$(sysctl -n hw.ncpu 2>/dev/null || echo 4) && make install)
   echo "[+] liboqs installed into $PREFIX"
+  # FIPS-204 wire-compat guarantee: link the verify-side Perl wrapper against
+  # the liboqs we just built (t/29 cross-verifies against the Rust signer).
+  cpanm --notest --force --reinstall --local-lib-contained "$PREFIX" Crypt::Liboqs::Sign
 fi
 
 echo "[+] Installing runtime Perl deps (latest stable, --cpanfile no pins)..."
@@ -144,6 +155,10 @@ fi
 
 echo "[+] Running cargo fetch..."
 (cd rust/ && cargo fetch || true)
+echo "[+] Building bctool (ML-DSA-87 zcap-signer + slab tool for tests)..."
+cargo build -p bitcache --manifest-path rust/Cargo.toml
+echo "[+] Building aminexec (sandbox executor ABI — fail-closed sandbox_missing_abi when backends unavailable)..."
+cargo build -p aminexec --manifest-path rust/Cargo.toml
 
 echo "[+] Bootstrap complete. Use \`mise run test\` to run the suite."
 '''

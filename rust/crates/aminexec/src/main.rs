@@ -303,16 +303,23 @@ fn sandbox_stdin_main() -> anyhow::Result<()> {
         Ok(v) => v,
         Err(e) => child_err_and_exit(12, &format!("env null byte: {e}")),
     };
-    // execvp: search PATH like shells do when argv[0] lacks /
-    let exec_err = unsafe {
-        // Use execvpe via libc
-        let argv_ptrs: Vec<*const libc::c_char> = argv_c.iter().map(|c| c.as_ptr()).chain(std::iter::once(std::ptr::null())).collect();
-        let envp_ptrs: Vec<*const libc::c_char> = envp_c.iter().map(|c| c.as_ptr()).chain(std::iter::once(std::ptr::null())).collect();
-        libc::execvpe(exe.as_ptr(), argv_ptrs.as_ptr(), envp_ptrs.as_ptr())
-    };
-    // If we get here execve failed → emit then exit
-    let err = std::io::Error::last_os_error();
-    child_err_and_exit(13, &format!("execvp {:?}: {err}", manifest.argv[0]))
+    // exec vp: PATH-search like shells do when argv[0] lacks '/' — portable
+    // via std CommandExt::exec (Apple libc has no execvpe binding; this
+    // keeps the WORKLOAD RUNTIME path functional on macOS/FreeBSD while
+    // the platform-specific enforcement backends stay Linux-only).
+    {
+        use std::os::unix::process::CommandExt;
+        let exe_str = manifest.argv[0].as_str();
+        let mut cmd = std::process::Command::new(exe_str);
+        cmd.args(&manifest.argv[1..]);
+        // env was already applied to this process via set_var above;
+        // Command::exec inherits the current process environment.  It only
+        // ever *returns* an error (success = process replaced).
+        let e = cmd.exec();
+        child_err_and_exit(13, &format!("execvp {:?}: {e}", manifest.argv[0]));
+    }
+    // unreachable — exec() never returns on success
+    child_err_and_exit(13, "execvp: exec returned unexpectedly")
 }
 
 /// Emit 4-byte little-endian error code + NUL-terminated message to stderr,

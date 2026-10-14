@@ -162,24 +162,11 @@ sub check_command ($pkg_or_self, $argv_ref, $dir = undef) {
 }
 
 sub aminexec_bin_path ($pkg_or_self) {
-    state $path;
-    return $path if defined $path;
-    require File::Spec;
-    require Cwd;
-    (my $pmfile = __FILE__);
-    my ($vol, $dir, $file) = File::Spec->splitpath($pmfile);
-    my @parts = File::Spec->splitdir($dir);
-    while (@parts && ($parts[-1]//'') ne 'perl-lib') { pop @parts }
-    pop @parts if @parts;
-    my $root = File::Spec->catpath($vol, File::Spec->catdir(@parts), '');
-    $root = Cwd::abs_path($root) if $root;
-    my $candidate = File::Spec->catdir($root, qw(rust target debug aminexec));
-    if (defined $root && length $root && -x $candidate) {
-        $path = $candidate;
-    } else {
-        $path = File::Spec->catdir(Cwd::getcwd(), qw(rust target debug aminexec));
-    }
-    return $path;
+    require Amin::ToolPaths;
+    my $t = Amin::ToolPaths::tool_aminexec();
+    # Callers distinguish "found" (executable) from "default hope"; return
+    # the canonical resolved path, '' when no binary exists anywhere.
+    return length $t ? $t : 'aminexec';
 }
 
 sub sb_name_for_scope ($pkg_or_self, $scope_attrs) {

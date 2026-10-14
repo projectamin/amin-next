@@ -240,6 +240,129 @@ impl SignedEnvelope {
     }
 }
 
+// ── zcap.v1 boot-authority token (Amin::Auth::ZCap wire format 1:1) ─────
+//
+// The Perl trust layer (perl-lib/Amin/Auth/ZCap.pm) is **verify-only** by
+// design; issuance lives here (rust toolchain).  Wire layout (FIPS-204 LE
+// encodings, 1:1 with `_parse_token_fields` / `_compute_scope_hash`):
+//
+//   token = sig(4627) ‖ vk(2592) ‖ scope_hash(32) ‖ ts(le64)
+//         ‖ tier_cnt(le16) ‖ zone_cnt(le16) ‖ netp_cnt(le16)
+//         ‖ max_redundancy(u8) ‖ vpc_quota(le32) ‖ memory_tier(u8)
+//         ‖ tenant_len(le16) ‖ tenant ‖ tier_data ‖ zone_data ‖ netp_data
+//   tier/zone/netp_data = repeated (le16 len ‖ bytes)
+//
+// The embedded `scope_hash` field is informational; the signature binds the
+// receiver-computed BLAKE3 **hexdigest string** (see `smsg`), matching
+// `_verify_token` exactly:
+
+/// One zcap.v1 grant — the scope fields a signer authorizes.
+pub struct ZcapGrant {
+    pub tiers:          Vec<String>,
+    pub zones:          Vec<String>,
+    pub netpolicies:    Vec<String>,
+    pub max_redundancy: u8,
+    pub vpc_quota:      u32,
+    pub memory_tier:    u8,
+    pub tenant_id:      String,
+    pub ts:             u64,
+}
+
+fn len_prefix16(out: &mut Vec<u8>, s: &str) {
+    out.extend_from_slice(&(s.len() as u16).to_le_bytes());
+    out.extend_from_slice(s.as_bytes());
+}
+
+impl ZcapGrant {
+    /// Exact byte composition of the Perl `_compute_scope_hash` scope buf.
+    pub fn scope_buf(&self) -> Vec<u8> {
+        let mut b = Vec::new();
+        for t in &self.tiers       { len_prefix16(&mut b, t) }
+        for z in &self.zones       { len_prefix16(&mut b, z) }
+        for n in &self.netpolicies { len_prefix16(&mut b, n) }
+        b.push(self.max_redundancy);
+        b.extend_from_slice(&self.vpc_quota.to_le_bytes());
+        b.push(self.memory_tier);
+        b.extend_from_slice(b"amin.zcap.v1");
+        b
+    }
+
+    /// BLAKE3 hexdigest string (64 lowercase ASCII hex chars).  Perl's
+    /// `_compute_scope_hash` returns `hexdigest()` (a 64-char string) and
+    /// concatenates it into the signed message — so we sign the hex **text**,
+    /// not the raw digest bytes.
+    pub fn scope_hash_hex(&self) -> String {
+        blake3::hash(&self.scope_buf()).to_hex().to_string()
+    }
+
+    /// Exact signed message from Perl `_verify_token`:
+    ///   local_hash_hex ‖ vk(2592) ‖ ts(le64) ‖ tenant ‖ "amin.zcap.v1"
+    pub fn smsg(&self, vk_bytes: &[u8]) -> Vec<u8> {
+        assert_eq!(vk_bytes.len(), MLDSA87_VK_LEN,"vk bytes must be FIPS-204 encoded VK");
+        let mut m = Vec::with_capacity(64 + MLDSA87_VK_LEN + 8 + self.tenant_id.len() + 12);
+        m.extend_from_slice(self.scope_hash_hex().as_bytes());
+        m.extend_from_slice(vk_bytes);
+        m.extend_from_slice(&self.ts.to_le_bytes());
+        m.extend_from_slice(self.tenant_id.as_bytes());
+        m.extend_from_slice(b"amin.zcap.v1");
+        m
+    }
+
+    /// Assemble (unsigned) token wire bytes for this grant using the given
+    /// VK bytes: `vk ‖ scope_hash(32) ‖ ts ‖ counts ‖ fields…` (the caller
+    /// prepends the 4627-byte ML-DSA-87 signature).  The embedded
+    /// `scope_hash` field carries the raw 32-byte BLAKE3 digest of
+    /// `scope_buf` (informational — receivers recompute from parsed fields).
+    fn token_bytes_with_vk(&self, vk_bytes: &[u8]) -> Result<Vec<u8>> {
+        if vk_bytes.len() != MLDSA87_VK_LEN {
+            return Err(std::io::Error::new(std::io::ErrorKind::InvalidData,
+                format!("bad VK length: got {} want {}",
+                        vk_bytes.len(), MLDSA87_VK_LEN)).into());
+        }
+        let mut t = Vec::new();
+        t.extend_from_slice(vk_bytes);
+        t.extend_from_slice(blake3::hash(&self.scope_buf()).as_bytes());
+        t.extend_from_slice(&self.ts.to_le_bytes());
+        t.extend_from_slice(&(self.tiers.len() as u16).to_le_bytes());
+        t.extend_from_slice(&(self.zones.len() as u16).to_le_bytes());
+        t.extend_from_slice(&(self.netpolicies.len() as u16).to_le_bytes());
+        t.push(self.max_redundancy);
+        t.extend_from_slice(&self.vpc_quota.to_le_bytes());
+        t.push(self.memory_tier);
+        len_prefix16(&mut t, &self.tenant_id);
+        for t2 in &self.tiers      { len_prefix16(&mut t, t2) }
+        for z  in &self.zones      { len_prefix16(&mut t, z) }
+        for n  in &self.netpolicies{ len_prefix16(&mut t, n) }
+        Ok(t)
+    }
+}
+
+/// Issue a signed zcap.v1 token from the given keypair and grant:
+/// ML-DSA-87 signature over `smsg` prepended to the grant wire bytes.
+/// Base64 encoding is the caller's choice.
+pub fn zcap_token_bytes(kp: &Keypair, g: &ZcapGrant) -> Result<Vec<u8>> {
+    use ml_dsa::SignatureEncoding;
+    let vk_bytes = kp.verifying_key_bytes();
+    let smsg = g.smsg(&vk_bytes);
+    let sig: Sig87 = Signer::<Sig87>::try_sign(&kp.sk, &smsg)
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData,
+                                         format!("mldsa87 zcap sign: {e}")))?;
+    let enc = sig.to_bytes();
+    let sig_slice: &[u8] = enc.as_ref();
+    if sig_slice.len() != MLDSA87_SIG_LEN {
+        return Err(std::io::Error::new(std::io::ErrorKind::InvalidData,
+            format!("unexpected ML-DSA-87 sig len {} expected {}",
+                    sig_slice.len(), MLDSA87_SIG_LEN)).into());
+    }
+    let mut out = Vec::with_capacity(MLDSA87_SIG_LEN + MLDSA87_VK_LEN + g.tenant_id.len());
+    out.extend_from_slice(sig_slice);
+    out.extend_from_slice(&g.token_bytes_with_vk(&vk_bytes)?);
+    Ok(out)
+}
+
+/// Deterministic now-epoch helper for tooling (bctool zcap-token).
+pub fn epoch_now() -> u64 { now_epoch_secs() }
+
 // ── Small standard base64 encoder / decoder (no extra dep) ─────────────────
 
 const B64: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";

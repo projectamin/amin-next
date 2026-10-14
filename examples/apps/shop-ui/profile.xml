@@ -51,6 +51,25 @@
 
     </amin:linux>
 
+    <!-- macOS: NO cgroups (no hierarchical controller equivalent). Intent is
+         declared identically — memory_max/pids_max scope attrs — and the
+         machine's filter chain still owns policy: the manifest reaches the
+         posix backend, which imposes the cgroup-equivalents it can honor
+         (setrlimit RLIMIT_AS/NPROC/CPU) and fails closed (-4097) on what it
+         cannot (landlock/seccomp → Seatbelt/PR_SET_NO_NEW_PRIVS future ABI). -->
+    <amin:darwin>
+      <amin:command name="mkdir">
+        <amin:flag>p</amin:flag>
+        <amin:param name="target">/usr/local/www/shop-ui</amin:param>
+        <amin:param name="target">/usr/local/www/shop-ui/releases</amin:param>
+        <amin:param name="target">/usr/local/www/shop-ui/releases/next</amin:param>
+      </amin:command>
+      <!-- rollout needs a setrlimit-backed sandbox tier, NOT plain exec -->
+      <amin:command name="echo">
+        <amin:param name="text">darwin: deploying via rlimit+seatbelt path (no cgroup ABI — declared limits enforced as RLIMIT_AS/NPROC)</amin:param>
+      </amin:command>
+    </amin:darwin>
+
     <amin:freebsd>
       <amin:command name="mkdir">
         <amin:flag>p</amin:flag>

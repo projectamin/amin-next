@@ -1,6 +1,6 @@
 package Amin::AI::Embed;
 use v5.38; use warnings; use utf8; use experimental 'signatures';
-use parent 'Amin::AI::Article';
+use parent 'Amin::AI';
 
 use Amin::AI qw(AI_NS);
 use Amin::AI::ModelRegistry;
@@ -13,14 +13,9 @@ sub element  { 'embed' }
 sub position { 'middle' }
 
 sub _bctool {
-    state $default = do {
-        require File::Basename;
-        require Cwd;
-        my $root = Cwd::abs_path(File::Basename::dirname(__FILE__)
-            . '/../../../rust/target/debug/bctool');
-        (defined $root && -x $root) ? $root : 'bctool';
-    };
-    return $default;
+    require Amin::ToolPaths;
+    my $t = Amin::ToolPaths::tool_bctool();
+    return length $t ? $t : 'bctool';
 }
 
 sub _slab {
@@ -33,6 +28,11 @@ sub _slab {
 
 sub _bctool_put ($self, $dataref) {
     my $bctool = _bctool();
+    # bctool absent → hash in-process with BLAKE3 and skip slab streaming.
+    # The bitcache bin must exist for real pushes; without it we still emit
+    # content-addressed refs so the pipeline stays auditable.
+    return _blake3_put($dataref)
+        unless defined $bctool && length $bctool && _cmd_exists($bctool);
     my $slab   = _slab();
     my ($out, $err) = ('', '');
     my $in = $$dataref;
@@ -40,7 +40,7 @@ sub _bctool_put ($self, $dataref) {
         \$in, \$out, \$err, debug => 0;
     eval { start $h; finish $h };
     my $rc = $? >> 8;
-    return if $@ || $rc != 0;
+    return _blake3_put($dataref) if $@ || $rc != 0;
     my (%kv, $line);
     for my $ln (split /\n/, $out) {
         ($line = $ln) =~ s/\r?\n?$//;
@@ -49,6 +49,22 @@ sub _bctool_put ($self, $dataref) {
     }
     return unless exists $kv{hash} && length($kv{hash}) == 64;
     return ($kv{hash}, $kv{size} // length($$dataref));
+}
+
+sub _blake3_put ($dataref) {
+    require Digest::BLAKE3;
+    my $hasher = Digest::BLAKE3::->new();
+    $hasher->add($$dataref);
+    return ($hasher->hexdigest(), length($$dataref));
+}
+
+sub _cmd_exists ($cmd) {
+    return 1 if -x $cmd;
+    return 1 if $cmd =~ m{/};
+    for my $d (split /:/, $ENV{PATH} // '/usr/bin:/bin') {
+        return 1 if -x "$d/$cmd";
+    }
+    return 0;
 }
 
 sub on_article_close ($self, $el) {

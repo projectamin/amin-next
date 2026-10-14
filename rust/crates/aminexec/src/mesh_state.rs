@@ -100,23 +100,12 @@ pub fn write_bootstrap_header(
 
 fn write_region_to_file(f: &File, region: &[u8]) -> Result<(), IoError> {
     use std::io::{Seek, Write};
-    // Use std Write/Seek traits directly on &File (implements both)
+    // Use std Write/Seek traits directly on &File (implements both) — no
+    // unsafe raw libc::write: the crate denies unsafe by default on the
+    // portable path and std write_all keeps the single-loop semantics.
     let mut f_ref = f;
     f_ref.seek(std::io::SeekFrom::Start(0))?;
-    // Prefer single-shot raw write for tmpfs atomicity on small (16KB) regions
-    let fd = f_ref.as_raw_fd();
-    let nwritten = unsafe {
-        libc::write(fd, region.as_ptr() as *const libc::c_void, region.len())
-    };
-    if nwritten < 0 {
-        return Err(IoError::last_os_error());
-    }
-    let written = nwritten as usize;
-    if written < region.len() {
-        // Fallback seek + write_all for non-atomic cases
-        f_ref.seek(std::io::SeekFrom::Start(written as u64))?;
-        f_ref.write_all(&region[written..])?;
-    }
+    f_ref.write_all(region)?;
     Ok(())
 }
 

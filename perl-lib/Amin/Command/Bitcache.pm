@@ -225,9 +225,12 @@ sub _bctool_path {
     my $attrs = $self->attrs // {};
     my $bctool = _find_attr_val($attrs, 'bctool');
     return $bctool if defined $bctool && length $bctool;
+    # machine-spec attr wins; otherwise the canonical rust-tool resolver
+    require Amin::ToolPaths;
+    my $t = Amin::ToolPaths::tool_bctool();
+    return $t if length $t;
     for my $p ('/opt/amin/bin/bctool', '/usr/local/bin/bctool',
-               '/usr/bin/bctool', './rust/target/release/bctool',
-               './rust/target/debug/bctool') {
+               '/usr/bin/bctool') {
         return $p if -x $p;
     }
     return 'bctool';

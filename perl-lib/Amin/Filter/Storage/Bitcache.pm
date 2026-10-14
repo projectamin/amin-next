@@ -165,15 +165,10 @@ sub _emit_object ($self, $h, $attrs) {
 }
 
 sub _bctool ($self) {
-    state $default = do {
-        require File::Basename;
-        require Cwd;
-        my $root = Cwd::abs_path(File::Basename::dirname(__FILE__)
-            . '/../../../../rust/target/debug/bctool');
-        (defined $root && -x $root) ? $root : 'bctool';
-    };
+    require Amin::ToolPaths;
+    my $default = Amin::ToolPaths::tool_bctool();
     return $self->bctool_path if defined $self->bctool_path;
-    return $default;
+    return length $default ? $default : 'bctool';
 }
 
 sub _slab ($self) {

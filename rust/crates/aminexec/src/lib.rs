@@ -29,6 +29,7 @@
 #![warn(clippy::pedantic, missing_docs)]
 
 pub mod platform;
+#[cfg(target_os = "linux")]
 pub mod pid1;
 pub mod mesh_state;
 
