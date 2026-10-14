@@ -19,7 +19,7 @@ $ROOT->child('perl-lib')->visit(sub {
 }, { recurse => 1 });
 
 for my $f (sort @libs) {
-    my $out = `perl -I ${\$ROOT->child('perl-lib')} -I /tmp/amin-local/lib/perl5 -c "$f" 2>&1`;
+    my $out = `$^X -I ${\$ROOT->child('perl-lib')} -I /tmp/amin-local/lib/perl5 -c "$f" 2>&1`;
     like($out, qr/syntax OK/, "compile cleanly: $f");
 }
 

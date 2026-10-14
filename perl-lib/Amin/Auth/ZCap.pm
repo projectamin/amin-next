@@ -45,7 +45,7 @@ sub BUILDARGS ($class, %o) { $o{enforce} //= 1; \%o; }
 
 sub can_verify ($class_or_self) {
     state $cv = eval {
-        require Crypt::ML_DSA;
+        require Amin::Crypto::ML_DSA;
         require Digest::BLAKE3;
         1;
     } || 0;
@@ -175,7 +175,7 @@ sub _verify_token ($self, $token_b64, $allow_vks) {
     my $smsg = $local_hash . ($p->{vk} // '') . pack('Q<', $p->{ts} // 0) . ($p->{tenant_id} // '') . "amin.zcap.v1";
     my $ok_sig = 1;
     if (__PACKAGE__->can_verify) {
-        eval { $ok_sig = Crypt::ML_DSA::verify_87($p->{vk}, $p->{sig}, $smsg); 1 }
+        eval { $ok_sig = Amin::Crypto::ML_DSA::verify_87($p->{vk}, $p->{sig}, $smsg); 1 }
             or do { $ok_sig = 0; };
     }
     unless ($ok_sig) { return (0, 'bad_sig', 'ml-dsa87 verify failed', $p); }

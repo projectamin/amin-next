@@ -31,8 +31,8 @@ requires 'XML::Filter::XInclude';
 requires 'Safe';
 requires 'HTTP::Tiny';
 requires 'MIME::Base64';
-requires 'Digest::BLAKE3';
-requires 'Crypt::ML-DSA';
+requires 'Digest::BLAKE3';  # needs libblake3 (built by bootstrap task)
+requires 'Crypt::Liboqs::Sign';  # backs Amin::Crypto::ML_DSA shim (perl-lib/)
 
 # ═════ develop/test only (needed for `mise run test` / prove) ═════════════
 on 'develop' => sub {

@@ -75,6 +75,17 @@ sub build_argv ($self) {
     return ($self->name, @p);
 }
 
+sub _blake3_file {
+    my ($file) = @_;
+    return undef unless -f $file;
+    my $h = eval { require Digest::BLAKE3; Digest::BLAKE3->new }
+        or return undef;
+    open my $fh, '<:raw', $file or return undef;
+    $h->addfile($fh);
+    close $fh;
+    return $h->hexdigest;
+}
+
 sub on_command_close ($self) {
     my @cmd = $self->build_argv or return;
     my $log  = $self->Log;
