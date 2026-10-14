@@ -3,6 +3,7 @@ use v5.38; use warnings; use utf8; use experimental 'signatures';
 use parent 'Amin::Elt';
 
 use Amin qw(NS);
+use Amin::AI qw(AI_NS);
 use Class::Tiny qw(mesh transport), {
     _placement_seq         => 0,
     _cap                   => 0,
@@ -42,6 +43,12 @@ use constant {
     WORKING_SET_SSD_GB  => 1,
     DEFAULT_MAX_RED     => 255,
     LOCAL_PREFERENCE    => 1_000,
+    AI_TIER_NONE        => 0,
+    AI_TIER_CPU         => 1,
+    AI_TIER_GPU         => 2,
+    AI_TIER_EMBED       => 3,
+    AI_TIER_WEIGHT      => 10_000,
+    AI_VRAM_SCALE       => 1,
 };
 
 sub name    { '' }
@@ -99,13 +106,16 @@ sub start_element ($self, $el) {
     my $ns = $el->{NamespaceURI} // '';
     my $ln = $el->{LocalName}    // '';
     my $is_run_target = ($ns eq NS() && ($ln eq 'spawn' || $ln eq 'exec'));
+    my $is_ai_request = ($ns eq AI_NS() && $ln eq 'request');
     if (($self->{_suppress_subtree_d} // 0) > 0) {
         $self->{_suppress_subtree_d}++;
         return;
     }
-    if ($is_run_target) {
+    if ($is_run_target || $is_ai_request) {
         my $attrs = $self->_extract_attrs($el->{Attributes});
-        my ($winner, $score, @topn) = $self->_score_and_pick($attrs);
+        my ($winner, $score, @topn) = $is_ai_request
+            ? $self->_score_ai_and_pick($attrs)
+            : $self->_score_and_pick($attrs);
         my $clamped = $self->_redundancy_count($attrs, scalar(@topn));
         @topn = splice @topn, 0, $clamped if @topn > $clamped;
         unless (defined $winner) {
@@ -166,7 +176,8 @@ sub end_element ($self, $el) {
     }
     if (($self->{_cap} // 0) > 0) {
         push @{$self->{_capture}{events}}, { type => 'end', el => $el };
-        if ($ns eq NS() && ($ln eq 'spawn' || $ln eq 'exec')
+        if (($ns eq NS() && ($ln eq 'spawn' || $ln eq 'exec')
+             || $ns eq AI_NS() && $ln eq 'request')
             && $ln eq ($self->{_capture}{root_ln} // '')) {
             $self->_spawn_capture_end;
             return;
@@ -297,6 +308,69 @@ sub _score_and_pick ($self, $attrs) {
     my @topn = map { $_->{peer} } grep { $_->{score} < INELIGIBLE } @scored;
     @topn = grep { ($_->{node_id} // '') ne ($local_id // '') } @topn if !$is_local;
     return ($is_local ? 'local' : $winner), $scored[0]{score}, @topn;
+}
+
+sub _score_ai_and_pick ($self, $attrs) {
+    my $mesh = $self->_lazy_mesh;
+    my @all;
+    my $local_id = $mesh->local_node_id;
+    my $local_peer = $self->{_local_peer_override}
+        // $Amin::Schedule::Placement::_LocalPeerTestOverride
+        // {
+        node_id      => $local_id,
+        tier         => $self->_local_tier_from_profile($attrs),
+        zone         => $attrs->{zone} // 'global',
+        load_pct     => 50,
+        free_mem_MB  => 1_000_000,
+        free_ssd_GB  => 1_000_000,
+        free_vram_MB => 0,
+        accelerator  => 0,
+        ai_tier      => 0,
+        hot_refs     => [],
+    };
+    if (($mesh->peer_count // 0) == 0 && !defined $self->{_explicit_local_for_test}) {
+        $all[0] = $local_peer;
+    } else {
+        push @all, $local_peer, $mesh->peers;
+    }
+    my @scored = map {;
+        my $is_local_peer = (($_->{node_id} // '') eq ($local_id // ''));
+        my $s = $self->_score_ai($attrs, $_, $is_local_peer);
+        if ($is_local_peer && $s < INELIGIBLE) {
+            $s -= LOCAL_PREFERENCE;
+        }
+        { score => $s, peer => $_ }
+    } @all;
+    @scored = sort { $a->{score} <=> $b->{score} } @scored;
+    return () if !@scored || $scored[0]{score} >= INELIGIBLE;
+    my $winner = $scored[0]{peer};
+    my $is_local = ($winner->{node_id} // '') eq ($local_id // '');
+    my @topn = map { $_->{peer} } grep { $_->{score} < INELIGIBLE } @scored;
+    @topn = grep { ($_->{node_id} // '') ne ($local_id // '') } @topn if !$is_local;
+    return ($is_local ? 'local' : $winner), $scored[0]{score}, @topn;
+}
+
+sub _score_ai ($self, $attrs, $peer, $is_local = 0) {
+    my $req_model = lc($attrs->{model} // '');
+    my $req_zone  = lc($attrs->{zone}  // 'global');
+    my $ai_tier   = int($peer->{ai_tier}      // 0);
+    my $vram      = int($peer->{free_vram_MB} // 0);
+    my $accel     = int($peer->{accelerator}  // 0);
+    my $load      = int($peer->{load_pct}     // 0);
+    my $pz        = lc($peer->{zone} // 'global');
+
+    my $score = 0;
+    if ($ai_tier <= AI_TIER_NONE && !$is_local) {
+        $score += INELIGIBLE;
+        return $score;
+    }
+    $score += (AI_TIER_EMBED - $ai_tier) * AI_TIER_WEIGHT;
+    if ($vram > 0) {
+        $score -= int($vram / 1000) * AI_VRAM_SCALE;
+    }
+    $score += LOAD_SCALE * $load;
+    $score += ZONE_MISMATCH if $req_zone ne 'global' && $pz ne $req_zone;
+    return $score;
 }
 
 sub _score_one ($self, $attrs, $peer) {

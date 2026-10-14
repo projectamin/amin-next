@@ -195,4 +195,100 @@ subtest 'trust_anchor_dir VK resolution by signer name' => sub {
         'VK resolved from trust_anchor_dir → allow-list populated');
 };
 
+# ═══════════════════════════════════════════════════════════════════════════
+# Acceptance 7: bitcache:// URI format (single-string reference)
+# ═══════════════════════════════════════════════════════════════════════════
+subtest 'bitcache:// URI with inline VK → allow-list resolved' => sub {
+    require URI::Escape;
+    my $uri = sprintf(
+        'bitcache://blake3/%s?signer=%s&ts=%s&vk=%s&sig=%s',
+        $hash,
+        URI::Escape::uri_escape('test-signer'),
+        URI::Escape::uri_escape($ts),
+        URI::Escape::uri_escape($vk),
+        URI::Escape::uri_escape($sig),
+    );
+    my $ms = Amin::Machine::MachineSpec->new(
+        bc_uri      => $uri,
+        slab_path   => $slab,
+        bctool_path => $BCTOOL,
+    );
+    my $spec = $ms->spec;
+    ok(exists $spec->{allowed}{'Amin::Command::Echo'},
+        'URI with inline VK → Echo in allow-list');
+    is($spec->{handler}{class}, 'Amin::Handler::Writer',
+        'handler resolved from URI-fetched spec');
+};
+
+subtest 'bitcache:// URI via machine_spec_path (path overload)' => sub {
+    require URI::Escape;
+    my $uri = sprintf(
+        'bitcache://blake3/%s?signer=%s&ts=%s&vk=%s&sig=%s',
+        $hash,
+        URI::Escape::uri_escape('test-signer'),
+        URI::Escape::uri_escape($ts),
+        URI::Escape::uri_escape($vk),
+        URI::Escape::uri_escape($sig),
+    );
+    my $ms = Amin::Machine::MachineSpec->new(
+        path        => $uri,
+        slab_path   => $slab,
+        bctool_path => $BCTOOL,
+    );
+    my $spec = $ms->spec;
+    ok(exists $spec->{allowed}{'Amin::Command::Echo'},
+        'path=bitcache://... → parsed as URI, Echo allowed');
+};
+
+subtest 'bitcache:// URI tampered sig → fail-closed deny-all' => sub {
+    require URI::Escape;
+    my $bad = $sig;
+    substr($bad, 5, 1) = ($bad =~ /^.{5}[A-Z]/) ? 'a' : 'A';
+    my $uri = sprintf(
+        'bitcache://blake3/%s?signer=%s&ts=%s&vk=%s&sig=%s',
+        $hash,
+        URI::Escape::uri_escape('test-signer'),
+        URI::Escape::uri_escape($ts),
+        URI::Escape::uri_escape($vk),
+        URI::Escape::uri_escape($bad),
+    );
+    my $ms = Amin::Machine::MachineSpec->new(
+        bc_uri      => $uri,
+        slab_path   => $slab,
+        bctool_path => $BCTOOL,
+    );
+    my $spec = $ms->spec;
+    is(scalar keys $spec->{allowed}->%*, 0,
+        'tampered URI sig → deny-all');
+};
+
+subtest 'bitcache:// URI with trust_anchor_dir (no inline vk)' => sub {
+    require Digest::SHA;
+    require MIME::Base64;
+    require URI::Escape;
+    my $ta = "$tmp/trust2";
+    mkdir $ta or die "mkdir $ta: $!";
+    my $vk_file = "$ta/" . Digest::SHA::sha256_hex('test-signer') . '.vk';
+    open(my $vfh, '>:raw', $vk_file) or die "open $vk_file: $!";
+    print $vfh MIME::Base64::decode_base64($vk);
+    close $vfh;
+
+    my $uri = sprintf(
+        'bitcache://blake3/%s?signer=%s&ts=%s&sig=%s',
+        $hash,
+        URI::Escape::uri_escape('test-signer'),
+        URI::Escape::uri_escape($ts),
+        URI::Escape::uri_escape($sig),
+    );
+    my $ms = Amin::Machine::MachineSpec->new(
+        bc_uri          => $uri,
+        slab_path       => $slab,
+        bctool_path     => $BCTOOL,
+        trust_anchor_dir=> $ta,
+    );
+    my $spec = $ms->spec;
+    ok(exists $spec->{allowed}{'Amin::Command::Echo'},
+        'URI without vk → resolved from trust_anchor_dir, Echo allowed');
+};
+
 done_testing;

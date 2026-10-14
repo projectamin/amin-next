@@ -7,6 +7,7 @@ use lib 'perl-lib';
 use Amin::Log::Standard;
 use Amin::Handler::Writer;
 use Amin::Machine::Dispatcher;
+use Amin::Net::Fabric;
 
 sub build_zcap_token (%o) {
     my @tiers  = $o{tiers}  ? @{$o{tiers}}  : qw(shared metal-32c metal-16c metal-96c);

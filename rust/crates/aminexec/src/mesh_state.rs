@@ -151,6 +151,96 @@ pub fn parse_header(bytes: &[u8]) -> Option<(u64, u16, u16, [u8; 32], u64)> {
     Some((magic, ver, peer_count, nid, gen))
 }
 
+/// AI accelerator type (matches Amin::AI::Graph @ACCEL_NAMES indexing).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[repr(u8)]
+pub enum Accelerator {
+    #[default]
+    None = 0,
+    Cuda = 1,
+    Rocm = 2,
+    NeuralEngine = 3,
+    Tpu = 4,
+}
+
+/// AI capability tier (matches Amin::AI::Graph @AI_TIER_NAMES indexing).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[repr(u8)]
+pub enum AiTier {
+    #[default]
+    None = 0,
+    AiCpu = 1,
+    AiGpu = 2,
+    AiEmbed = 3,
+}
+
+/// A single 256B peer record.  Byte layout is locked with
+/// `Amin::Discovery::Mesh` Perl `unpack` template:
+/// `a32 v a24 v a24 C V V a32 a32 a32 a32 V C C a21 Q>`.
+///
+/// Offsets within the 256B stride:
+///   0..32   node_id
+///  32..34   tier_len
+///  34..58   tier (a24)
+///  58..60   zone_len
+///  60..84   zone (a24)
+///  84..85   load_pct
+///  85..89   free_mem_MB (V LE)
+///  89..93   free_ssd_GB (V LE)
+///  93..125  hot_refs[0] (a32)
+/// 125..157  hot_refs[1] (a32)
+/// 157..189  hot_refs[2] (a32)
+/// 189..221  hot_refs[3] (a32)
+/// 221..225  free_vram_MB (V LE)   ← AI node headroom
+/// 225..226  accelerator (C)        ← AI accelerator type
+/// 226..227  ai_tier (C)            ← AI capability tier
+/// 227..248  reserved (a21)
+/// 248..256  gen_tail (Q> BE)
+#[derive(Debug, Clone, Default)]
+pub struct PeerRecord {
+    pub node_id: [u8; 32],
+    pub tier: String,
+    pub zone: String,
+    pub load_pct: u8,
+    pub free_mem_mb: u32,
+    pub free_ssd_gb: u32,
+    pub hot_refs: [[u8; 32]; 4],
+    pub free_vram_mb: u32,
+    pub accelerator: Accelerator,
+    pub ai_tier: AiTier,
+    pub gen_tail: u64,
+}
+
+/// Encode a [PeerRecord] into its 256B wire representation.
+pub fn encode_peer(rec: &PeerRecord) -> [u8; PEER_STRIDE] {
+    let mut buf = [0u8; PEER_STRIDE];
+    buf[0..32].copy_from_slice(&rec.node_id);
+    let tlen = rec.tier.len().min(24) as u16;
+    buf[32..34].copy_from_slice(&tlen.to_le_bytes());
+    buf[34..34 + tlen as usize].copy_from_slice(&rec.tier.as_bytes()[..tlen as usize]);
+    let zlen = rec.zone.len().min(24) as u16;
+    buf[58..60].copy_from_slice(&zlen.to_le_bytes());
+    buf[60..60 + zlen as usize].copy_from_slice(&rec.zone.as_bytes()[..zlen as usize]);
+    buf[84] = rec.load_pct;
+    buf[85..89].copy_from_slice(&rec.free_mem_mb.to_le_bytes());
+    buf[89..93].copy_from_slice(&rec.free_ssd_gb.to_le_bytes());
+    for i in 0..4 {
+        buf[93 + i * 32..93 + (i + 1) * 32].copy_from_slice(&rec.hot_refs[i]);
+    }
+    buf[221..225].copy_from_slice(&rec.free_vram_mb.to_le_bytes());
+    buf[225] = rec.accelerator as u8;
+    buf[226] = rec.ai_tier as u8;
+    buf[248..256].copy_from_slice(&rec.gen_tail.to_be_bytes());
+    buf
+}
+
+/// Write a [PeerRecord] at index `idx` within the region.
+pub fn write_peer(region: &mut [u8], idx: usize, rec: &PeerRecord) {
+    assert!(idx < MAX_PEERS);
+    let off = HEADER_LEN + idx * PEER_STRIDE;
+    region[off..off + PEER_STRIDE].copy_from_slice(&encode_peer(rec));
+}
+
 /// Helper: try_read_path → returns full file contents for Perl parser parity
 /// checks in Rust tests.  Not used by PID1 path.
 #[allow(dead_code)]
@@ -230,5 +320,34 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn peer_record_ai_fields_roundtrip() {
+        let rec = PeerRecord {
+            node_id: [0x42u8; 32],
+            tier: "ai-gpu".to_string(),
+            zone: "us-east-1".to_string(),
+            load_pct: 12,
+            free_mem_mb: 65536,
+            free_ssd_gb: 500,
+            hot_refs: [[0u8; 32]; 4],
+            free_vram_mb: 24000,
+            accelerator: Accelerator::Cuda,
+            ai_tier: AiTier::AiGpu,
+            gen_tail: 1,
+        };
+        let encoded = encode_peer(&rec);
+        assert_eq!(encoded.len(), PEER_STRIDE);
+        // free_vram_MB at offset 221..225 LE
+        let vram = u32::from_le_bytes(encoded[221..225].try_into().unwrap());
+        assert_eq!(vram, 24000, "free_vram_MB written at offset 221");
+        // accelerator at offset 225
+        assert_eq!(encoded[225], 1, "accelerator=Cuda (1) at offset 225");
+        // ai_tier at offset 226
+        assert_eq!(encoded[226], 2, "ai_tier=AiGpu (2) at offset 226");
+        // gen_tail at offset 248..256 BE
+        let tail = u64::from_be_bytes(encoded[248..256].try_into().unwrap());
+        assert_eq!(tail, 1, "gen_tail BE at offset 248");
     }
 }

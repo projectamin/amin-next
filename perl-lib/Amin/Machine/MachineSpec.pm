@@ -25,6 +25,7 @@ sub _load ($self) {
     if (defined $self->{xml}) {
         return $self->{xml};
     }
+    $self->_parse_bc_uri;
     if (defined $self->{bc_hash} && length $self->{bc_hash}) {
         $self->{_from_bitcache} = 1;
         my $raw = $self->_bctool_get($self->{bc_hash});
@@ -59,6 +60,7 @@ sub _candidates ($self) {
 sub _parse ($self, $xml) {
     my $result = {
         allowed   => undef,
+        filters   => [],
         handler   => undef,
         log       => undef,
         generator => undef,
@@ -83,11 +85,20 @@ sub _parse ($self, $xml) {
         return $result;
     }
     my %allowed;
+    my @filters;
     for my $node ($doc->findnodes('//filter')) {
         my $class = $node->getAttribute('class') // $node->getAttribute('name');
         next unless defined $class && length $class;
         $allowed{$class} = 1;
+        my %meta;
+        for my $a ($node->attributes) {
+            my $ln = $a->localName;
+            next if $ln eq 'class' || $ln eq 'name';
+            $meta{$ln} = $a->value;
+        }
+        push @filters, { class => $class, meta => \%meta };
     }
+    $result->{filters} = \@filters;
     $result->{allowed} = (scalar keys %allowed) ? \%allowed
         : ($self->{_from_bitcache} ? {} : $self->_allow_all_registered);
 
@@ -111,6 +122,40 @@ sub _parse ($self, $xml) {
         $result->{name} = $t if length $t;
     }
     return $result;
+}
+
+sub _parse_bc_uri ($self) {
+    my $uri = $self->{bc_uri};
+    unless (defined $uri && length $uri) {
+        my $p = $self->{path};
+        if (defined $p && $p =~ m{^bitcache://}) {
+            $uri = $p;
+        }
+    }
+    return unless defined $uri && length $uri;
+
+    require URI;
+    require URI::Escape;
+    my $u = eval { URI->new($uri) };
+    return unless $u && $u->scheme eq 'bitcache';
+
+    my $algo = $u->authority // '';
+    return unless $algo eq 'blake3';
+
+    my $path = $u->path // '';
+    $path =~ s{^/}{};
+    return unless length($path) == 64 && $path =~ /^[0-9a-f]{64}$/;
+    $self->{bc_hash} = $path;
+
+    my %q = $u->query_form;
+    my %map = (signer => 'signer_name', ts => 'signer_ts',
+               sig    => 'signer_sig',  vk => 'signer_vk');
+    for my $key (keys %map) {
+        if (exists $q{$key} && defined $q{$key} && length $q{$key}) {
+            $self->{$map{$key}} = $q{$key};
+        }
+    }
+    return;
 }
 
 sub _bctool ($self) {

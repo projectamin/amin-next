@@ -6,6 +6,7 @@ use lib 'perl-lib';
 use Amin::Log::Standard;
 use Amin::Handler::Writer;
 use Amin::Machine::Dispatcher;
+use Amin::Net::Fabric;
 use Amin::Test::StreamCapture;
 
 # ── T8 t/26 Net::Fabric billing egress_bytes + Rubric AC-8 zero-shell ──

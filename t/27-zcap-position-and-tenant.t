@@ -71,10 +71,12 @@ sub attr_val ($el, $want) {
 
 # ── Z1: Dispatcher begin[] count + idx0 = ZCap ──
 {
-    my $reg = \%Amin::Machine::Dispatcher::FILTERS;
-    is(scalar($reg->{begin}->@*), 7, 't27-Z1: begin[] count = 7 (ZCap/Cond/Validator/UCC::General/UCC::Credit/AI::Gate/Placement)');
-    is($reg->{begin}[0]{class}, 'Amin::Auth::ZCap',
-        't27-Z1: begin idx 0 = Auth::ZCap (outermost auth boundary)');
+    require Amin::Machine::MachineSpec;
+    my $spec = Amin::Machine::MachineSpec->new->spec;
+    my @begin = grep { ($_->{meta}{position} // 'middle') eq 'begin' } $spec->{filters}->@*;
+    is(scalar(@begin), 7, 't27-Z1: spec begin[] count = 7 (ZCap/Cond/Validator/UCC::General/UCC::Credit/AI::Gate/Placement)');
+    is($begin[0]{class}, 'Amin::Auth::ZCap',
+        't27-Z1: spec begin idx 0 = Auth::ZCap (outermost auth boundary)');
 }
 
 # ── Z2: Valid token → synthetic <tenant> FIRST child + Z7 add-only no mutation ──

@@ -6,6 +6,7 @@ use lib 'perl-lib';
 use Amin::Log::Standard;
 use Amin::Handler::Writer;
 use Amin::Machine::Dispatcher;
+use Amin::Net::Fabric;
 use Amin::Test::StreamCapture;
 
 sub build_zcap_token (%o) {

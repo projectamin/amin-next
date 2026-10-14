@@ -23,6 +23,7 @@ sub new ($class, %opts) {
         machine_spec        => $opts{machine_spec},
         machine_spec_xml    => $opts{machine_spec_xml},
         machine_spec_path   => $opts{machine_spec_path},
+        machine_spec_uri    => $opts{machine_spec_uri},
     }, $class;
     return $self;
 }
@@ -36,6 +37,7 @@ sub parse ($self, $xml) {
         (defined $self->{machine_spec}      ? (machine_spec      => $self->{machine_spec})      : ()),
         (defined $self->{machine_spec_xml}  ? (machine_spec_xml  => $self->{machine_spec_xml})  : ()),
         (defined $self->{machine_spec_path} ? (machine_spec_path => $self->{machine_spec_path}) : ()),
+        (defined $self->{machine_spec_uri}  ? (bc_uri           => $self->{machine_spec_uri})  : ()),
     );
     XML::LibXML::SAX->new(Handler => $machine)->parse_string($xml);
     my $h = $machine->Handler;

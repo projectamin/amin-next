@@ -5,24 +5,39 @@ use File::Basename qw(dirname);
 use lib dirname(__FILE__) . '/../perl-lib';
 
 use Amin::Machine::Dispatcher;
+use Amin::Machine::MachineSpec;
 use Amin::Handler::Writer;
 use Amin::Log::Standard;
 
+# Filters are never auto-loaded: %FILTERS starts empty.  Every filter is
+# declared by the machine spec.  %FILTERS only receives entries at runtime
+# via register() (e.g. --with-begin / --with-middle / --with-end).
 my $reg = \%Amin::Machine::Dispatcher::FILTERS;
-for my $pos (qw(begin middle late)) {
-    ok(exists $reg->{$pos} && ref $reg->{$pos} eq 'ARRAY',
-       "registry position '$pos' populated as ARRAY");
-}
-ok(ref($reg->{permanent} // []) eq 'ARRAY', 'permanent position valid (empty is OK)');
-ok(ref($reg->{end}       // []) eq 'ARRAY', 'end position valid       (empty is OK)');
+my $total_reg = 0;
+$total_reg += scalar($_->@*) for values %$reg;
+is($total_reg, 0, '%FILTERS registry starts empty (no BEGIN auto-load; filters are spec-declared)');
 
-my $late = [ map { $_->{class} } $reg->{late}->@* ];
+my $spec = Amin::Machine::MachineSpec->new->spec;
+my @spec_filters = $spec->{filters}->@*;
+my %by_pos;
+for my $f (@spec_filters) {
+    my $p = $f->{meta}{position} // 'middle';
+    push $by_pos{$p}->@*, $f;
+}
+for my $pos (qw(begin middle late end)) {
+    ok(exists $by_pos{$pos} && ref $by_pos{$pos} eq 'ARRAY',
+       "spec declares position '$pos' as ARRAY");
+}
+ok(!exists $by_pos{permanent} || ref($by_pos{permanent}) eq 'ARRAY',
+    'permanent position valid (empty/unused is OK — trust boundary)');
+
+my $late = [ map { $_->{class} } $by_pos{late}->@* ];
 like($late, array {
     item 'Amin::Filter::Map::Topology';
     item 'Amin::Filter::UI::SwiftUIView';
     item 'Amin::AI::Graph';
     end;
-}, 'late position = Map::Topology + UI::SwiftUIView + AI::Graph');
+}, 'spec late position = Map::Topology + UI::SwiftUIView + AI::Graph');
 
 my $bare_chain = Amin::Machine::Dispatcher::_build_chain(
     Amin::Handler::Writer->new, Amin::Log::Standard->new(stderr=>0), 'render',
@@ -30,42 +45,42 @@ my $bare_chain = Amin::Machine::Dispatcher::_build_chain(
 isa_ok($bare_chain, ['Amin::Auth::ZCap'],
        'late=00 composes ZCap (outermost) → Cond::OS → ProfileValidator → Placement inward');
 
-my $mid = [ map { $_->{class} } $reg->{middle}->@* ];
-is($reg->{middle}[0]{class},  'Amin::Command::Addr2line', 'middle idx 0 = Addr2line (alphabetical)');
-is($reg->{middle}[1]{class},  'Amin::Command::Ar',        'middle idx 1 = Ar');
-is($reg->{middle}[2]{class},  'Amin::Command::As',        'middle idx 2 = As');
-is($reg->{middle}[3]{class},  'Amin::Command::Autoconf',  'middle idx 3 = Autoconf');
-is($reg->{middle}[4]{class},  'Amin::Command::Automake',  'middle idx 4 = Automake');
-is($reg->{middle}[5]{class},  'Amin::Command::Autoreconf','middle idx 5 = Autoreconf');
-my $last = $#{$reg->{middle}};
-is($reg->{middle}[$last-8]{class}, 'Amin::Command::Exec',    'middle idx -9 = Exec');
-is($reg->{middle}[$last-7]{class}, 'Amin::Command::Spawn',   'middle idx -8 = Spawn');
-is($reg->{middle}[$last-6]{class}, 'Amin::Command::Signal',  'middle idx -7 = Signal');
-is($reg->{middle}[$last-5]{class}, 'Amin::Sandbox',          'middle idx -6 = Sandbox (AC-NF-1 ordering)');
-is($reg->{middle}[$last-4]{class}, 'Amin::Net::Fabric',      'middle idx -5 = Net::Fabric');
-is($reg->{middle}[$last-3]{class}, 'Amin::AI::Inference',    'middle idx -4 = AI::Inference');
-is($reg->{middle}[$last-2]{class}, 'Amin::AI::Embed',        'middle idx -3 = AI::Embed (RAG memory ingest)');
-is($reg->{middle}[$last-1]{class}, 'Amin::AI::Memory',       'middle idx -2 = AI::Memory (RAG retrieval)');
-is($reg->{middle}[$last]{class},   'Amin::Filter::Storage::Bitcache',
-    'middle idx -1 = Bitcache (innermost of middle array)');
-is(scalar($reg->{middle}->@*), 278,
-    'middle position count = 278 (267 commands + UCC::Sales/UCC::Instruments + Exec/Spawn/Signal + Sandbox/Net + AI::Inference/Embed/Memory + Bitcache)');
+my $mid = [ map { $_->{class} } $by_pos{middle}->@* ];
+is($by_pos{middle}[0]{class},  'Amin::Command::Addr2line', 'spec middle idx 0 = Addr2line (alphabetical)');
+is($by_pos{middle}[1]{class},  'Amin::Command::Ar',        'spec middle idx 1 = Ar');
+is($by_pos{middle}[2]{class},  'Amin::Command::As',        'spec middle idx 2 = As');
+is($by_pos{middle}[3]{class},  'Amin::Command::Autoconf',  'spec middle idx 3 = Autoconf');
+is($by_pos{middle}[4]{class},  'Amin::Command::Automake',  'spec middle idx 4 = Automake');
+is($by_pos{middle}[5]{class},  'Amin::Command::Autoreconf','spec middle idx 5 = Autoreconf');
+my $last = $#{$by_pos{middle}};
+is($by_pos{middle}[$last-8]{class}, 'Amin::Command::Exec',    'spec middle idx -9 = Exec');
+is($by_pos{middle}[$last-7]{class}, 'Amin::Command::Spawn',   'spec middle idx -8 = Spawn');
+is($by_pos{middle}[$last-6]{class}, 'Amin::Command::Signal',  'spec middle idx -7 = Signal');
+is($by_pos{middle}[$last-5]{class}, 'Amin::Sandbox',          'spec middle idx -6 = Sandbox (AC-NF-1 ordering)');
+is($by_pos{middle}[$last-4]{class}, 'Amin::Net::Fabric',      'spec middle idx -5 = Net::Fabric');
+is($by_pos{middle}[$last-3]{class}, 'Amin::AI::Inference',    'spec middle idx -4 = AI::Inference');
+is($by_pos{middle}[$last-2]{class}, 'Amin::AI::Embed',        'spec middle idx -3 = AI::Embed (RAG memory ingest)');
+is($by_pos{middle}[$last-1]{class}, 'Amin::AI::Memory',       'spec middle idx -2 = AI::Memory (RAG retrieval)');
+is($by_pos{middle}[$last]{class},   'Amin::Filter::Storage::Bitcache',
+    'spec middle idx -1 = Bitcache (innermost of middle array; spec-declared)');
+is(scalar($by_pos{middle}->@*), 278,
+    'spec middle position count = 278 (267 commands + UCC::Sales/UCC::Instruments + Exec/Spawn/Signal + Sandbox/Net + AI::Inference/Embed/Memory + Bitcache)');
 
-is($reg->{begin}[0]{class}, 'Amin::Auth::ZCap',
-    'begin idx 0 = Auth::ZCap (outermost, fires first auth boundary)');
-is($reg->{begin}[1]{class}, 'Amin::Cond::OS',
-    'begin idx 1 = Cond::OS (after ZCap drops non-compliant elements)');
-is($reg->{begin}[2]{class}, 'Amin::Filter::Init::ProfileValidator',
-    'begin idx 2 = ProfileValidator (before Placement, validates init-stage first)');
-is($reg->{begin}[3]{class}, 'Amin::UCC::General',
-    'begin idx 3 = UCC::General (Art.1 transaction form validation)');
-is($reg->{begin}[4]{class}, 'Amin::UCC::Credit',
-    'begin idx 4 = UCC::Credit (Art.5 LC authorization / presentation scope)');
-is($reg->{begin}[5]{class}, 'Amin::AI::Gate',
-    'begin idx 5 = AI::Gate (model allowlist + ZCap scope check before placement)');
-is($reg->{begin}[6]{class}, 'Amin::Schedule::Placement',
-    'begin idx 6 = Schedule::Placement (innermost begin, wraps AFTER profile/zcap/ucc/ai-gate, before middle)');
-is(scalar($reg->{begin}->@*), 7, 'begin position count = 7 (ZCap→Cond→Profile→UCC::General→UCC::Credit→AI::Gate→Placement)');
+is($by_pos{begin}[0]{class}, 'Amin::Auth::ZCap',
+    'spec begin idx 0 = Auth::ZCap (outermost, fires first auth boundary)');
+is($by_pos{begin}[1]{class}, 'Amin::Cond::OS',
+    'spec begin idx 1 = Cond::OS (after ZCap drops non-compliant elements)');
+is($by_pos{begin}[2]{class}, 'Amin::Filter::Init::ProfileValidator',
+    'spec begin idx 2 = ProfileValidator (before Placement, validates init-stage first)');
+is($by_pos{begin}[3]{class}, 'Amin::UCC::General',
+    'spec begin idx 3 = UCC::General (Art.1 transaction form validation)');
+is($by_pos{begin}[4]{class}, 'Amin::UCC::Credit',
+    'spec begin idx 4 = UCC::Credit (Art.5 LC authorization / presentation scope)');
+is($by_pos{begin}[5]{class}, 'Amin::AI::Gate',
+    'spec begin idx 5 = AI::Gate (model allowlist + ZCap scope check before placement)');
+is($by_pos{begin}[6]{class}, 'Amin::Schedule::Placement',
+    'spec begin idx 6 = Schedule::Placement (innermost begin, wraps AFTER profile/zcap/ucc/ai-gate, before middle)');
+is(scalar($by_pos{begin}->@*), 7, 'spec begin position count = 7 (ZCap→Cond→Profile→UCC::General→UCC::Credit→AI::Gate→Placement)');
 
 my $chain = Amin::Machine::Dispatcher::_build_chain(
     Amin::Handler::Writer->new,
@@ -108,9 +123,9 @@ ok($d->{chain}, 'Dispatcher->new populates chain via constructor');
     );
 
     my $new_begin_count = scalar $Amin::Machine::Dispatcher::FILTERS{begin}->@*;
-    ok($new_begin_count >= 4,
-       'custom filter pushed onto begin list (now ' . $new_begin_count .
-       ' entries, ZCap + Cond::OS + ProfileValidator + Placement + CorpExt via Amin::Test subclass)');
+    ok($new_begin_count >= 1,
+       'custom filter pushed onto begin list via register() (now ' . $new_begin_count .
+       ' entry; core begin filters are spec-declared, %FILTERS holds only runtime-registered)');
 
     my $last = $Amin::Machine::Dispatcher::FILTERS{begin}[-1];
     is($last->{class}, 'Amin::Test::CorpExt::PolicyDummy',

@@ -9,6 +9,7 @@ use Amin::Machine::Dispatcher;
 use Amin::Test::StreamCapture;
 use Amin::Discovery::Mesh;
 use Amin::Mesh::Transport::InProcess;
+use Amin::Schedule::Placement;
 require MIME::Base64;
 
 sub build_zcap_token (%o) {
