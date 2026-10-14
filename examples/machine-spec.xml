@@ -1,0 +1,138 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Amin machine spec — example.
+
+  A machine spec declares the SAX filter chain that processes every
+  <amin:profile>.  The spec is the sole source of truth for which filters
+  are loaded; filters are required dynamically at chain-build time (there
+  is no BEGIN-block auto-loading).  To customize the chain, edit this file
+  and point Amin at it via the machine-spec CLI flag, $AMIN_MACHINE_SPEC, or by
+  dropping it at /etc/amin/machine_spec.xml or ~/.amin/machine_spec.xml.
+
+  Chain order (outermost → innermost):
+      permanent → begin → middle → late → end → Writer
+  - permanent:  trust-boundary filters (billing, audit, quota); see every event.
+  - begin:      policy gates (auth, cond, UCC, AI gate, placement).
+  - middle:     command/element handlers (the bulk of the catalog).
+  - late:       additive transforms (topology map, UI views, AI mesh graph).
+  - end:        terminal post-processing (billing close, UCC settlement,
+                AI provenance tier stripping in prod mode).
+
+  <filter> attributes:
+      class      Perl module class (required).
+      position   permanent | begin | middle | late | end (required).
+      element    SAX LocalName the filter responds to (optional; omitted =
+                 watch all elements in its namespace).
+      namespace  XML namespace URI the filter handles.
+      name       For command filters, the command name (e.g. "bash", "gcc").
+
+  The bundled default lives at perl-lib/Amin/Machine/machine_spec.xml
+  (291 filters).  This example shows a representative subset with
+  annotations — copy it and add/remove <filter> entries to suit your node.
+-->
+<machine xmlns:amin="http://projectamin.org/ns/2026/">
+
+  <name>example-node</name>
+
+  <!-- SAX event generator that parses the incoming profile. -->
+  <generator class="XML::LibXML::SAX" />
+
+  <!-- Output handler that serializes the transformed SAX stream. -->
+  <handler class="Amin::Handler::Writer" output="yes" />
+
+  <!-- Logger used by all filters that call $self->Log. -->
+  <log class="Amin::Log::Standard" />
+
+  <!-- ═══════════════════ permanent (outermost) ═══════════════════ -->
+  <!-- Trust boundary: sees every event before any other filter. -->
+  <filter class="Amin::Billing::CgroupV2"
+          position="permanent"
+          namespace="http://projectamin.org/ns/2026/" />
+  <filter class="Amin::Audit::Seal"
+          position="permanent"
+          namespace="http://projectamin.org/ns/2026/" />
+
+  <!-- ══════════════════════════ begin ══════════════════════════ -->
+  <!-- Policy gates: run before any command execution. -->
+  <filter class="Amin::Auth::ZCap"
+          position="begin"
+          namespace="http://projectamin.org/ns/2026/" />
+  <filter class="Amin::Cond::OS"
+          position="begin"
+          namespace="http://projectamin.org/ns/2026/" />
+  <filter class="Amin::Filter::Init::ProfileValidator"
+          position="begin"
+          element="stage"
+          namespace="http://projectamin.org/ns/2026/" />
+  <filter class="Amin::UCC::General"
+          position="begin"
+          element="transaction"
+          namespace="http://projectamin.org/ns/ucc/1" />
+  <filter class="Amin::UCC::Credit"
+          position="begin"
+          element="lc"
+          namespace="http://projectamin.org/ns/ucc/1" />
+  <filter class="Amin::AI::Gate"
+          position="begin"
+          element="request"
+          namespace="http://projectamin.org/ns/ai/1" />
+  <filter class="Amin::Schedule::Placement"
+          position="begin"
+          namespace="http://projectamin.org/ns/2026/" />
+
+  <!-- ═════════════════════════ middle ═════════════════════════ -->
+  <!-- Command + element handlers.  Add/remove <filter> entries here
+       to control which commands your node will execute. -->
+  <filter class="Amin::Command::Bash"   position="middle" element="command" name="bash"   namespace="http://projectamin.org/ns/2026/" />
+  <filter class="Amin::Command::Gcc"    position="middle" element="command" name="gcc"    namespace="http://projectamin.org/ns/2026/" />
+  <filter class="Amin::Command::Git"    position="middle" element="command" name="git"    namespace="http://projectamin.org/ns/2026/" />
+  <filter class="Amin::Command::Make"   position="middle" element="command" name="make"   namespace="http://projectamin.org/ns/2026/" />
+  <filter class="Amin::Command::Tar"    position="middle" element="command" name="tar"    namespace="http://projectamin.org/ns/2026/" />
+  <filter class="Amin::Command::Exec"   position="middle" element="exec"   namespace="http://projectamin.org/ns/2026/" />
+  <filter class="Amin::Command::Spawn"  position="middle" element="spawn"  namespace="http://projectamin.org/ns/2026/" />
+  <filter class="Amin::Command::Signal" position="middle" element="signal" namespace="http://projectamin.org/ns/2026/" />
+  <filter class="Amin::Sandbox"         position="middle" element="sandbox" namespace="http://projectamin.org/ns/2026/" />
+  <filter class="Amin::Net::Fabric"     position="middle" namespace="http://projectamin.org/ns/2026/" />
+
+  <!-- AI middle handlers: inference, embedding, vector memory. -->
+  <filter class="Amin::AI::Inference"
+          position="middle"
+          element="request"
+          namespace="http://projectamin.org/ns/ai/1" />
+  <filter class="Amin::AI::Embed"
+          position="middle"
+          element="embed"
+          namespace="http://projectamin.org/ns/ai/1" />
+  <filter class="Amin::AI::Memory"
+          position="middle"
+          element="query"
+          namespace="http://projectamin.org/ns/ai/1" />
+
+  <!-- Bitcache object store: handles <bc:object> elements. -->
+  <filter class="Amin::Filter::Storage::Bitcache"
+          position="middle"
+          element="object"
+          namespace="http://projectamin.org/ns/bc/" />
+
+  <!-- ══════════════════════════ late ═══════════════════════════ -->
+  <!-- Additive transforms: emit extra content alongside the stream. -->
+  <filter class="Amin::Filter::Map::Topology"
+          position="late"
+          namespace="http://projectamin.org/ns/map/1" />
+  <filter class="Amin::AI::Graph"
+          position="late"
+          namespace="http://projectamin.org/ns/ai/1" />
+
+  <!-- ═══════════════════════════ end ═══════════════════════════ -->
+  <!-- Terminal post-processing: innermost, runs last before the Writer. -->
+  <filter class="Amin::Filter::Billing::CgroupV2"
+          position="end"
+          namespace="http://projectamin.org/ns/2026/" />
+  <filter class="Amin::UCC::Settlement"
+          position="end"
+          namespace="http://projectamin.org/ns/ucc/1" />
+  <filter class="Amin::AI::Provenance"
+          position="end"
+          namespace="http://projectamin.org/ns/ai/1" />
+
+</machine>
