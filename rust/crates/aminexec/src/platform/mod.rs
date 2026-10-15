@@ -10,6 +10,11 @@
 //! - Linux 6.2+ → [`linux::Backend`] (Landlock LSM, cgroup v2, seccomp-bpf)
 //! - FreeBSD 14+ → [`freebsd::Backend`] (jail, rctl, capsicum)
 //! - Other → [`posix::Backend`] (fork/exec + rusage only, no enforcement)
+//!
+//! **Adding a platform** is a single entry in [`platform_registry!] below;
+//! it simultaneously wires the `#[cfg]` module block, the
+//! [`default_backend`] ladder, and the [`BackendKind`] display mapping —
+//! the three lists cannot drift.
 
 use std::fmt;
 use std::net::Ipv4Addr;
@@ -165,36 +170,46 @@ pub trait NetworkBackend {
 
 pub trait AuthBackend    { /* see crate::exec  */ }
 
-#[cfg(target_os = "linux")]   pub mod linux;
-#[cfg(target_os = "freebsd")] pub mod freebsd;
-#[cfg(target_os = "illumos")] pub mod illumos;
-#[cfg(target_os = "ios")]     pub mod ios;
-#[cfg(target_os = "android")] pub mod android;
-#[cfg(target_os = "macos")]   pub mod darwin;
+/// Single-source platform registry.  One entry registers a backend across
+/// the three parallel dispatch sites in this module — the `#[cfg]`-gated
+/// module block, the [`default_backend`] selection ladder, and the
+/// [`BackendKind`] display mapping — so the lists can never drift apart.
+/// Anything not registered falls through to [`posix::Backend`].
+macro_rules! platform_registry {
+    ($( $kind:ident => module $module:ident, cfg $cfg:meta, display $display:literal ),+ $(,)?) => {
+        $( #[cfg($cfg)] pub mod $module; )+
+
+        /// Return the best available backend kind on this target.
+        #[must_use]
+        pub fn default_backend() -> BackendKind {
+            $(
+                #[cfg($cfg)]
+                { return BackendKind::$kind; }
+            )+
+            // Exactly one entry above matches any target; the allowance
+            // mirrors the pre-macro code that same shape required.
+            #[allow(unreachable_code)]
+            BackendKind::PosixMinimal
+        }
+
+        impl fmt::Display for BackendKind {
+            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                f.write_str(match self {
+                    Self::PosixMinimal   => "posix-minimal",
+                    $( BackendKind::$kind => $display, )+
+                })
+            }
+        }
+    };
+}
+
+platform_registry! {
+    LinuxStrict    => module linux,   cfg target_os = "linux",   display "linux-strict",
+    FreeBSDFull    => module freebsd, cfg target_os = "freebsd", display "freebsd-full",
+    IllumosZone    => module illumos, cfg target_os = "illumos", display "illumos-zone",
+    IOSAppSandbox  => module ios,     cfg target_os = "ios",     display "ios-app-sandbox",
+    AndroidSELinux => module android, cfg target_os = "android", display "android-selinux",
+    DarwinRlimit   => module darwin,  cfg target_os = "macos",   display "darwin-rlimit",
+}
+
 pub mod posix;
-
-/// Return the best available backend kind on this target.
-#[must_use]
-pub fn default_backend() -> BackendKind {
-    #[cfg(target_os = "linux")]   { return BackendKind::LinuxStrict;   }
-    #[cfg(target_os = "freebsd")] { return BackendKind::FreeBSDFull;   }
-    #[cfg(target_os = "illumos")] { return BackendKind::IllumosZone;   }
-    #[cfg(target_os = "ios")]     { return BackendKind::IOSAppSandbox; }
-    #[cfg(target_os = "android")] { return BackendKind::AndroidSELinux;}
-    #[cfg(target_os = "macos")]   { return BackendKind::DarwinRlimit; }
-    #[allow(unreachable_code)] { BackendKind::PosixMinimal }
-}
-
-impl fmt::Display for BackendKind {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(match self {
-            Self::PosixMinimal  => "posix-minimal",
-            Self::LinuxStrict   => "linux-strict",
-            Self::FreeBSDFull   => "freebsd-full",
-            Self::IOSAppSandbox => "ios-app-sandbox",
-            Self::AndroidSELinux=> "android-selinux",
-            Self::IllumosZone   => "illumos-zone",
-            Self::DarwinRlimit  => "darwin-rlimit",
-        })
-    }
-}

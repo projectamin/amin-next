@@ -10,6 +10,11 @@ our %FILTERS;
 our %RUNTIME_ALLOWED;
 my $CATALOG_FROZEN = 0;
 
+# Escape hatch: when true, every machine-spec'd filter is stacked statically
+# exactly as before lazy gating existed.  Operational off-switch only —
+# t/48 uses it to compare gated output against the legacy full chain.
+our $DISABLE_LAZY_CHAIN = 0;
+
 INIT { $CATALOG_FROZEN = 1 }
 
 sub register ($pkg, $class, %meta) {
@@ -86,6 +91,157 @@ sub _generator_class ($g) {
     return $@ ? undef : $g->{class};
 }
 
+# ── Lazy chain composition ─────────────────────────────────────────────
+# The machine spec declares every filter the machine *supports*, with its
+# position and element/name binding.  _build_chain composes the base graph
+# from what must always be present:
+#   • all PERMANENT-position filters            (trust boundary — TR-2.1),
+#   • element-agnostic spec filters             (no event can gate them —
+#                                                 zcap/net/billing/…),
+#   • all runtime-registered (--with-*) filters (explicit user intent).
+# Every remaining spec filter (element-scoped, non-permanent) becomes a
+# candidate of its position; that position gets a _LazyGate which splices
+# the candidate in as its element's start_element flows through, and un-splices
+# it after the matching end_element.  No pre-scan, no DOM: the profile itself
+# is the decision signal — the same mechanism serves Dispatcher->run and
+# event-fed Dispatchers alike.
+package Amin::Machine::Dispatcher::_LazyGate;
+use v5.38; use warnings; use utf8;
+use experimental 'signatures';
+
+use Class::Tiny qw(Handler Log Mode candidates), {
+    active => sub { [] },      # [{ node, d, class, doc }] — currently spliced instances
+    depth  => sub { 0 },       # shadow element depth for pop bookkeeping
+};
+
+# Remember the un-spliced child so window="document" cleanup can restore it.
+sub BUILD ($self, $args) { $self->{_base_child} = $self->{Handler} }
+
+# The gate deliberately does NOT inherit XML::SAX::Base.  Dynamic mid-stream
+# handler swaps (the splice) go through XML::SAX::Base's event-dispatch caches,
+# which are resolved from the construction-time handler — after a splice those
+# caches route events along stale paths (observed: starts bypass the newly
+# spliced filter, ends reach it).  Instead the gate does what the Dispatcher
+# itself does: direct, per-event dispatch to the CURRENT child held in
+# {_child}.  Every forwarded event set below matches the Dispatcher's `*$m`
+# forwarder list exactly; anything else falls back to AUTOLOAD.
+
+# (element, ns, name-attr) extraction for one SAX event; name picked from any
+# `name` attribute form ({}name or {http://…}name).
+sub _event_key ($el) {
+    my $ln = $el->{LocalName} // $el->{Name} // '';
+    my $ns = $el->{NamespaceURI} // '';
+    my ($name, $attrs) = (undef, $el->{Attributes} // {});
+    for my $k (keys %$attrs) {
+        (my $base = $k) =~ s/^\{[^}]*\}//;
+        if ($base eq 'name') { $name = $attrs->{$k}{Value}; last }
+    }
+    return ($ln, $ns, $name);
+}
+
+sub start_element ($self, $el) {
+    my ($ln, $ns, $name) = _event_key($el);
+    $self->depth($self->depth + 1);
+    if (length $ln) {
+        CAND: for my $c ($self->candidates->@*) {
+            next unless ($c->{meta}{element} // '') eq $ln;
+            my $cns = $c->{meta}{namespace};
+            next if defined $cns && length $cns && $cns ne $ns;
+            # Verb matching mirrors how the STATIC chain matches: command
+            # classes carry their own verb as a class-level `sub name`
+            # (MachineSpec deliberately never copies the spec's name=
+            # attribute into meta — the class is the source of truth).
+            #   sub name → non-empty verb : event name attr must equal it
+            #   sub name → ''  (Exec/Spawn/Signal): matches ANY name attr
+            #   no sub name (Sandbox/UCC/AI/Bitcache/…)  : element-only
+            my $verb;
+            {
+                local $@;
+                if (defined(&{"$c->{class}::name"})) {
+                    $verb = eval { $c->{class}->name };
+                }
+            }
+            if (defined $verb && length $verb) {
+                next unless defined $name && length $name && $name eq $verb;
+            }
+            my $cn = $c->{meta}{name};   # ≈ always undef (see comment above)
+            # One live instance per candidate: a nested same-key element is
+            # still inside the active instance's capture scope (this mirrors
+            # the static chain, where exactly one instance exists).
+            next if grep { $_->{class} eq $c->{class} } $self->active->@*;
+            # window="document" candidates (spec meta) claim the whole
+            # document once triggered: they stay spliced until end_document
+            # — filters whose state machine spans beyond their trigger
+            # element (ProfileValidator validates across stages +
+            # end_document).
+            my $doc = (($c->{meta}{window} // '') eq 'document') ? 1 : 0;
+            (my $file = "$c->{class}.pm") =~ s{::}{/}g;
+            unless ($c->{class}->can('new')) {
+                my $ok = eval { require $file; 1 };
+                next unless $ok;
+            }
+            my $rest = $self->{Handler} // return;
+            my $new = $c->{class}->new(
+                Handler => $rest, Log => $self->Log, Mode => $self->Mode,
+                Name    => $cn,   Element => $c->{meta}{element});
+            $new->can('name')    && $new->name($cn);
+            $new->can('element') && $new->element($c->{meta}{element});
+            $self->{Handler} = $new;          # splice BEFORE forwarding
+            push $self->active->@*, { node => $new, d => $self->depth, class => $c->{class}, doc => $doc };
+            last CAND;
+        }
+    }
+    my $c = $self->{Handler} or return;         # direct dispatch — no XML::SAX::Base
+    return $c->start_element($el);
+}
+
+sub end_element ($self, $el) {
+    my $c = $self->{Handler};                    # direct dispatch to the CURRENT child
+    my $ret = $c ? $c->end_element($el) : undef; # instance sees its own close first
+    my $ln = $el->{LocalName} // $el->{Name} // '';
+    return $ret unless length $ln;
+    my $d = $self->depth - 1;
+    $self->depth($d);
+    my $st = $self->active;
+    if (@$st && !$st->[-1]{doc} && $st->[-1]{d} == $d + 1) {
+        my $top = pop @$st;
+        $self->{Handler} = $top->{node}->Handler;   # un-splice
+    }
+    return $ret;
+}
+
+# Document-window cleanup: document-scope candidates un-splice at the end of
+# the document; the gate returns to its base child thereafter.
+sub end_document ($self, @a) {
+    my $c = $self->{Handler};
+    my $ret = $c ? $c->end_document(@a) : undef;
+    @{$self->active} = ();
+    $self->{Handler} = $self->{_base_child};
+    return $ret;
+}
+
+# Direct forwarders for the remaining Dispatcher event set (no XML::SAX::Base
+# machinery — see the class-header comment for why caching breaks splices).
+sub start_document       ($self, @a) { my $c = $self->{Handler}; return $c ? $c->start_document(@a) : undef }
+sub end_document         ($self, @a) { my $c = $self->{Handler}; return $c ? $c->end_document(@a)   : undef }
+sub characters           ($self, $d) { my $c = $self->{Handler}; return $c ? $c->characters($d)     : undef }
+sub processing_command   ($self, @a) { my $c = $self->{Handler}; return $c ? $c->processing_command(@a) : undef }
+sub comment              ($self, @a) { my $c = $self->{Handler}; return $c ? $c->comment(@a)            : undef }
+sub ignorable_whitespace ($self, @a) { my $c = $self->{Handler}; return $c ? $c->ignorable_whitespace(@a) : undef }
+
+# Exotic driver calls (set_document_locator, …) follow the current child too.
+sub AUTOLOAD {
+    my $self = shift;
+    (my $m = our $AUTOLOAD) =~ s/.*:://;
+    return if $m eq 'DESTROY';
+    my $c = $self->{Handler} // return undef;
+    return $c->$m(@_) if $c->can($m);
+    return undef;
+}
+
+package Amin::Machine::Dispatcher;   # resume outer package after _LazyGate
+use experimental 'signatures';
+
 for my $m (qw(start_document end_document
               start_element end_element characters
               processing_command comment ignorable_whitespace)) {
@@ -103,6 +259,7 @@ sub run ($pkg_or_self, %o) {
     my $Log       = $o{Log}     // _instantiate_log($spec->{log})
                     // do { require Amin::Log::Standard; Amin::Log::Standard->new(stderr => 0) };
     my $gen_class = _generator_class($spec->{generator}) // 'XML::LibXML::SAX';
+
     my $self;
     if (ref($pkg_or_self)) { $self = $pkg_or_self; $self->{Mode} = $mode;
         $self->{Handler} //= $Handler; $self->{Log} //= $Log;
@@ -121,7 +278,7 @@ sub run ($pkg_or_self, %o) {
     return;
 }
 
-sub _build_chain ($h, $l, $mode, $late_enable = {}, $allowed = undef, $spec_filters = undef) {
+sub _build_chain ($h, $l, $mode, $late_enable = {}, $allowed = undef, $spec_filters = undef, $realized = undef) {
     my $head = $h;
     # Filters are never auto-loaded; they are always machine-spec declared.
     # When _build_chain is called directly without a spec (e.g. from tests),
@@ -134,16 +291,36 @@ sub _build_chain ($h, $l, $mode, $late_enable = {}, $allowed = undef, $spec_filt
         $allowed //= $default->{allowed};
     }
     my %by_p;
+    my %cands_by_p;
     if ($spec_filters && @$spec_filters) {
         for my $f (@$spec_filters) {
             my $p = $f->{meta}{position} // 'middle';
-            push @{ $by_p{$p} }, $f;
+            my $el = $f->{meta}{element};
+            # Partition (see lazy-composition block above): element-scoped,
+            # non-permanent spec filters become gate candidates; permanent and
+            # element-agnostic filters are always in the graph statically.
+            # Candidate classes load here too — code and tests rely on statics
+            # of loaded filter classes (registry / current_scope_attrs — see
+            # Placement.pm and Spawn), and a gated instance needs its class.
+            if (!$DISABLE_LAZY_CHAIN && defined $el && length $el && $p ne 'permanent') {
+                (my $file = "$f->{class}.pm") =~ s{::}{/}g;
+                # Capture per-require: a stale $@ here would poison the
+                # instantiate loop's own guard below (next-if-$@).
+                my $ok = eval { require $file; 1 };
+                next unless $ok;    # unloadable class was never in the static chain either
+                push @{ $cands_by_p{$p} }, $f;
+            }
+            else {
+                push @{ $by_p{$p} }, $f;
+            }
         }
     }
     # Merge runtime-registered filters (%FILTERS) — covers --with-begin /
     # --with-middle / --with-end CLI registration and any register() calls
     # after INIT.  Only include those present in $allowed (or all when no
-    # allowlist is in effect).
+    # allowlist is in effect).  Runtime entries are tagged so the chain
+    # loop below never applies profile-scoped selection to them:
+    # --with-* registration is explicit user intent, always honored.
     for my $pos (qw(end late middle begin permanent)) {
         my $filters = $FILTERS{$pos} // [];
         for my $f (@$filters) {
@@ -158,6 +335,22 @@ sub _build_chain ($h, $l, $mode, $late_enable = {}, $allowed = undef, $spec_filt
     # the outermost of that position.  permanent ends up outermost overall
     # (trust boundary sees events first — TR-2.1).
     for my $pos (qw(end late middle begin permanent)) {
+        # Position gate — created BEFORE the region's static members, so it
+        # sits at the region's INNERMOST boundary (below them, above the next
+        # deeper position).  This keeps canonical ordering and the trust
+        # boundary intact: the outermost static member of each region (e.g.
+        # Auth::ZCap for begin) remains the region's outermost node, and
+        # begin-region candidates splice in BELOW the auth/HW filters rather
+        # than ahead of them (TR-2.1).  Start/end events crossing the gate
+        # splice in / un-splice the region's element-scoped candidates.
+        if (!$DISABLE_LAZY_CHAIN && (my $cands = $cands_by_p{$pos})) {
+            $head = Amin::Machine::Dispatcher::_LazyGate->new(
+                Handler    => $head,
+                Log        => $l,
+                Mode       => $mode,
+                candidates => $cands,
+            );
+        }
         my $filters = $by_p{$pos} // [];
         for my $f (reverse @$filters) {
             next if $pos eq 'late' && (
@@ -165,8 +358,10 @@ sub _build_chain ($h, $l, $mode, $late_enable = {}, $allowed = undef, $spec_filt
                 ($f->{class} =~ /::UI::/  && !$late_enable->{ui}) ||
                 ($f->{class} =~ /::AI::Graph/ && !$late_enable->{ai}));
             (my $file = "$f->{class}.pm") =~ s{::}{/}g;
-            eval { require $file } unless $f->{class}->can('new');
-            next if $@;
+            unless ($f->{class}->can('new')) {
+                my $ok = eval { require $file; 1 };   # locally scoped: no stale $@ into the loop
+                next unless $ok;
+            }
             $head = $f->{class}->new(
                 Handler => $head, Log => $l, Mode => $mode,
                 Name    => $f->{meta}{name},

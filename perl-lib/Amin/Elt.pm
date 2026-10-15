@@ -9,7 +9,9 @@ use Class::Tiny qw(name element Handler Log Mode),
 { _cap => 0, _matched_name => undef, attrs => {}, params => [], flags => [],
   env => {}, dir => undef, _buf => '' };
 
+# See end_element for why recursion warnings are scoped off here.
 sub start_element ($self, $el) {
+    no warnings 'recursion';
     my $want_el = $self->element // '';
     my $ln      = $el->{LocalName} // '';
     my $ns_ok   = _mine($el);
@@ -36,10 +38,21 @@ sub start_element ($self, $el) {
     return $self->SUPER::start_element($el);
 }
 
-sub characters ($self, $d) { $self->{_buf} .= $d->{Data} // '' if $self->{_cap};
+# See end_element for why recursion warnings are scoped off here.
+sub characters ($self, $d) { no warnings 'recursion';
+    $self->{_buf} .= $d->{Data} // '' if $self->{_cap};
     return $self->SUPER::characters($d); }
 
+# The machine-spec'd filter chain can be ~290 handlers deep when full (the
+# profile-scoped selection in Dispatcher keeps everyday chains much shallower),
+# so every event recurses back through XML::SAX::Base once per hop.  Past 100 frames of
+# the same named sub, Perl fires its deep-recursion heuristic on these SUPER::
+# hops.  That heuristic is meant for data-driven runaway recursion; this is
+# linear pass-through over a chain whose length is declared in machine_spec.xml,
+# so silence it in exactly the two lexical scopes that make the hops — and
+# nowhere else in this file.
 sub end_element ($self, $el) {
+    no warnings 'recursion';
     my ($ns, $ln) = ($el->{NamespaceURI}//'', $el->{LocalName});
 
     if ($self->{_cap} && $ns eq NS()) {

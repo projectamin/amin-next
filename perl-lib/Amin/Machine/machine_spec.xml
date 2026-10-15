@@ -6,7 +6,11 @@
   <log class="Amin::Log::Standard" />
   <filter class="Amin::Auth::ZCap" position="begin" namespace="http://projectamin.org/ns/2026/" />
   <filter class="Amin::Cond::OS" position="begin" namespace="http://projectamin.org/ns/2026/" />
-  <filter class="Amin::Filter::Init::ProfileValidator" position="begin" element="stage" namespace="http://projectamin.org/ns/2026/" />
+  <!-- window= is chain-retention only: how long a lazily-spliced filter
+       stays in the event chain (default: until its element closes;
+       "document": until end_document).  No tree/DOM construction — the
+       stream remains event-by-event end to end. -->
+  <filter class="Amin::Filter::Init::ProfileValidator" position="begin" element="stage" window="document" namespace="http://projectamin.org/ns/2026/" />
   <filter class="Amin::UCC::General" position="begin" element="transaction" namespace="http://projectamin.org/ns/ucc/1" />
   <filter class="Amin::UCC::Credit" position="begin" element="lc" namespace="http://projectamin.org/ns/ucc/1" />
   <filter class="Amin::AI::Gate" position="begin" element="request" namespace="http://projectamin.org/ns/ai/1" />

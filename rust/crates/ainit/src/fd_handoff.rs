@@ -97,7 +97,9 @@ pub fn send_handoff(stream: &UnixStream, fds: &HandoffFds) -> Result<()> {
         msg_iov:        &msg_iov as *const libc::iovec as *mut libc::iovec,
         msg_iovlen:     1,
         msg_control:    cmsg_buf.as_ptr() as *mut libc::c_void,
-        msg_controllen: cmsg_space,
+        // Darwin's msghdr declares msg_controllen as socklen_t (u32); Linux
+        // declares it size_t (usize) — `as _` infers the correct field type.
+        msg_controllen: cmsg_space as _,
         msg_flags:      0,
     };
     // SAFETY: all pointers are valid for the duration of the call.
@@ -126,7 +128,8 @@ pub fn recv_handoff(stream: &UnixStream) -> Result<HandoffFds> {
         msg_iov:        &mut msg_iov as *mut libc::iovec,
         msg_iovlen:     1,
         msg_control:    cmsg_buf.as_mut_ptr() as *mut libc::c_void,
-        msg_controllen: cmsg_buf.len(),
+        // See send_handoff: socklen_t on darwin, size_t on linux.
+        msg_controllen: cmsg_buf.len() as _,
         msg_flags:      0,
     };
     let n = unsafe { libc::recvmsg(stream.as_raw_fd(), &mut msghdr as *mut libc::msghdr, 0) };
