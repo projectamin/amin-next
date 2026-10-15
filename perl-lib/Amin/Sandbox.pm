@@ -192,7 +192,15 @@ sub build_manifest_for ($pkg_or_self, $scope_attrs, $argv_ref, $extra = {}) {
         $m{sb_name} = $sb_name if defined $sb_name;
     }
     for my $k (qw(cpu_max memory_max memory_high pids_max io_max seccomp_bpf_base64)) {
-        $m{$k} = $sb->{$k} if exists $sb->{$k} && defined $sb->{$k} && length $sb->{$k};
+        next unless exists $sb->{$k} && defined $sb->{$k} && length $sb->{$k};
+        # Manifest schema (aminexec SandboxManifest): only pids_max is a JSON
+        # u32; every other knob is a controller string. XML attributes arrive
+        # as Perl strings, so coerce the numeric one HERE — a non-numeric
+        # pids_max intentionally stays a string so the Rust schema layer
+        # rejects it instead of silently coercing (fail-closed).
+        $m{$k} = ($k eq 'pids_max' && $sb->{$k} =~ /\A\d+\z/)
+            ? 0 + $sb->{$k}
+            : $sb->{$k};
     }
     if (exists $sb->{landlock_ro} && defined $sb->{landlock_ro} && length $sb->{landlock_ro}) {
         $m{landlock_ro} = [grep { defined && length } split /:/, $sb->{landlock_ro}];

@@ -148,7 +148,9 @@ fn sandbox_stdin_main() -> anyhow::Result<()> {
     // ---- Step 3: platform backend + all three setup calls in order ----------------
     #[cfg(target_os = "linux")]
     let backend = aminexec::platform::linux::Backend;
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(target_os = "macos")]
+    let backend = aminexec::platform::darwin::Backend;
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
     let backend = aminexec::platform::posix::Backend;
 
     // cgroup first (we must attach current pid before landlock restricts /sys)

@@ -8,15 +8,20 @@ use Amin::Cond::OS;
 use Amin qw(NS);
 require Amin::Test::StreamCapture;
 
-my @BRANCHES = (
-    ['linux',       1,  'always pass linux  on $^O=linux'],
-    ['freebsd',     0,  'always drop freebsd on linux host'],
-    ['openbsd',     0,  'drop openbsd'],
-    ['darwin',      0,  'drop darwin (macOS)'],
-    ['illumos',     0,  'drop illumos/solaris'],
-    ['netbsd',      0,  'drop netbsd'],
-    ['posix',       1,  'posix passes on all hosts'],
-);
+# Host-OS resolution mirrors Amin::Cond::OS::_resolve_os (drop 'gnu', map
+# $^O value → branch tag). AMIN_OSTYPE override is cleared so the suite
+# exercises the real host OS, not an environment-dependent one.
+delete $ENV{AMIN_OSTYPE};
+my %VALUE2TAG = (linux => 'linux', freebsd => 'freebsd', openbsd => 'openbsd',
+                 darwin => 'darwin', ios => 'ios',  solaris => 'illumos',
+                 netbsd => 'netbsd', android => 'android');
+my $HOST_RAW = do { my $o = $^O; $o =~ s/gnu//; $o };
+my $HOST = $VALUE2TAG{$HOST_RAW} // 'posix';
+
+my @BRANCHES = map {
+    [ $_, ($_ eq $HOST ? 1 : 0), "always " . ($_ eq $HOST ? "pass" : "drop") . " $_ on \$^O=$HOST" ]
+} qw(linux freebsd openbsd darwin illumos netbsd);
+push @BRANCHES, ['posix', 1, 'posix passes on all hosts'];
 
 sub run_case ($tag, $inner_handler) {
     my $c = Amin::Cond::OS->new(
@@ -56,24 +61,31 @@ for my $case (@BRANCHES) {
 my $cap = Amin::Test::StreamCapture->new;
 my $c = Amin::Cond::OS->new(Handler => $cap,
     Log => Amin::Log::Standard->new(stderr=>0));
-$c->start_element({ NamespaceURI => NS(), LocalName => 'linux', Prefix=>'amin',
-                    Name => 'amin:linux', Attributes => {} });
+
+# Outer branch is the host OS tag; inner branch is guaranteed non-host, so
+# the predicate (outer passes, nested inner is dropped) is host-independent.
+my $outer = $HOST;
+my @inner_candidates = grep { $_ ne $HOST } qw(linux freebsd openbsd darwin illumos netbsd);
+my $inner = $inner_candidates[0] // 'freebsd';
+
+$c->start_element({ NamespaceURI => NS(), LocalName => $outer, Prefix=>'amin',
+                    Name => "amin:$outer", Attributes => {} });
   $c->start_element({ %{e('x')}, LocalName => 'outer_pass' });
   $c->end_element  ({ %{e('x')}, LocalName => 'outer_pass' });
-  $c->start_element({ NamespaceURI => NS(), LocalName => 'freebsd',
-                      Prefix=>'amin', Name => 'amin:freebsd', Attributes => {} });
+  $c->start_element({ NamespaceURI => NS(), LocalName => $inner,
+                      Prefix=>'amin', Name => "amin:$inner", Attributes => {} });
     $c->start_element({ %{e('x')}, LocalName => 'inner_drop' });
     $c->end_element  ({ %{e('x')}, LocalName => 'inner_drop' });
-  $c->end_element  ({ NamespaceURI => NS(), LocalName => 'freebsd',
-                      Prefix=>'amin', Name => 'amin:freebsd' });
-$c->end_element  ({ NamespaceURI => NS(), LocalName => 'linux',
-                    Prefix=>'amin', Name => 'amin:linux' });
+  $c->end_element  ({ NamespaceURI => NS(), LocalName => $inner,
+                      Prefix=>'amin', Name => "amin:$inner" });
+$c->end_element  ({ NamespaceURI => NS(), LocalName => $outer,
+                    Prefix=>'amin', Name => "amin:$outer" });
 
 sub e { +{ Name => "amin:$_[0]", Prefix => 'amin', NamespaceURI => NS(),
            Attributes => {} } }
 
 my @forwarded_names = map { $_->[1]{LocalName} // () } grep { $_->[0] eq 'start_element' } $cap->captured->@*;
-is(\@forwarded_names, ['linux', 'outer_pass'],
-   'nested bypass: linux tag + outer_pass pass; nested freebsd + inner_drop dropped');
+is(\@forwarded_names, [$outer, 'outer_pass'],
+   "nested bypass: $outer tag + outer_pass pass; nested $inner + inner_drop dropped");
 
 done_testing;

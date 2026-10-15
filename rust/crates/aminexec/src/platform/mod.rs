@@ -66,6 +66,9 @@ pub enum BackendKind {
     AndroidSELinux,
     /// Illumos / Solaris derivative: zone(5), privileges(5), priv_drop.
     IllumosZone,
+    /// macOS: per-process rlimits (cgroup-equivalent tier, Phase 1 of
+    /// docs/darwin-sandbox-plan.md). Seatbelt joins in Phase 2.
+    DarwinRlimit,
 }
 
 /// Kernel-level filesystem allow-list + cgroup limits + syscall BPF filter.
@@ -167,6 +170,7 @@ pub trait AuthBackend    { /* see crate::exec  */ }
 #[cfg(target_os = "illumos")] pub mod illumos;
 #[cfg(target_os = "ios")]     pub mod ios;
 #[cfg(target_os = "android")] pub mod android;
+#[cfg(target_os = "macos")]   pub mod darwin;
 pub mod posix;
 
 /// Return the best available backend kind on this target.
@@ -177,6 +181,7 @@ pub fn default_backend() -> BackendKind {
     #[cfg(target_os = "illumos")] { return BackendKind::IllumosZone;   }
     #[cfg(target_os = "ios")]     { return BackendKind::IOSAppSandbox; }
     #[cfg(target_os = "android")] { return BackendKind::AndroidSELinux;}
+    #[cfg(target_os = "macos")]   { return BackendKind::DarwinRlimit; }
     #[allow(unreachable_code)] { BackendKind::PosixMinimal }
 }
 
@@ -189,6 +194,7 @@ impl fmt::Display for BackendKind {
             Self::IOSAppSandbox => "ios-app-sandbox",
             Self::AndroidSELinux=> "android-selinux",
             Self::IllumosZone   => "illumos-zone",
+            Self::DarwinRlimit  => "darwin-rlimit",
         })
     }
 }
