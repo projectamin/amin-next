@@ -58,7 +58,7 @@ fn main() -> anyhow::Result<()> {
     // false, so we fall through to the normal userland backend path).
     #[cfg(target_os = "linux")]
     {
-        let pid = unsafe { libc::getpid() };
+        let pid = std::process::id();
         if pid == 1 {
             return pid1_entry();
         }
@@ -164,10 +164,19 @@ fn sandbox_stdin_main() -> anyhow::Result<()> {
         ) {
             match e {
                 SandboxError::MissingAbi(m) => {
-                    // NFR-SB-4 fail-closed: missing ABI → EXPLICIT rc=-4097 status.
                     child_err_and_exit(-4097i32, &format!("sandbox_missing_abi: {m}"));
                 }
-                other => child_err_and_exit(6, &format!("cgroup_apply: {other}")),
+                other => {
+                    let hint = match &other {
+                        SandboxError::Io(io) => match io.raw_os_error() {
+                            Some(libc::EACCES) | Some(libc::EPERM) =>
+                                " (no cgroup v2 delegation for this uid; run as root or enable Delegate=yes)",
+                            _ => "",
+                        },
+                        _ => "",
+                    };
+                    child_err_and_exit(6, &format!("cgroup_apply: {other}{hint}"));
+                }
             }
         }
         if let Err(e) = backend.cgroup_attach_current(name) {
@@ -235,12 +244,11 @@ fn sandbox_stdin_main() -> anyhow::Result<()> {
     // the landlock_enforce call entirely (empty ro/rw lists).
     #[cfg(target_os = "linux")]
     {
-        // PR_SET_NO_NEW_PRIVS = 38, arg2..4 = 0
-        let pr = unsafe { libc::prctl(libc::PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) };
-        if pr < 0 {
-            // prctl failure is fatal for any sandbox (unsandboxed fallback not permitted per NFR-SB-4).
+        // PR_SET_NO_NEW_PRIVS=1 first (before landlock/seccomp).  nix wraps
+        // prctl(2) safely; failure is fatal — unsandboxed fallback not permitted.
+        if let Err(e) = nix::sys::prctl::set_no_new_privs() {
             child_err_and_exit(-4097i32,
-                &format!("sandbox_missing_abi: prctl PR_SET_NO_NEW_PRIVS failed (os error {})", std::io::Error::last_os_error()));
+                &format!("sandbox_missing_abi: prctl PR_SET_NO_NEW_PRIVS failed: {e}"));
         }
     }
 

@@ -28,6 +28,12 @@ http                  = "1"
 anyhow                = "1"
 thiserror             = "1"
 
+# ── Safe kernel-ABI wrappers (aminexec Linux backend) ────────────────────
+nix                   = { version = "0.29", default-features = false, features = ["sched", "mman", "process", "signal"] }
+rtnetlink             = "0.13"
+bytemuck              = { version = "1", features = ["derive"] }
+futures               = "0.3"
+
 # ── Observability ────────────────────────────────────────────────────────
 tracing               = "0.1"
 tracing-subscriber    = { version = "0.3", features = ["env-filter"] }

@@ -4,10 +4,13 @@
 //! `/dev/shm/amin/mesh_state_v1` using std::fs + libc mmap.
 //! Byte layout is locked with `Amin::Discovery::Mesh` Perl parser.
 
-use std::fs::{File, OpenOptions, remove_file};
+// The linux-gated mlock(2) advisory pin uses raw libc FFI; same precedent
+// as platform/linux.rs and main.rs (`#![allow(unsafe_code)]`).
+#![allow(unsafe_code)]
+
+use std::fs::{File, OpenOptions};
 use std::io::Error as IoError;
 use std::os::unix::fs::OpenOptionsExt;
-use std::os::unix::io::AsRawFd;
 use std::path::PathBuf;
 
 /// 64B header at offset 0..63
@@ -52,7 +55,7 @@ pub fn write_bootstrap_header(
     }
 
     // Open file: rw------- (0600)
-    let mut f: File = OpenOptions::new()
+    let f: File = OpenOptions::new()
         .read(true)
         .write(true)
         .create(true)
@@ -87,13 +90,6 @@ pub fn write_bootstrap_header(
 
     f.sync_all()?;
     drop(f);
-
-    // Safety: advisory mlock to avoid pageout (best-effort ignore EPERM)
-    #[cfg(target_os = "linux")]
-    {
-        let _ = unsafe { libc::mlock(region.as_ptr() as *const libc::c_void, region.len()) };
-    }
-    let _ = &region; // suppress unused mlock warning on non-linux
 
     Ok(())
 }
@@ -240,6 +236,7 @@ pub fn read_region(path: &std::path::Path) -> Result<Vec<u8>, IoError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs::remove_file;
     use std::path::PathBuf;
 
     fn scratch_path(suffix: &str) -> PathBuf {
