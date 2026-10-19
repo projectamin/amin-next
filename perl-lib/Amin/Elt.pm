@@ -6,8 +6,8 @@ use parent 'XML::SAX::Base';
 use Amin     qw(NS);
 
 use Class::Tiny qw(name element Handler Log Mode),
-{ _cap => 0, _matched_name => undef, attrs => {}, params => [], flags => [],
-  env => {}, dir => undef, _buf => '' };
+{ _cap => 0, _matched_name => undef, attrs => sub { {} }, params => sub { [] },
+  flags => sub { [] }, env => sub { {} }, dir => undef, _buf => '' };
 
 # See end_element for why recursion warnings are scoped off here.
 sub start_element ($self, $el) {

@@ -6,7 +6,7 @@ use Amin qw(NS);
 use Amin::Handler::Writer;  # for indentation-equivalent stack mirror (decoder side)
 use Class::Tiny qw(fh autoflush), {
     buf     => '',
-    stack   => [],
+    stack   => sub { [] },   # CODE default: non-CODE refs are one shared ref per class
     last_ns => 0+0,
     wrote_magic => 0,
 };

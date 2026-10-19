@@ -2,7 +2,7 @@ package Amin::Filter::UI::SwiftUIView;
 use v5.38; use warnings; use utf8; use experimental 'signatures';
 use parent 'XML::SAX::Base';
 
-use Class::Tiny qw(Handler Log Mode Name Element), { stack => [] };
+use Class::Tiny qw(Handler Log Mode Name Element), { stack => sub { [] } };
 
 sub _attr ($e, $name) { ($e->{Attributes}{"{}${name}"} // {})->{Value} // '' }
 

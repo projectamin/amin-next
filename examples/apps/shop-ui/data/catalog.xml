@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Demo catalogue — memory-only first pass: loaded into the process once
+     at boot (Amin::AXA::App), never written back. -->
+<shop:catalog xmlns:shop="urn:projectamin:example:shop">
+  <shop:product sku="sku-1" name="Amin Ceramic Mug"        price="12.99" stock="42"/>
+  <shop:product sku="sku-2" name="SAX Filter Tee"          price="24.50" stock="17"/>
+  <shop:product sku="sku-3" name="Namespace Stickers (12)" price="4.99"  stock="120"/>
+  <shop:product sku="sku-4" name="ML-DSA-87 Enamel Pin"    price="7.25"  stock="8"/>
+  <shop:product sku="sku-5" name="Profile Round-trip Poster" price="18.00" stock="0"/>
+</shop:catalog>

@@ -195,7 +195,7 @@ echo "---"
 '''
 
 [tasks.app]
-description = "Render a sample Amin 'application' profile via the new dispatcher"
+description = "Serve the shop-ui example app over HTTP (AXA) — http://localhost:8787 (v4+v6 loopback)"
 run = '''
-perl -I perl-lib bin/amin render examples/apps/shop-ui/profile.xml
+exec perl -I perl-lib bin/amin axa serve examples/apps/shop-ui --listen localhost:8787
 '''

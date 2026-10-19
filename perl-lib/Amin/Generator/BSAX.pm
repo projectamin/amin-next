@@ -7,7 +7,7 @@ use Amin::Util::Fold qw(_flags _vals);  # re-use allow-list contracts
 use Class::Tiny qw(Handler), {
     last_ns => 0+0,
     last_ns_uri => '',   # set ONLY if last_ns == NS_ESCAPE (custom Corp URI)
-    stack   => [],
+    stack   => sub { [] },
 };
 # Mirrors of Amin::Handler::BSAX constants — MUST stay 1:1 with Handler::BSAX
 # and rust/crates/bsax/src/vocab.rs BY_ID slice.

@@ -77,3 +77,10 @@ Thumbs.db
 .COMMIT_MSG.md
 .COMMIT_MSG.md.bak
 *.local.md
+
+# ── AXA session store (runtime state, never source) ────────────────────
+# SQLite session/cart db written by `bin/amin axa serve`; lives beside the
+# app bundle and holds only live session data.
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm

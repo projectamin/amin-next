@@ -4,7 +4,7 @@ use parent 'XML::SAX::Base';
 
 use IPC::Run  qw(harness start finish);
 use Class::Tiny qw(slab_path bctool_path Handler Log Mode Name Element),
-    { _capturing => 0, _cap_attrs => {}, _buf => '' };
+    { _capturing => 0, _cap_attrs => sub { {} }, _buf => '' };
 
 my $BC_NS   = 'http://projectamin.org/ns/bc/';
 my $AMIN_NS = 'http://projectamin.org/ns/2026/';

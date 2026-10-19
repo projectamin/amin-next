@@ -44,6 +44,13 @@ binmode STDERR, ':encoding(UTF-8)';
 our $VERSION = '3.0.0-bootstrap';
 my ($LEGACY, $STREAM_OPT, $MAP_OUT, $UI_OS) = (0, 1, 'svg', 'tty');
 my ($MACHINE_SPEC);
+# Default to `localhost` (both loopback families), not a bare IPv4 literal:
+# localhost resolves ::1 first, so a v4-only listener stalls browsers.
+my $LISTEN = 'localhost:8787';
+# Starman worker pool size and per-connection read timeout.
+# read-timeout is the window a SILENT connection holds a worker, so it bounds
+# how long a preconnect can delay other clients once the pool is busy.
+my ($WORKERS, $READ_TIMEOUT) = (4, 2);
 my (@INC_EXTRA, @W_PERM, @W_BEG, @W_MID, @W_LATE, @W_END);
 GetOptions(
     'legacy-processing!' => \$LEGACY,
@@ -51,6 +58,9 @@ GetOptions(
     'out=s'              => \$MAP_OUT,
     'os=s'               => \$UI_OS,
     'machine-spec=s'     => \$MACHINE_SPEC,
+    'listen=s'           => \$LISTEN,
+    'workers=i'          => \$WORKERS,
+    'read-timeout=i'     => \$READ_TIMEOUT,
     'inc=s@'             => \@INC_EXTRA,
     'with-permanent=s'   => sub { push @W_PERM, split /,/, $_[1] },
     'with-begin=s'       => sub { push @W_BEG,  split /,/, $_[1] },
@@ -88,6 +98,7 @@ my $STREAM = $LEGACY ? 0 : $STREAM_OPT;
 my $MODE = { render => 1, dryrun => 1, run => 1, app => 1, map => 1, ui => 1, motd => 1 };
 sub usage ($exit = 2) {
     say STDERR "Usage: $0 [--legacy-processing|--no-stream] <render|dryrun|run|app|map|ui|motd> [<path>] [--out=svg|dot|xml] [--os=ios|android|html|tty]";
+    say STDERR "       $0 axa serve <app-dir> [--listen host:port] [--workers N]   persistent HTTP server (AXA)";
     say STDERR "    --legacy-processing   (alias for --no-stream) buffer and emit the full XML";
     say STDERR "                          after parsing (traditional Amin behaviour) instead of";
     say STDERR "                          streaming SAX events live to stdout (the default)";
@@ -102,6 +113,58 @@ sub usage ($exit = 2) {
     say STDERR "    --with-late=LIST      classes at late position (UI aggregation / billing report";
     say STDERR "    --with-end=LIST       classes at end position (fanout / multi-handler)";
     exit $exit;
+}
+
+# ── AXA: web layer — persistent HTTP server for an app bundle ──────────
+# The whole boot cost (spec parse, bundle load, warm-up chain build) is
+# paid once here; every request reuses the injected spec (plan §4.8).
+if (($ARGV[0] // '') eq 'axa') {
+    shift @ARGV;
+    my $subcmd = shift(@ARGV) // usage(2);
+    $subcmd eq 'serve' or die "Unknown axa subcommand '$subcmd' (available: serve)\n";
+    my $dir = shift(@ARGV) // usage(2);
+    -d $dir or die "App path must be a directory: $dir\n";
+    my ($host, $port) = $LISTEN =~ /^(.+):(\d+)$/
+        or die "--listen must be host:port (got '$LISTEN')\n";
+    require Amin::AXA::PSGI;
+    require Amin::AXA::Store::SQLite;
+
+    # Sessions live off the heap.  Starman preforks, and a forked worker gets
+    # its own copy of any in-process hash — so an in-memory cart would diverge
+    # between requests (request A lands on worker 1, request B on worker 2 and
+    # B has never seen A's write).  The SQLite adapter closes per worker and
+    # reconnects on first use, after the fork.
+    my $db = $ENV{AXA_STORE} // "$dir/axa-store.sqlite";
+    my $store = Amin::AXA::Store::SQLite->new(path => $db);
+
+    # stream => 1: the response goes to the socket as elements are generated
+    # (plan §4.8), rather than buffering the whole document first.
+    my $app = Amin::AXA::PSGI->app(app_dir => $dir, store => $store, stream => 1);
+
+    # Starman parses --listen by splitting on ':', so an IPv6 *literal* like
+    # [::1]:8787 breaks (starman issue #149).  Passing the symbolic hostname
+    # is what works: Net::Server resolves it to both ::1 and 127.0.0.1 and
+    # binds each, which preserves the dual-loopback behaviour browsers need —
+    # localhost resolves ::1 first, so v4-only stalls them.
+    require Plack::Handler::Starman;
+    say STDERR "[axa] serving $dir — Starman, $WORKERS workers, store=$db, streaming";
+    say STDERR "[axa] listening on http://$LISTEN (Ctrl-C to stop)";
+    Plack::Handler::Starman->new(
+        listen           => [$LISTEN],
+        workers          => $WORKERS,
+        # Starman's stock read-timeout is 5s, and every SILENT connection pins
+        # one worker for that whole window (measured: 4 idle conns on 4
+        # workers = a 5s stall, 8 = 10s).  A browser preconnect is exactly
+        # such a silent connection, so keep the window short: the pool should
+        # only be pinned for a moment by a client that never sends a request.
+        timeout          => $READ_TIMEOUT,
+        # Starman's default is 1s, which drops a real browser's second request
+        # if it takes longer than that to follow a link.  5s matches what the
+        # previous single-process server allowed and does not pin a NEW
+        # connection — only an idle established one.
+        keepalive_timeout => 5,
+    )->run($app);
+    exit 0;
 }
 
 my $mode = shift(@ARGV) // usage(2);

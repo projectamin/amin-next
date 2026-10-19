@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  shop-ui app declarations (AXA first pass).
+
+  Each route/action declares the fragment the app sends for that path —
+  in the app's own dialect (urn:projectamin:example:shop).  {placeholders}
+  are substituted by Amin::AXA::FormCodec from request data: the bundle
+  declares the fragment, the transport only supplies values (plan §4.2 —
+  encodings are not dialects).
+-->
+<axa:app xmlns:axa="http://projectamin.org/ns/axa/1"
+         xmlns:shop="urn:projectamin:example:shop"
+         id="io.projectamin.apps.shop-ui"
+         name="shop-ui">
+
+  <axa:route path="/" method="GET">
+    <shop:request route="catalog" sid="{sid}" csrf="{csrf}"/>
+  </axa:route>
+
+  <axa:route path="/product" method="GET">
+    <shop:request route="product" sku="{sku}" sid="{sid}" csrf="{csrf}"/>
+  </axa:route>
+
+  <axa:route path="/cart" method="GET">
+    <shop:request route="cart" sid="{sid}" csrf="{csrf}"/>
+  </axa:route>
+
+  <axa:action name="cart.add" path="/cart" method="POST">
+    <shop:action name="cart.add" sku="{sku}" qty="{qty}" sid="{sid}" csrf="{csrf}"/>
+  </axa:action>
+
+  <axa:action name="cart.set_qty" path="/cart" method="POST">
+    <shop:action name="cart.set_qty" sku="{sku}" qty="{qty}" sid="{sid}" csrf="{csrf}"/>
+  </axa:action>
+
+  <axa:action name="cart.remove" path="/cart" method="POST">
+    <shop:action name="cart.remove" sku="{sku}" sid="{sid}" csrf="{csrf}"/>
+  </axa:action>
+
+</axa:app>

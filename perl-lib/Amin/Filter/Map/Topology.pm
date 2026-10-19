@@ -3,7 +3,7 @@ use v5.38; use warnings; use utf8; use experimental 'signatures';
 use parent 'XML::SAX::Base';
 
 use Class::Tiny qw(Handler Log Mode Name Element),
-    { nodes => {}, edges => [], regions => [], active_server_id => undef };
+    { nodes => sub { {} }, edges => sub { [] }, regions => sub { [] }, active_server_id => undef };
 
 sub _attr ($e, $name) {
     ($e->{Attributes}{"{}${name}"} // {})->{Value} // '';

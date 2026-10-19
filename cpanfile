@@ -22,6 +22,15 @@ sub requires; sub on; sub recommends; sub suggests; sub conflicts; sub feature;
 # ═════ runtime (hard required for bin/amin + perl-lib/ Amin:: namespace) ══
 requires 'Class::Tiny';
 requires 'IPC::Run';
+requires 'Plack';
+# AXA HTTP server: prefork worker pool.  Requires an off-heap session store
+# (see DBD::SQLite) — a forked worker gets its own copy of any in-process
+# hash, so an in-memory cart would diverge between requests.
+requires 'Starman';
+# Off-heap session/cart store behind Amin::AXA::Store's get/set/delete.
+# XS (bundles its own SQLite); open one connection per worker, after fork.
+requires 'DBI';
+requires 'DBD::SQLite';
 requires 'XML::SAX';
 requires 'XML::SAX::Base';
 requires 'XML::NamespaceSupport';
