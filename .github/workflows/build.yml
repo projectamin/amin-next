@@ -23,21 +23,6 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # C libraries and a compiler for `mise run bootstrap` (libblake3,
-      # liboqs, XML::LibXML). mise installs Perl and Rust; it does not
-      # install these system packages.
-      - name: Install system build dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            build-essential \
-            cmake \
-            pkg-config \
-            libxml2-dev \
-            zlib1g-dev \
-            liblzma-dev \
-            libssl-dev
-
       - name: Cache native libs and CPAN local::lib
         uses: actions/cache@v4
         with:
@@ -48,7 +33,7 @@ jobs:
             .cache/liboqs-src
             .cache/liboqs-build
             .cache/cpanm
-          key: bootstrap-${{ runner.os }}-${{ hashFiles('.mise.toml', 'cpanfile') }}
+          key: bootstrap-${{ runner.os }}-${{ hashFiles('.mise.toml', 'cpanfile', 'perl-lib/Amin/MakeMakerLocalLib.pm') }}
           restore-keys: |
             bootstrap-${{ runner.os }}-
 
