@@ -189,6 +189,7 @@ echo "[+] Upgraded $NAME - remember to bump the requires() line in cpanfile + co
 [tasks.test]
 description = "Run full test suite: Perl unit tests + Rust integration tests"
 run = '''
+set -e
 mise exec -- prove -v -r t/
 echo "---"
 (cd rust && cargo test --workspace)

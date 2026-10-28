@@ -1,0 +1,78 @@
+name: Build
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: bootstrap and test
+    runs-on: ubuntu-latest
+    env:
+      # Matches CARGO_TARGET_DIR in .mise.toml so the cargo cache and
+      # `mise run` share one target directory.
+      CARGO_TARGET_DIR: ${{ github.workspace }}/target
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # C libraries and a compiler for `mise run bootstrap` (libblake3,
+      # liboqs, XML::LibXML). mise installs Perl and Rust; it does not
+      # install these system packages.
+      - name: Install system build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential \
+            cmake \
+            pkg-config \
+            libxml2-dev \
+            zlib1g-dev \
+            liblzma-dev \
+            libssl-dev
+
+      - name: Cache native libs and CPAN local::lib
+        uses: actions/cache@v4
+        with:
+          path: |
+            local
+            .cache/blake3-src
+            .cache/blake3-build
+            .cache/liboqs-src
+            .cache/liboqs-build
+            .cache/cpanm
+          key: bootstrap-${{ runner.os }}-${{ hashFiles('.mise.toml', 'cpanfile') }}
+          restore-keys: |
+            bootstrap-${{ runner.os }}-
+
+      # Install the pinned toolchain only. The postinstall hook would also
+      # bootstrap, before the cargo cache exists, and a hook failure is only
+      # a warning. Bootstrap runs as its own step below.
+      - name: Install toolchain
+        uses: jdx/mise-action@v4
+        env:
+          MISE_NO_HOOKS: "1"
+        with:
+          install: true
+          cache: true
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: rust
+
+      - name: Bootstrap
+        run: mise run bootstrap
+
+      - name: Build workspace
+        run: mise exec -- cargo build --locked --workspace --all-targets --manifest-path rust/Cargo.toml
+
+      - name: Test
+        run: mise run test
