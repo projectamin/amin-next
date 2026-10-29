@@ -60,15 +60,18 @@ jobs:
       - name: Build workspace
         run: mise exec -- cargo build --locked --workspace --all-targets --manifest-path rust/Cargo.toml
 
+      # upload-artifact does not keep file modes, and the test signer
+      # and sandbox executor are only used when they are executable.
+      - name: Pack build
+        run: tar -cf "$RUNNER_TEMP/amin-build.tar" local target
+
       - name: Upload build
         uses: actions/upload-artifact@v4
         with:
           name: amin-build
           retention-days: 1
           if-no-files-found: error
-          path: |
-            local
-            target
+          path: ${{ runner.temp }}/amin-build.tar
 
   test:
     name: test
@@ -84,7 +87,16 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: amin-build
-          path: ${{ github.workspace }}
+          path: ${{ runner.temp }}/amin-build
+
+      - name: Unpack build
+        run: |
+          tar -xf "$RUNNER_TEMP/amin-build/amin-build.tar" -C "$GITHUB_WORKSPACE"
+          chmod a+x target/debug/bctool target/debug/aminexec
+          if [ -f target/debug/ainit ]; then chmod a+x target/debug/ainit; fi
+          if [ -d local/bin ]; then find local/bin -type f -exec chmod a+x {} +; fi
+          test -x target/debug/bctool
+          test -x target/debug/aminexec
 
       # Same toolchain as the build. Hooks stay off so a fresh runner does
       # not bootstrap again over the downloaded local::lib and target/.

@@ -30,6 +30,7 @@ use constant TABLE => 'axa_session';
 sub dbh ($self) {
     my $pid = $$;
     if (!$self->{_dbh} || ($self->{_pid} // -1) != $pid) {
+        $self->_ensure_parent;
         my $dbh = DBI->connect(
             "dbi:SQLite:dbname=$self->{path}", '', '',
             {
@@ -51,6 +52,19 @@ sub dbh ($self) {
         $self->{_pid} = $pid;
     }
     return $self->{_dbh};
+}
+
+# A fresh checkout has no .cache. SQLite will not create the parent
+# directory, and the first get() then dies mid-render.
+sub _ensure_parent ($self) {
+    my $path = $self->{path} // return;
+    return if $path eq '' || $path eq ':memory:';
+    require File::Basename;
+    require File::Path;
+    my $dir = File::Basename::dirname($path);
+    return if $dir eq '' || $dir eq '.' || -d $dir;
+    File::Path::make_path($dir);
+    return;
 }
 
 sub _ensure_schema ($self, $dbh) {

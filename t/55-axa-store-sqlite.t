@@ -21,12 +21,19 @@ use Amin::AXA::Store::SQLite;
 
 my $tmp  = tempdir(CLEANUP => 1);
 my $db   = "$tmp/axa.sqlite";
+my $nested = "$tmp/missing-dir/sessions.sqlite";
 my $have = eval { require DBI; require DBD::SQLite; 1 };
 plan skip_all => "DBD::SQLite not installed: $@" unless $have;
 
 # ── contract: same behaviour as the in-memory adapter ───────────────────
 my $mem = Amin::AXA::Store->new;
 my $sql = Amin::AXA::Store::SQLite->new(path => $db);
+
+my $created = Amin::AXA::Store::SQLite->new(path => $nested);
+$created->set('s', { csrf => 'a', cart => {} });
+ok(-f $nested, 'store creates a missing parent directory before connect');
+is($created->get('s')->{csrf}, 'a', '  and the record round-trips from that path');
+$created->disconnect;
 
 is($sql->get('missing'), undef, 'get() on an unknown key returns undef');
 is($mem->get('missing'), undef, '  (same as the in-memory adapter)');
