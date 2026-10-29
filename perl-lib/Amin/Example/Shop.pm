@@ -68,27 +68,36 @@ sub _route ($self, $a) {
 # ── actions: cart mutations, then the cart page (no-JS form POST receives
 #    a full page — plan §4.6) ──────────────────────────────────────────
 #
-# Mutations are written back explicitly.  The in-memory adapter used to hand
-# out the live record hashref, so mutating the cart in place was enough — but
-# that is an accident of one adapter.  A real store (SQLite, and any prefork
-# worker pool) returns a fresh deserialized copy on every get(), so in-place
-# mutation is silently lost.  Persist explicitly or the cart never changes.
+# Mutations go through Store->update, not get-then-set.  The in-memory
+# adapter used to hand out the live record, so an in-place edit stuck by
+# accident; a real store returns a fresh copy and needs an explicit write.
+# update() is also the critical section: under Starman, two workers can
+# POST the same session at once, and a get() outside the write lock lets
+# the later set() drop the earlier cart change.
 sub _action ($self, $a) {
     my $name = $a->{name} // '';
     my $sku  = $a->{sku}  // '';
-    my ($rec, $cart) = $self->_cart_rec($a->{sid});
-    if ($name eq 'cart.add' && length $sku) {
-        my $qty = ($a->{qty} // '') =~ /^\d+$/ && $a->{qty} > 0 ? 0 + $a->{qty} : 1;
-        $cart->{$sku} = ($cart->{$sku} // 0) + $qty;
+    my $sid  = $a->{sid};
+    my $cart = {};
+    if (defined $sid && length $sid) {
+        Amin::AXA::Store->default->update($sid, sub ($rec) {
+            return undef unless $rec;
+            $rec->{cart} //= {};
+            if ($name eq 'cart.add' && length $sku) {
+                my $qty = ($a->{qty} // '') =~ /^\d+$/ && $a->{qty} > 0 ? 0 + $a->{qty} : 1;
+                $rec->{cart}{$sku} = ($rec->{cart}{$sku} // 0) + $qty;
+            }
+            elsif ($name eq 'cart.set_qty' && length $sku) {
+                my $qty = ($a->{qty} // '') =~ /^\d+$/ ? 0 + $a->{qty} : 0;
+                if ($qty > 0) { $rec->{cart}{$sku} = $qty } else { delete $rec->{cart}{$sku} }
+            }
+            elsif ($name eq 'cart.remove' && length $sku) {
+                delete $rec->{cart}{$sku};
+            }
+            $cart = $rec->{cart};
+            return $rec;
+        });
     }
-    elsif ($name eq 'cart.set_qty' && length $sku) {
-        my $qty = ($a->{qty} // '') =~ /^\d+$/ ? 0 + $a->{qty} : 0;
-        if ($qty > 0) { $cart->{$sku} = $qty } else { delete $cart->{$sku} }
-    }
-    elsif ($name eq 'cart.remove' && length $sku) {
-        delete $cart->{$sku};
-    }
-    $self->_save_cart($a->{sid}, $rec);
     $self->_page_cart($a, $cart);
 }
 
@@ -100,12 +109,6 @@ sub _cart_rec ($self, $sid) {
     return (undef, {}) unless $rec;
     $rec->{cart} //= {};
     return ($rec, $rec->{cart});
-}
-
-sub _save_cart ($self, $sid, $rec) {
-    return unless defined $sid && length $sid && defined $rec;
-    Amin::AXA::Store->default->set($sid, $rec);
-    return;
 }
 
 sub _cart ($self, $sid) { my (undef, $cart) = $self->_cart_rec($sid); return $cart }

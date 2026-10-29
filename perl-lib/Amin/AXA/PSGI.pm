@@ -75,9 +75,9 @@ sub handle ($class, $env, $app, $spec, $stream = 0) {
 
     # framing first (§5.6): cheap transport checks before any work
     if ($method eq 'POST') {
-        my $len = $env->{CONTENT_LENGTH} // 0;
-        return $class->done($class->err(413 => 'payload too large'), 0, undef)
-            if $len > BODY_CAP;
+        if (my $rej = $class->_cap_body($env)) {
+            return $class->done($rej, 0, undef);
+        }
         my $ct = $env->{CONTENT_TYPE} // '';
         return $class->done($class->err(415 => 'unsupported media type'), 0, undef)
             unless $ct =~ m{^application/x-www-form-urlencoded\b}i;
@@ -265,6 +265,76 @@ sub render_stream ($class, $spec, $fragment, $values, $extra_headers = []) {
         }
         return;
     };
+}
+
+# 256 KiB applies to the bytes the app will parse, not to whatever
+# Content-Length happens to say.  A declared length over the cap is
+# rejected without reading.  A missing length — chunked transfer, which
+# Plack dechunks with no limit of its own — is read here and stopped at
+# the cap, then handed on as a normal buffered body.
+sub _cap_body ($class, $env) {
+    my $declared = $env->{CONTENT_LENGTH};
+    if (defined $declared && $declared =~ /\A[0-9]+\z/) {
+        return $class->err(413 => 'payload too large') if $declared > BODY_CAP;
+        return;
+    }
+
+    my $input = $env->{'psgi.input'};
+    my $chunked = ($env->{HTTP_TRANSFER_ENCODING} // '') =~ /\bchunked\b/i;
+    my ($buf, $rej) = $chunked
+        ? $class->_read_chunked($input)
+        : $class->_read_raw($input);
+    return $rej if $rej;
+
+    open my $fh, '<:raw', \$buf or die "axa: cannot buffer body: $!\n";
+    $env->{'psgi.input'} = $fh;
+    $env->{CONTENT_LENGTH} = length $buf;
+    delete $env->{HTTP_TRANSFER_ENCODING};
+    return;
+}
+
+sub _read_raw ($class, $input) {
+    my $buf = '';
+    while ($input && length($buf) <= BODY_CAP) {
+        my $chunk;
+        my $n = $input->read($chunk, 65_536);
+        last unless $n;
+        $buf .= $chunk;
+    }
+    return (undef, $class->err(413 => 'payload too large')) if length($buf) > BODY_CAP;
+    return ($buf, undef);
+}
+
+# Decoded chunk size is what the cap measures.  Framing overhead is not
+# part of the body, and a single huge chunk-size is rejected before the
+# payload is pulled in.  The decoded bytes replace the raw stream so
+# Plack parses a normal Content-Length body.
+sub _read_chunked ($class, $input) {
+    my ($buf, $pending) = ('', '');
+    while ($input) {
+        my $chunk;
+        my $n = $input->read($chunk, 65_536);
+        last unless $n;
+        $pending .= $chunk;
+        while ($pending =~ s/\A([0-9a-fA-F]{1,16}(?:;[^\r\n]*)?\r\n)//) {
+            my $header = $1;
+            my ($hex) = $header =~ /\A([0-9a-fA-F]+)/;
+            my $len = hex($hex);
+            return ($buf, undef) if $len == 0;
+            return (undef, $class->err(413 => 'payload too large'))
+                if length($buf) + $len > BODY_CAP;
+            if (length($pending) < $len + 2) {
+                $pending = $header . $pending;
+                last;
+            }
+            $buf .= substr($pending, 0, $len, '');
+            return (undef, $class->err(413 => 'payload too large'))
+                unless $pending =~ s/\A\r\n//;
+        }
+        return (undef, $class->err(413 => 'payload too large'))
+            if length($pending) > BODY_CAP;
+    }
+    return ($buf, undef);
 }
 
 # Hash::MultiValue 0.16 has no as_hash; flatten gives all pairs in order,

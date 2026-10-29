@@ -22,7 +22,8 @@ use JSON::PP ();
 # SQLite is a single-writer database even in WAL mode, so: WAL for readers
 # alongside the one writer, a busy_timeout so a contending worker waits
 # instead of failing immediately, and synchronous=FULL so an acknowledged
-# cart survives a crash.  Transactions are short (single-statement upserts).
+# cart survives a crash.  update() is a short BEGIN IMMEDIATE around the
+# read-modify-write; set() stays a single-statement upsert.
 
 use constant TABLE => 'axa_session';
 
@@ -68,7 +69,39 @@ sub get ($self, $key) {
     my ($json) = $self->dbh->selectrow_array(
         'SELECT record FROM ' . TABLE . ' WHERE sid = ?', undef, $key);
     return undef unless defined $json;
-    return JSON::PP::decode_json($json);
+    # A torn or hand-edited row must not 500 the request.  Undef is the
+    # same answer as a missing session: the caller mints a new one.
+    my $rec = eval { JSON::PP::decode_json($json) };
+    if ($@ || ref($rec) ne 'HASH') {
+        warn "[axa] unreadable session record; treating it as invalid\n";
+        return undef;
+    }
+    return $rec;
+}
+
+# Read-modify-write as one write transaction.  Two workers that each
+# get(), edit, and set() will otherwise both read the old cart and the
+# later set() will drop the earlier one.  BEGIN IMMEDIATE (see connect)
+# takes the reserved lock up front, so the loser waits on busy_timeout
+# and then reads the winner's commit.
+sub update ($self, $key, $code) {
+    die "axa: store key required\n" unless defined $key && length $key;
+    my $dbh = $self->dbh;
+    $dbh->begin_work;
+    my $next;
+    my $ok = eval {
+        my $rec = $self->get($key);
+        $next = $code->($rec);
+        $self->set($key, $next) if defined $next;
+        $dbh->commit;
+        1;
+    };
+    unless ($ok) {
+        my $err = $@ || "axa: store update failed\n";
+        eval { $dbh->rollback } if !$dbh->{AutoCommit};
+        die $err;
+    }
+    return $next;
 }
 
 sub set ($self, $key, $value) {

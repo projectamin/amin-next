@@ -45,6 +45,7 @@ requires 'Crypt::Liboqs::Sign';  # backs Amin::Crypto::ML_DSA shim (perl-lib/)
 
 # ═════ develop/test only (needed for `mise run test` / prove) ═════════════
 on 'develop' => sub {
+    requires 'HTTP::Request::Common';  # t/51-axa-http.t (libwww-perl; not pulled by Plack)
     requires 'Test2::Suite';
     requires 'Test2::V0';
     requires 'Perl::Tidy';

@@ -34,6 +34,23 @@ my $app = Amin::AXA::PSGI->app(app_dir => $APP, machine_spec_path => $spec_copy)
 unlink $spec_copy or die "unlink spec copy: $!";
 ok(!-e $spec_copy, 'spec copy deleted after boot — requests cannot re-read it');
 
+# Hands the body back a few bytes at a time, so the chunked reader has to
+# reassemble a size line and a chunk that arrive in separate reads.
+package t51::Drip {
+    sub new ($class, $buf) { bless { buf => $buf, at => 0 }, $class }
+    # Classic sub so the buffer argument stays the caller's scalar.
+    sub read {
+        my ($self, undef, $len) = @_;
+        my $left = length($self->{buf}) - $self->{at};
+        return 0 if $left <= 0;
+        my $n = $len > 5 ? 5 : $len;
+        $n = $left if $n > $left;
+        $_[1] = substr($self->{buf}, $self->{at}, $n);
+        $self->{at} += $n;
+        return $n;
+    }
+}
+
 sub csrf_of ($html) { $html =~ /name="axa\.csrf"[^>]*value="([0-9a-f]{64})"/ ? $1 : undef }
 sub wellformed ($html, $label) {
     my $ok = eval { XML::LibXML->load_xml(string => $html); 1 };
@@ -148,6 +165,57 @@ test_psgi $app, sub {
         Content_Type => 'application/x-www-form-urlencoded',
         Content => ['axa.action' => 'cart.add', 'pad' => 'x' x 300_000]);
     is($r->code, 413, 'body over 256 KiB → 413');
+
+    # No Content-Length (and chunked transfer) must hit the same cap.
+    # Checking the header alone treats a missing length as 0 and lets
+    # Plack buffer the whole dechunked body.
+    my $raw_post = sub ($body, %extra) {
+        my $in = delete $extra{input};
+        unless ($in) {
+            open $in, '<:raw', \$body or die "open body: $!";
+        }
+        return $app->({
+            'psgi.version'      => [1, 1],
+            'psgi.url_scheme'   => 'http',
+            'psgi.input'        => $in,
+            'psgi.errors'       => \*STDERR,
+            'psgi.multithread'  => 0,
+            'psgi.multiprocess' => 0,
+            'psgi.run_once'     => 0,
+            REQUEST_METHOD      => 'POST',
+            SCRIPT_NAME         => '',
+            PATH_INFO           => '/cart',
+            SERVER_NAME         => 'localhost',
+            SERVER_PORT         => 80,
+            SERVER_PROTOCOL     => 'HTTP/1.1',
+            CONTENT_TYPE        => 'application/x-www-form-urlencoded',
+            HTTP_COOKIE         => $jar,
+            %extra,
+        });
+    };
+    my $as_chunks = sub (@parts) {
+        my $s = '';
+        $s .= sprintf("%x\r\n%s\r\n", length($_), $_) for @parts;
+        return $s . "0\r\n\r\n";
+    };
+    my $over = 'x' x (262_144 + 1);
+    my $capped = $raw_post->($over);
+    is($capped->[0], 413, 'POST with no Content-Length over 256 KiB → 413');
+    $capped = $raw_post->($as_chunks->($over), HTTP_TRANSFER_ENCODING => 'chunked');
+    is($capped->[0], 413, 'chunked POST over 256 KiB → 413');
+    $capped = $raw_post->($as_chunks->(('y' x 100_000) x 3), HTTP_TRANSFER_ENCODING => 'chunked');
+    is($capped->[0], 413, 'chunked POST over 256 KiB across chunks → 413');
+
+    my $form = "axa.action=cart.add&axa.param.sku=sku-2&axa.csrf=$csrf";
+    my $mid  = int(length($form) / 2);
+    my $chunked_form = $as_chunks->(substr($form, 0, $mid), substr($form, $mid));
+    $capped = $raw_post->(
+        $chunked_form,
+        HTTP_TRANSFER_ENCODING => 'chunked',
+        input => t51::Drip->new($chunked_form),
+    );
+    is($capped->[0], 200, 'chunked POST under the cap is accepted');
+    like($capped->[2][0], qr/SAX Filter Tee/, '  and the dechunked body was parsed');
 
     $r = $send->(PUT 'http://localhost/cart');
     is($r->code, 405, 'unsupported method on a known path → 405');

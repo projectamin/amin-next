@@ -6,6 +6,7 @@ on:
 
 permissions:
   contents: read
+  actions: write
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -13,7 +14,7 @@ concurrency:
 
 jobs:
   build:
-    name: bootstrap and test
+    name: build
     runs-on: ubuntu-latest
     env:
       # Matches CARGO_TARGET_DIR in .mise.toml so the cargo cache and
@@ -58,6 +59,48 @@ jobs:
 
       - name: Build workspace
         run: mise exec -- cargo build --locked --workspace --all-targets --manifest-path rust/Cargo.toml
+
+      - name: Upload build
+        uses: actions/upload-artifact@v4
+        with:
+          name: amin-build
+          retention-days: 1
+          if-no-files-found: error
+          path: |
+            local
+            target
+
+  test:
+    name: test
+    needs: build
+    runs-on: ubuntu-latest
+    env:
+      CARGO_TARGET_DIR: ${{ github.workspace }}/target
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download build
+        uses: actions/download-artifact@v4
+        with:
+          name: amin-build
+          path: ${{ github.workspace }}
+
+      # Same toolchain as the build. Hooks stay off so a fresh runner does
+      # not bootstrap again over the downloaded local::lib and target/.
+      - name: Install toolchain
+        uses: jdx/mise-action@v4
+        env:
+          MISE_NO_HOOKS: "1"
+        with:
+          install: true
+          cache: true
+
+      - name: Install system packages
+        run: |
+          if ! mise bootstrap packages status --missing; then
+            mise bootstrap packages apply --yes --update
+          fi
 
       - name: Test
         run: mise run test
