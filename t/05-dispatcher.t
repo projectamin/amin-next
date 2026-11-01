@@ -76,11 +76,13 @@ is($by_pos{begin}[3]{class}, 'Amin::UCC::General',
     'spec begin idx 3 = UCC::General (Art.1 transaction form validation)');
 is($by_pos{begin}[4]{class}, 'Amin::UCC::Credit',
     'spec begin idx 4 = UCC::Credit (Art.5 LC authorization / presentation scope)');
-is($by_pos{begin}[5]{class}, 'Amin::AI::Gate',
-    'spec begin idx 5 = AI::Gate (model allowlist + ZCap scope check before placement)');
-is($by_pos{begin}[6]{class}, 'Amin::Schedule::Placement',
-    'spec begin idx 6 = Schedule::Placement (innermost begin, wraps AFTER profile/zcap/ucc/ai-gate, before middle)');
-is(scalar($by_pos{begin}->@*), 7, 'spec begin position count = 7 (ZCap→Cond→Profile→UCC::General→UCC::Credit→AI::Gate→Placement)');
+is($by_pos{begin}[5]{class}, 'Amin::AI::Model',
+    'spec begin idx 5 = AI::Model (catalog bind before Gate)');
+is($by_pos{begin}[6]{class}, 'Amin::AI::Gate',
+    'spec begin idx 6 = AI::Gate (model allowlist + ZCap scope check before placement)');
+is($by_pos{begin}[7]{class}, 'Amin::Schedule::Placement',
+    'spec begin idx 7 = Schedule::Placement (innermost begin, wraps AFTER profile/zcap/ucc/ai, before middle)');
+is(scalar($by_pos{begin}->@*), 8, 'spec begin position count = 8 (ZCap→Cond→Profile→UCC::General→UCC::Credit→AI::Model→AI::Gate→Placement)');
 
 my $chain = Amin::Machine::Dispatcher::_build_chain(
     Amin::Handler::Writer->new,

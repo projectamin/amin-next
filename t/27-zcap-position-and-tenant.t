@@ -48,7 +48,7 @@ sub attr_val ($el, $want) {
     require Amin::Machine::MachineSpec;
     my $spec = Amin::Machine::MachineSpec->new->spec;
     my @begin = grep { ($_->{meta}{position} // 'middle') eq 'begin' } $spec->{filters}->@*;
-    is(scalar(@begin), 7, 't27-Z1: spec begin[] count = 7 (ZCap/Cond/Validator/UCC::General/UCC::Credit/AI::Gate/Placement)');
+    is(scalar(@begin), 8, 't27-Z1: spec begin[] count = 8 (ZCap/Cond/Validator/UCC::General/UCC::Credit/AI::Model/AI::Gate/Placement)');
     is($begin[0]{class}, 'Amin::Auth::ZCap',
         't27-Z1: spec begin idx 0 = Auth::ZCap (outermost auth boundary)');
 }

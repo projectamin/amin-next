@@ -13,6 +13,7 @@
   <filter class="Amin::Filter::Init::ProfileValidator" position="begin" element="stage" window="document" namespace="http://projectamin.org/ns/2026/" />
   <filter class="Amin::UCC::General" position="begin" element="transaction" namespace="http://projectamin.org/ns/ucc/1" />
   <filter class="Amin::UCC::Credit" position="begin" element="lc" namespace="http://projectamin.org/ns/ucc/1" />
+  <filter class="Amin::AI::Model" position="begin" window="document" namespace="http://projectamin.org/ns/ai/1" />
   <filter class="Amin::AI::Gate" position="begin" element="request" namespace="http://projectamin.org/ns/ai/1" />
   <filter class="Amin::Schedule::Placement" position="begin" namespace="http://projectamin.org/ns/2026/" />
   <filter class="Amin::Command::Addr2line" position="middle" element="command" name="addr2line" namespace="http://projectamin.org/ns/2026/" />

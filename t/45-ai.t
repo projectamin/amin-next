@@ -2,13 +2,34 @@
 # t/45-ai.t — AI integration into the Amin filter path.
 #
 # Verifies the AI filter path as a core, audited part of the Amin stack:
+#   AI::Model       (begin)  profile provider + model bind
 #   AI::Gate        (begin)  model allowlist + ZCap scope check
-#   AI::Inference    (middle) stub inference under sandbox scope
+#   AI::Inference    (middle) stub, or hop from ai:provider on the profile
 #   AI::Provenance  (end)    provenance stamping + Tier-0 drop in prod
 use v5.38; use warnings; use utf8;
 use Test2::V0;
 use File::Basename qw(dirname);
+use JSON::PP;
 use lib dirname(__FILE__) . '/../perl-lib';
+
+package FakeAminAIUA {
+    use v5.38;
+    use experimental 'signatures';
+    sub new ($class, %o) { bless { %o }, $class }
+    sub post ($self, $url, $opts = {}) {
+        $self->{last} = { url => $url, %$opts };
+        if ($self->{sse} && $opts->{data_callback}) {
+            for my $chunk ($self->{sse}->@*) {
+                $opts->{data_callback}->($chunk, {});
+            }
+        }
+        return $self->{fail} if $self->{fail};
+        return {
+            success => 1, status => 200, reason => 'OK',
+            content => $self->{payload} // '',
+        };
+    }
+}
 
 require Amin::Machine::Dispatcher;
 require Amin::Handler::Writer;
@@ -69,6 +90,12 @@ TEN
     like($out, qr/ai:tokens_in="/, 'TR-AI.1: tokens_in recorded');
     like($out, qr/ai:tokens_out="/, 'TR-AI.1: tokens_out recorded');
     like($out, qr/\[stub:amin-chat-7b\]/, 'TR-AI.1: stub response body present');
+    like($out, qr/<ai:stream[^>]*ai:channel="thinking"/,
+        'TR-AI.1: thinking stream from Inference before the hop');
+    like($out, qr/infer amin-chat-7b/,
+        'TR-AI.1: thinking names the model');
+    like($out, qr/<ai:stream[^>]*ai:channel="response"/,
+        'TR-AI.1: response stream on ai:result');
 }
 
 # ── TR-AI.2: Unapproved model → rc=-6145 denial ───────────────────────────
@@ -191,6 +218,243 @@ TEN
         'TR-AI.8: placement winner is the AI GPU peer');
     $Amin::Schedule::Placement::_LocalPeerTestOverride = undef;
     Amin::Discovery::Mesh->mock_peer_state([]);
+}
+
+# ── TR-AI.9: Explicit profile provider → hop; document is unchanged ──
+{
+    require Amin::AI::Inference;
+    my $ua = FakeAminAIUA->new(payload =>
+        '{"choices":[{"message":{"content":"hello from provider"}}],'
+      . '"usage":{"prompt_tokens":3,"completion_tokens":4}}');
+    {
+        local $Amin::AI::Inference::UA = $ua;
+        my $out = run_ai(<<'TEN');
+  <ai:provider id="openai" base="http://127.0.0.1:9/v1" key="sk-test-not-for-output"/>
+  <ai:model id="amin-chat-7b" provider="openai" upstream="gpt-4o-mini"/>
+  <ai:request ai:model="amin-chat-7b">
+    <ai:prompt>list the entry point</ai:prompt>
+  </ai:request>
+TEN
+        like($out, qr/hello from provider/, 'TR-AI.9: provider body in ai:stream');
+        like($out, qr/ai:model="amin-chat-7b"/, 'TR-AI.9: document model preserved');
+        like($out, qr/<ai:provider[^>]*key="sk-test-not-for-output"/,
+            'TR-AI.9: profile key forwarded as written (no in-flight strip)');
+        like($out, qr/ai:tokens_in="3"/, 'TR-AI.9: usage.prompt_tokens');
+        like($out, qr/ai:tokens_out="4"/, 'TR-AI.9: usage.completion_tokens');
+        unlike($out, qr/\[stub:amin-chat-7b\]/, 'TR-AI.9: stub skipped when provider is on the profile');
+        unlike($out, qr/<ai:bound/, 'TR-AI.9: no derived bind element');
+        like($ua->{last}{url}, qr{/chat/completions$}, 'TR-AI.9: POST /chat/completions');
+        like($ua->{last}{headers}{Authorization}, qr/^Bearer sk-test-not-for-output$/,
+            'TR-AI.9: bearer on the HTTP hop only');
+        my $req = JSON::PP::decode_json($ua->{last}{content});
+        is($req->{model}, 'gpt-4o-mini', 'TR-AI.9: upstream from ai:model');
+        is($req->{messages}[0]{content}, 'list the entry point',
+            'TR-AI.9: prompt is the user message');
+        ok(!$req->{stream}, 'TR-AI.9: non-stream completion');
+    }
+}
+
+# ── TR-AI.10: Provider HTTP failure → kind=error, no stub ─────────────
+{
+    require Amin::AI::Inference;
+    my $ua = FakeAminAIUA->new(fail => {
+        success => 0, status => 401, reason => 'Unauthorized',
+        content => '{"error":{"message":"bad key"}}',
+    });
+    {
+        local $Amin::AI::Inference::UA = $ua;
+        my $out = run_ai(<<'TEN');
+  <ai:provider id="openai" base="http://127.0.0.1:9/v1" key="sk-test-not-for-output"/>
+  <ai:model id="amin-chat-7b" provider="openai"/>
+  <ai:request ai:model="amin-chat-7b">
+    <ai:prompt>hello</ai:prompt>
+  </ai:request>
+TEN
+        like($out, qr/ai:kind="error"/, 'TR-AI.10: provider failure → kind=error');
+        like($out, qr/ai:rc="-6147"/, 'TR-AI.10: rc=-6147 (AI_PROVIDER_ERROR)');
+        like($out, qr/ai:exit_kind="ai_provider_error"/, 'TR-AI.10: exit_kind');
+        unlike($out, qr/\[stub:amin-chat-7b\]/, 'TR-AI.10: no stub after a failed hop');
+        unlike($out, qr/ai:msg="[^"]*sk-test-not-for-output/, 'TR-AI.10: key not in the error msg');
+    }
+}
+
+# ── TR-AI.10b: Tiny 599 (TLS/connect) surfaces content, not just reason ──
+{
+    require Amin::AI::Inference;
+    my $ua = FakeAminAIUA->new(fail => {
+        success => 0, status => 599, reason => 'Internal Exception',
+        content => "IO::Socket::SSL 1.42 must be installed for https support\n",
+    });
+    {
+        local $Amin::AI::Inference::UA = $ua;
+        my $out = run_ai(<<'TEN');
+  <ai:provider id="openai" base="https://api.example/v1" key="sk-test-not-for-output"/>
+  <ai:model id="amin-chat-7b" provider="openai"/>
+  <ai:request ai:model="amin-chat-7b">
+    <ai:prompt>hello</ai:prompt>
+  </ai:request>
+TEN
+        like($out, qr/ai:kind="error"/, 'TR-AI.10b: 599 → kind=error');
+        like($out, qr/IO::Socket::SSL/,
+            'TR-AI.10b: exception text from Tiny content');
+        unlike($out, qr/Internal Exception/,
+            'TR-AI.10b: not the generic Tiny reason alone');
+    }
+}
+
+# ── TR-AI.11: Provider with key and no base is fail-closed ───────────
+{
+    require Amin::AI::Inference;
+    {
+        local $Amin::AI::Inference::UA = undef;
+        my $out = run_ai(<<'TEN');
+  <ai:provider id="openai" key="sk-only"/>
+  <ai:model id="amin-chat-7b" provider="openai"/>
+  <ai:request ai:model="amin-chat-7b">
+    <ai:prompt>hello</ai:prompt>
+  </ai:request>
+TEN
+        like($out, qr/ai:kind="error"/, 'TR-AI.11: key without base → error');
+        unlike($out, qr/\[stub:amin-chat-7b\]/, 'TR-AI.11: no stub on incomplete provider');
+        unlike($out, qr/ai:msg="[^"]*sk-only/, 'TR-AI.11: key not in the error msg');
+    }
+}
+
+# ── TR-AI.12: UI model on the profile is the bind; request only names it
+{
+    require Amin::AI::Inference;
+    my $ua = FakeAminAIUA->new(payload =>
+        '{"choices":[{"message":{"content":"from profile bind"}}]}');
+    {
+        local $Amin::AI::Inference::UA = $ua;
+        my $out = run_ai(<<'TEN');
+  <ai:provider id="openai" base="http://127.0.0.1:9/v1" key="sk-test-not-for-output"/>
+  <ai:model id="amin-chat-cloud" provider="openai" upstream="gpt-4o-mini"/>
+  <ai:request ai:model="amin-chat-cloud">
+    <ai:prompt>hello</ai:prompt>
+  </ai:request>
+TEN
+        unlike($out, qr/<ai:bound/, 'TR-AI.12: profile is the bind; no derived element');
+        like($out, qr/<ai:provider[^>]*id="openai"/, 'TR-AI.12: provider as written');
+        like($out, qr/<ai:model[^>]*upstream="gpt-4o-mini"/, 'TR-AI.12: model as written');
+        like($out, qr/from profile bind/, 'TR-AI.12: hop used the profile model');
+        my $req = JSON::PP::decode_json($ua->{last}{content});
+        is($req->{model}, 'gpt-4o-mini', 'TR-AI.12: wire model is ai:model@upstream');
+        like($out, qr/<ai:provider[^>]*key="sk-test-not-for-output"/,
+            'TR-AI.12: key stays on the profile as written');
+    }
+}
+
+# ── TR-AI.13: upstream/base/key on the request is injection ───────────
+{
+    my $out = run_ai(<<'TEN');
+  <ai:request ai:model="amin-chat-7b" ai:upstream="evil" ai:base="http://evil.test">
+    <ai:prompt>hello</ai:prompt>
+  </ai:request>
+TEN
+    like($out, qr/ai:kind="error"/, 'TR-AI.13: injected hop attrs → error');
+    like($out, qr/ai:rc="-6148"/, 'TR-AI.13: rc=-6148 (AI_MODEL_INJECT)');
+    like($out, qr/ai:exit_kind="ai_model_inject"/, 'TR-AI.13: exit_kind');
+    unlike($out, qr/\[stub:amin-chat-7b\]/, 'TR-AI.13: Inference does not run after inject');
+}
+
+# ── TR-AI.14: current model and request model must agree ──────────────
+{
+    my $out = run_ai(<<'TEN');
+  <ai:model id="amin-chat-7b"/>
+  <ai:request ai:model="amin-embed-384">
+    <ai:prompt>hello</ai:prompt>
+  </ai:request>
+TEN
+    like($out, qr/ai:kind="error"/, 'TR-AI.14: mismatched current vs request → error');
+    like($out, qr/ai:exit_kind="ai_model_inject"/, 'TR-AI.14: treated as inject');
+    unlike($out, qr/\[stub:/, 'TR-AI.14: no stub after mismatch');
+}
+
+# ── TR-AI.15: Explicit api=anthropic uses Messages, not chat/completions ─
+{
+    require Amin::AI::Inference;
+    my $ua = FakeAminAIUA->new(payload =>
+        '{"content":[{"type":"text","text":"from anthropic"}],'
+      . '"usage":{"input_tokens":2,"output_tokens":3}}');
+    {
+        local $Amin::AI::Inference::UA = $ua;
+        my $out = run_ai(<<'TEN');
+  <ai:provider id="anthropic" api="anthropic" base="https://api.anthropic.com" key="sk-ant-test"/>
+  <ai:model id="amin-chat-anthropic" provider="anthropic" upstream="claude-sonnet-4-5"/>
+  <ai:request ai:model="amin-chat-anthropic">
+    <ai:prompt>hello</ai:prompt>
+  </ai:request>
+TEN
+        like($out, qr/from anthropic/, 'TR-AI.15: anthropic body');
+        like($ua->{last}{url}, qr{/v1/messages$}, 'TR-AI.15: POST /v1/messages');
+        is($ua->{last}{headers}{'x-api-key'}, 'sk-ant-test', 'TR-AI.15: x-api-key');
+        is($ua->{last}{headers}{'anthropic-version'}, '2023-06-01',
+            'TR-AI.15: anthropic-version');
+        my $req = JSON::PP::decode_json($ua->{last}{content});
+        is($req->{model}, 'claude-sonnet-4-5', 'TR-AI.15: upstream on the wire');
+        ok($req->{max_tokens}, 'TR-AI.15: max_tokens required by Messages');
+    }
+}
+
+# ── TR-AI.16: ai:system on the request is messages[0]; prompt stays user ─
+{
+    require Amin::AI::Inference;
+    my $ua = FakeAminAIUA->new(payload =>
+        '{"choices":[{"message":{"content":"ok"}}],'
+      . '"usage":{"prompt_tokens":1,"completion_tokens":1}}');
+    {
+        local $Amin::AI::Inference::UA = $ua;
+        my $out = run_ai(<<'TEN');
+  <ai:provider id="openai" base="http://127.0.0.1:9/v1" key="sk-test"/>
+  <ai:model id="amin-chat-7b" provider="openai" upstream="gpt-4o-mini"/>
+  <ai:request ai:model="amin-chat-7b">
+    <ai:system>You are waihanga, an autonomous coding agent.</ai:system>
+    <ai:system>Your role: you do the work yourself.</ai:system>
+    <ai:prompt>list the entry point</ai:prompt>
+  </ai:request>
+TEN
+        like($out, qr/ok<\/ai:stream>/, 'TR-AI.16: hop still returns');
+        my $req = JSON::PP::decode_json($ua->{last}{content});
+        is($req->{messages}[0]{role}, 'system', 'TR-AI.16: prefix is messages[0]');
+        is($req->{messages}[0]{content},
+            'You are waihanga, an autonomous coding agent.',
+            'TR-AI.16: prefix bytes as written');
+        is($req->{messages}[1]{role}, 'system', 'TR-AI.16: role is messages[1]');
+        is($req->{messages}[2]{role}, 'user', 'TR-AI.16: prompt stays user');
+        is($req->{messages}[2]{content}, 'list the entry point',
+            'TR-AI.16: prompt unchanged');
+    }
+}
+
+# ── TR-AI.17: SSE reasoning_content is thinking, content is response ─
+{
+    require Amin::AI::Inference;
+    my $ua = FakeAminAIUA->new(
+        force_stream => 1,
+        sse => [
+            "data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"step one \"}}]}\n",
+            "data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"step two\"}}]}\n",
+            "data: {\"choices\":[{\"delta\":{\"content\":\"hello\"}}]}\n",
+            "data: [DONE]\n",
+        ],
+    );
+    {
+        local $Amin::AI::Inference::UA = $ua;
+        my $out = run_ai(<<'TEN');
+  <ai:provider id="openai" base="http://127.0.0.1:9/v1" key="sk-test"/>
+  <ai:model id="amin-chat-7b" provider="openai" upstream="gpt-4o-mini"/>
+  <ai:request ai:model="amin-chat-7b">
+    <ai:prompt>hi</ai:prompt>
+  </ai:request>
+TEN
+        like($out, qr/step one step two/,
+            'TR-AI.17: reasoning_content lands on thinking');
+        like($out, qr/hello/,
+            'TR-AI.17: content lands on the response');
+        my $req = JSON::PP::decode_json($ua->{last}{content});
+        ok($req->{stream}, 'TR-AI.17: live hop asks for SSE');
+    }
 }
 
 done_testing();

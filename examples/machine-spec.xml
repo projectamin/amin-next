@@ -72,6 +72,10 @@
           position="begin"
           element="lc"
           namespace="http://projectamin.org/ns/ucc/1" />
+  <filter class="Amin::AI::Model"
+          position="begin"
+          window="document"
+          namespace="http://projectamin.org/ns/ai/1" />
   <filter class="Amin::AI::Gate"
           position="begin"
           element="request"

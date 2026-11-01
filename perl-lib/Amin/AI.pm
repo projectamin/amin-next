@@ -7,7 +7,7 @@ use experimental 'signatures';
 # ═══════════════════════════════════════════════════════════════════════════
 # Amin::AI — AI namespace: SAX filter base class + shared constants.
 #
-# Every Amin::AI::* filter (Gate, Inference, Embed, Memory, Graph, Provenance)
+# Every Amin::AI::* filter (Gate, Model, Inference, Embed, Memory, Graph, Provenance)
 # is instantiated by the Dispatcher chain with Handler/Log/Mode/Name/Element
 # and streams SAX events through it.  Constructors resolve to
 # XML::SAX::Base::new (which blesses the args hash directly), while

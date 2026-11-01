@@ -39,6 +39,9 @@ requires 'XML::LibXML::SAX';
 requires 'XML::Filter::XInclude';
 requires 'Safe';
 requires 'HTTP::Tiny';
+requires 'Net::SSLeay';        # HTTPS for Inference hops
+requires 'IO::Socket::SSL';
+requires 'Mozilla::CA';
 requires 'MIME::Base64';
 requires 'Digest::BLAKE3';  # needs libblake3 (built by bootstrap task)
 requires 'Crypt::Liboqs::Sign';  # backs Amin::Crypto::ML_DSA shim (perl-lib/)
