@@ -316,13 +316,14 @@ sub _http_complete ($self, $model, $prompt, $base, $key, $bind = {}, $systems = 
         };
     }
 
-    my $sse = { buf => '', text => '', think => '', kind => $kind };
+    my $sse = { buf => '', raw => '', text => '', think => '', kind => $kind };
     my %opts = (
         headers => $headers,
         content => $payload,
     );
     if ($want_stream) {
         $opts{data_callback} = sub ($chunk, $res_cb) {
+            $sse->{raw} .= $chunk // '';
             $self->_sse_feed($sse, $chunk);
         };
     }
@@ -339,7 +340,15 @@ sub _http_complete ($self, $model, $prompt, $base, $key, $bind = {}, $systems = 
         return { ok => 0, msg => substr($err, 0, 300), latency_ms => $latency };
     }
 
-    my $obj = eval { JSON::PP->new->utf8->decode($res->{content} // '{}') };
+    # HTTP::Tiny does not accumulate 2xx bodies when data_callback is
+    # set. Flush a trailing SSE line, then parse a raw JSON body if
+    # the server ignored stream=true.
+    if ($want_stream && length($sse->{buf} // '')) {
+        $self->_sse_feed($sse, "\n");
+    }
+    my $body = $res->{content} // '';
+    $body = $sse->{raw} if !length($body) && length($sse->{raw} // '');
+    my $obj = eval { JSON::PP->new->utf8->decode($body || '{}') };
     $obj = {} unless ref $obj eq 'HASH';
 
     if (!$res->{success}) {
@@ -395,13 +404,21 @@ sub _http_complete ($self, $model, $prompt, $base, $key, $bind = {}, $systems = 
     }
 
     my $usage = ref $obj->{usage} eq 'HASH' ? $obj->{usage} : {};
+    if (!length($text) && !length($think)) {
+        return {
+            ok         => 0,
+            exit_kind  => 'ai_provider_error',
+            msg        => 'provider returned an empty reply',
+            latency_ms => $latency,
+        };
+    }
     return {
         ok         => 1,
         text       => $text,
         tokens_in  => $usage->{prompt_tokens} // $usage->{input_tokens}
                       // length($prompt),
         tokens_out => $usage->{completion_tokens} // $usage->{output_tokens}
-                      // length($text),
+                      // (length($text) || length($think)),
         latency_ms => $latency,
     };
 }

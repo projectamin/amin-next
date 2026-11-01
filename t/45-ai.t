@@ -457,4 +457,50 @@ TEN
     }
 }
 
+# ── TR-AI.18: last SSE event without a trailing newline still lands ──
+{
+    require Amin::AI::Inference;
+    my $ua = FakeAminAIUA->new(
+        force_stream => 1,
+        sse => [
+            'data: {"choices":[{"delta":{"content":"tail-chunk"}}]}',
+        ],
+    );
+    {
+        local $Amin::AI::Inference::UA = $ua;
+        my $out = run_ai(<<'TEN');
+  <ai:provider id="openai" base="http://127.0.0.1:9/v1" key="sk-test"/>
+  <ai:model id="amin-chat-7b" provider="openai" upstream="gpt-4o-mini"/>
+  <ai:request ai:model="amin-chat-7b">
+    <ai:prompt>hi</ai:prompt>
+  </ai:request>
+TEN
+        like($out, qr/tail-chunk/,
+            'TR-AI.18: leftover SSE line is flushed');
+    }
+}
+
+# ── TR-AI.19: 200 JSON body via data_callback (server ignored stream) ─
+{
+    require Amin::AI::Inference;
+    my $ua = FakeAminAIUA->new(
+        force_stream => 1,
+        sse => [
+            '{"choices":[{"message":{"content":"from-json"}}]}',
+        ],
+    );
+    {
+        local $Amin::AI::Inference::UA = $ua;
+        my $out = run_ai(<<'TEN');
+  <ai:provider id="openai" base="http://127.0.0.1:9/v1" key="sk-test"/>
+  <ai:model id="amin-chat-7b" provider="openai" upstream="gpt-4o-mini"/>
+  <ai:request ai:model="amin-chat-7b">
+    <ai:prompt>hi</ai:prompt>
+  </ai:request>
+TEN
+        like($out, qr/from-json/,
+            'TR-AI.19: JSON body still becomes the reply');
+    }
+}
+
 done_testing();

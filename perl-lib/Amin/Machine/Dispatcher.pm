@@ -223,7 +223,6 @@ sub end_document ($self, @a) {
 # Direct forwarders for the remaining Dispatcher event set (no XML::SAX::Base
 # machinery — see the class-header comment for why caching breaks splices).
 sub start_document       ($self, @a) { my $c = $self->{Handler}; return $c ? $c->start_document(@a) : undef }
-sub end_document         ($self, @a) { my $c = $self->{Handler}; return $c ? $c->end_document(@a)   : undef }
 sub characters           ($self, $d) { my $c = $self->{Handler}; return $c ? $c->characters($d)     : undef }
 sub processing_command   ($self, @a) { my $c = $self->{Handler}; return $c ? $c->processing_command(@a) : undef }
 sub comment              ($self, @a) { my $c = $self->{Handler}; return $c ? $c->comment(@a)            : undef }
