@@ -32,7 +32,8 @@ sub new ($class, %o) {
     $self->{Log}     //= _instantiate_log($spec->{log});
     $self->{chain} = _build_chain($self->Handler, $self->Log, $self->Mode // 'render',
         $self->{late_filters_enable} // { map => 1, ui => 1, ai => 1 },
-        $spec->{allowed}, $spec->{filters});
+        $spec->{allowed}, $spec->{filters}, undef, $self->{ui_os} // 'tty',
+        $spec->{ui_dialects});
     return $self;
 }
 
@@ -109,13 +110,66 @@ package Amin::Machine::Dispatcher::_LazyGate;
 use v5.38; use warnings; use utf8;
 use experimental 'signatures';
 
-use Class::Tiny qw(Handler Log Mode candidates), {
+use Class::Tiny qw(Handler Log Mode candidates target render), {
     active => sub { [] },      # [{ node, d, class, doc }] — currently spliced instances
     depth  => sub { 0 },       # shadow element depth for pop bookkeeping
 };
 
-# Remember the un-spliced child so window="document" cleanup can restore it.
-sub BUILD ($self, $args) { $self->{_base_child} = $self->{Handler} }
+# Remember the un-spliced child so window="document" cleanup can restore it,
+# then fix the candidate order and reject ambiguous bindings.
+sub BUILD ($self, $args) {
+    $self->{_base_child} = $self->{Handler};
+    $self->_order_candidates;
+    return;
+}
+
+# The render target this gate serves.  Resolved at stream time, in order:
+#   1. an explicit `target` (the --os / chain-build selection),
+#   2. $ENV{AMIN_OSTYPE} (a profile-declared target the caller exported).
+# '' means platform-neutral: a target-scoped candidate then never matches.
+sub effective_target ($self) {
+    my $t = $self->target;
+    return $t if defined $t && length $t;
+    return $ENV{AMIN_OSTYPE} // '';
+}
+
+# The verb a candidate class carries, exactly as the static chain sees it
+# (see the long note in start_element).  '' = element-only binding.
+sub _verb_of ($class) {
+    my $v;
+    { local $@; $v = eval { $class->name } if defined &{"${class}::name"} }
+    return (defined $v && length $v) ? $v : '';
+}
+
+# Candidates are tried in order and the first match wins, so order == priority:
+# higher first (an app overrides a built-in by raising its priority — axa-plan
+# §4.3).  Equal priorities can't decide a match, so two candidates that bind
+# the SAME thing (element + namespace + verb + target) at the same priority are
+# a hard error, not a silent last-one-wins.
+sub _order_candidates ($self) {
+    my @c = sort {
+        ($b->{meta}{priority} // 0) <=> ($a->{meta}{priority} // 0)
+            || $a->{class} cmp $b->{class}
+    } $self->candidates->@*;
+    my (%pri, %who);
+    for my $c (@c) {
+        my $m   = $c->{meta};
+        my $pri = $m->{priority} // 0;
+        my $key = join "\0", ($m->{element} // ''), ($m->{namespace} // ''),
+                             _verb_of($c->{class}), ($m->{target} // '');
+        if (exists $pri{$key} && $pri{$key} == $pri) {
+            die sprintf "Amin: ambiguous element filters bound to <%s> "
+                . "(namespace=%s verb=%s target=%s) at equal priority %d: %s vs %s\n",
+                ($m->{element} // '?'), ($m->{namespace} // '*'),
+                (_verb_of($c->{class}) || '*'), ($m->{target} // '*'),
+                $pri, $who{$key}, $c->{class};
+        }
+        $pri{$key} = $pri;
+        $who{$key} = $c->{class};
+    }
+    $self->candidates(\@c);
+    return;
+}
 
 # The gate deliberately does NOT inherit XML::SAX::Base.  Dynamic mid-stream
 # handler swaps (the splice) go through XML::SAX::Base's event-dispatch caches,
@@ -147,6 +201,10 @@ sub start_element ($self, $el) {
             next unless ($c->{meta}{element} // '') eq $ln;
             my $cns = $c->{meta}{namespace};
             next if defined $cns && length $cns && $cns ne $ns;
+            # Target-scoped candidates only participate when the gate serves
+            # their target; a candidate with no target is platform-neutral.
+            my $ct = $c->{meta}{target};
+            next if defined $ct && length $ct && $ct ne $self->effective_target;
             # Verb matching mirrors how the STATIC chain matches: command
             # classes carry their own verb as a class-level `sub name`
             # (MachineSpec deliberately never copies the spec's name=
@@ -183,7 +241,8 @@ sub start_element ($self, $el) {
             my $rest = $self->{Handler} // return;
             my $new = $c->{class}->new(
                 Handler => $rest, Log => $self->Log, Mode => $self->Mode,
-                Name    => $cn,   Element => $c->{meta}{element});
+                Name    => $cn,   Element => $c->{meta}{element},
+                Render  => $self->render);
             $new->can('name')    && $new->name($cn);
             $new->can('element') && $new->element($c->{meta}{element});
             $self->{Handler} = $new;          # splice BEFORE forwarding
@@ -258,17 +317,18 @@ sub run ($pkg_or_self, %o) {
     my $Log       = $o{Log}     // _instantiate_log($spec->{log})
                     // do { require Amin::Log::Standard; Amin::Log::Standard->new(stderr => 0) };
     my $gen_class = _generator_class($spec->{generator}) // 'XML::LibXML::SAX';
+    my $ui_os     = $o{ui_os} // 'tty';
 
     my $self;
     if (ref($pkg_or_self)) { $self = $pkg_or_self; $self->{Mode} = $mode;
         $self->{Handler} //= $Handler; $self->{Log} //= $Log;
         $self->{machine_spec} = $spec;
         $self->{chain} = _build_chain($self->Handler, $self->Log, $mode, $late_en,
-            $spec->{allowed}, $spec->{filters});
+            $spec->{allowed}, $spec->{filters}, undef, $ui_os, $spec->{ui_dialects});
     } else {
         $self = bless({ Mode => $mode, Handler => $Handler, Log => $Log, machine_spec => $spec }, $pkg_or_self);
         $self->{chain} = _build_chain($self->Handler, $self->Log, $mode, $late_en,
-            $spec->{allowed}, $spec->{filters});
+            $spec->{allowed}, $spec->{filters}, undef, $ui_os, $spec->{ui_dialects});
     }
     (my $gen_file = "$gen_class.pm") =~ s{::}{/}g;
     eval { require $gen_file };
@@ -277,7 +337,7 @@ sub run ($pkg_or_self, %o) {
     return;
 }
 
-sub _build_chain ($h, $l, $mode, $late_enable = {}, $allowed = undef, $spec_filters = undef, $realized = undef) {
+sub _build_chain ($h, $l, $mode, $late_enable = {}, $allowed = undef, $spec_filters = undef, $realized = undef, $ui_os = 'tty', $ui_dialects = undef) {
     my $head = $h;
     # Filters are never auto-loaded; they are always machine-spec declared.
     # When _build_chain is called directly without a spec (e.g. from tests),
@@ -287,7 +347,30 @@ sub _build_chain ($h, $l, $mode, $late_enable = {}, $allowed = undef, $spec_filt
         require Amin::Machine::MachineSpec;
         my $default = Amin::Machine::MachineSpec->new->spec;
         $spec_filters = $default->{filters};
-        $allowed //= $default->{allowed};
+        $allowed    //= $default->{allowed};
+        $ui_dialects //= $default->{ui_dialects};
+    }
+    elsif (!defined $ui_dialects) {
+        require Amin::Machine::MachineSpec;
+        $ui_dialects = Amin::Machine::MachineSpec->new->spec->{ui_dialects};
+    }
+
+    # The shared render context the ui: element-filter fleet injects as
+    # `Render`.  Which dialect serves the effective target is a contract fact
+    # declared in the spec (<ui-dialect target="ios" class="…"/>), never a
+    # class-name rule.  A target with no dialect (tty/neutral) yields no render
+    # — and, since every ui: element filter is target-scoped, no splicing at
+    # all: the subtree passes through untouched.
+    my $render;
+    if (defined $ui_dialects && (my $d = $ui_dialects->{$ui_os})) {
+        my $cls = $d->{class};
+        if (defined $cls && length $cls) {
+            unless ($cls->can('new')) {
+                (my $file = "$cls.pm") =~ s{::}{/}g;
+                eval { require $file; 1 };
+            }
+            $render = $cls->new if $cls->can('new');
+        }
     }
     my %by_p;
     my %cands_by_p;
@@ -347,15 +430,24 @@ sub _build_chain ($h, $l, $mode, $late_enable = {}, $allowed = undef, $spec_filt
                 Handler    => $head,
                 Log        => $l,
                 Mode       => $mode,
+                target     => $ui_os,
                 candidates => $cands,
+                render     => $render,
             );
         }
         my $filters = $by_p{$pos} // [];
         for my $f (reverse @$filters) {
+            # Target selection is data, not class names: a filter bound to a
+            # `target` (the spec declares UI::SwiftUI→ios, UI::Compose→android)
+            # is composed only when the effective --os/AMIN_OSTYPE value
+            # matches.  A filter with no target is platform-neutral.  The
+            # mode gates below (map/ui/ai) are a separate axis — whether the
+            # region is active for the requested mode at all.
             next if $pos eq 'late' && (
                 ($f->{class} =~ /::Map::/ && !$late_enable->{map}) ||
-                ($f->{class} =~ /::UI::/  && !$late_enable->{ui}) ||
-                ($f->{class} =~ /::AI::Graph/ && !$late_enable->{ai}));
+                ($f->{class} =~ /::AI::Graph/ && !$late_enable->{ai}) ||
+                ($f->{class} =~ /::UI::/ && !$late_enable->{ui}) ||
+                (length($f->{meta}{target} // '') && $f->{meta}{target} ne $ui_os));
             (my $file = "$f->{class}.pm") =~ s{::}{/}g;
             unless ($f->{class}->can('new')) {
                 my $ok = eval { require $file; 1 };   # locally scoped: no stale $@ into the loop
@@ -364,7 +456,8 @@ sub _build_chain ($h, $l, $mode, $late_enable = {}, $allowed = undef, $spec_filt
             $head = $f->{class}->new(
                 Handler => $head, Log => $l, Mode => $mode,
                 Name    => $f->{meta}{name},
-                Element => $f->{meta}{element});
+                Element => $f->{meta}{element},
+                Render  => $render);
             $head->can('name')    && $head->name($f->{meta}{name});
             $head->can('element') && $head->element($f->{meta}{element});
         }

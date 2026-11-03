@@ -1,0 +1,87 @@
+package Amin::UI::Target::Compose;
+
+# The Jetpack Compose dialect of the ui: target contract (see
+# Amin::UI::Target::Base).  Selected by `--os=android`.  The Compose twin of
+# Amin::UI::Target::SwiftUI: same IR, same closed-world validation, same
+# streaming verbs — only the projection differs, which keeps the two platforms
+# provably in step (every ui: kind has a target in each).
+
+use v5.38; use warnings; use utf8; use experimental 'signatures';
+use parent 'Amin::UI::Target::Base';
+
+# The wire channel the ui: element filters publish Compose fragments on.
+sub channel ($self) { 'ui-compose' }
+
+# A container kind → head, the separator before its first child, and the two
+# block closes (had children / empty).  Base's defaults fit the common
+# "Expression { … }" shape; `app`, `section`, `button`/`navigate` and `toolbar`
+# are the Kotlin idioms that differ.
+sub _cont ($self, $k, $pad, $pad1, $a) {
+    my $title   = $self->attr($a, 'title');
+    my $spacing = $self->attr($a, 'spacing');
+    my ($varr, $harr) = (
+        length $spacing ? "verticalArrangement = Arrangement.spacedBy($spacing.dp)"   : '',
+        length $spacing ? "horizontalArrangement = Arrangement.spacedBy($spacing.dp)" : '',
+    );
+    my $title_l = $self->lit($title);
+
+    return { head        => "$pad" . "\@Composable\n$pad" . "fun " . $self->ident($title) . "() {\n",
+             first       => '',
+             close_had   => "\n$pad}",
+             close_empty => "\n$pad}" }                if $k eq 'app';
+    return { head => "$pad" . "Surface" }              if $k eq 'scene';
+    return { head => "$pad" . "LazyColumn" }           if $k eq 'list';
+    return { head => "$pad" . "Box" }                  if $k eq 'stack';
+    return { head => "$pad" . "Row" }                  if $k eq 'item';
+    return { head => "$pad" . "Column" . ($varr ? "($varr)" : '') }
+                                                       if $k eq 'vstack' || $k eq 'column';
+    return { head => "$pad" . "Row" . ($harr ? "($harr)" : '') } if $k eq 'hstack';
+    return { head => "$pad" . "Row("
+             . join(', ', grep { length } ('verticalAlignment = Alignment.CenterVertically', $harr))
+             . ")" }                                   if $k eq 'row';
+    return { head => "$pad" . "LazyVerticalGrid(columns = GridCells.Adaptive(minSize = 120.dp)"
+             . ($varr ? ", $varr" : '') . ")" }        if $k eq 'grid';
+    return { head => "$pad" . "Card" }                 if $k eq 'card';
+    return { head        => "$pad" . "Column {\n$pad1"
+                           . "Text($title_l, style = MaterialTheme.typography.titleMedium)",
+             first       => "\n",
+             close_had   => "\n$pad}",
+             close_empty => "\n$pad}" }                if $k eq 'section';
+    return { head        => "$pad" . "Button(onClick = { })",
+             first       => " {\n",
+             close_had   => "\n$pad}",
+             close_empty => " { Text($title_l) }" }    if $k eq 'button';
+    return { head        => "$pad" . "TextButton(onClick = { })",
+             first       => " {\n",
+             close_had   => "\n$pad}",
+             close_empty => " { Text($title_l) }" }    if $k eq 'navigate';
+    return { head        => "$pad" . "TopAppBar(title = { Text($title_l) }",
+             first       => ", actions = {\n",
+             close_had   => "\n$pad})",
+             close_empty => ")" }                      if $k eq 'toolbar';
+    return { head => "$pad" . "ModalBottomSheet(onDismissRequest = { })" } if $k eq 'sheet';
+    return { head => "$pad" . "AlertDialog(onDismissRequest = { })" }      if $k eq 'alert';
+    return undef;
+}
+
+# A leaf kind → its whole expression.  The unreachable stub keeps a new `ui:`
+# kind added to the codec without a projection visible.
+sub _leaf ($self, $k, $pad, $a, $text) {
+    my $title  = $self->attr($a, 'title');
+    my $url    = $self->attr($a, 'url');
+    my $points = $self->attr($a, 'points');
+
+    return $pad . "Text(" . $self->lit($text) . ")"            if $k eq 'text';
+    return $pad . "Text(" . $self->lit($title) . ") // ui:label" if $k eq 'label';
+    return $pad . "Badge { Text(" . $self->lit($text) . ") }"  if $k eq 'badge';
+    return $pad . "CircularProgressIndicator()"                if $k eq 'progress';
+    return $pad . "Image(painter = painterResource(" . $self->lit($title) . "), contentDescription = null)"
+                                                               if $k eq 'image';
+    return $pad . "AsyncImage(model = " . $self->lit($url) . ", contentDescription = null)"
+                                                               if $k eq 'asyncimage';
+    return $pad . "Sparkline(points = $points)"                if $k eq 'sparkline';
+    return $pad . "/* ui:searchable */"                        if $k eq 'searchable';
+    return $pad . "/* ui:$k unimplemented */";
+}
+
+1;

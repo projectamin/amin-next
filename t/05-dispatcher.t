@@ -32,12 +32,26 @@ ok(!exists $by_pos{permanent} || ref($by_pos{permanent}) eq 'ARRAY',
     'permanent position valid (empty/unused is OK — trust boundary)');
 
 my $late = [ map { $_->{class} } $by_pos{late}->@* ];
-like($late, array {
-    item 'Amin::Filter::Map::Topology';
-    item 'Amin::Filter::UI::SwiftUIView';
-    item 'Amin::AI::Graph';
-    end;
-}, 'spec late position = Map::Topology + UI::SwiftUIView + AI::Graph');
+is($late->[0], 'Amin::Filter::Map::Topology', 'spec late idx 0 = Map::Topology');
+is($late->[1], 'Amin::Filter::UI::Guard',
+    'spec late idx 1 = neutral ui: Guard (always on — fail-closed on every host)');
+is($late->[-1], 'Amin::AI::Graph', 'spec late idx -1 = AI::Graph');
+is(scalar($late->@*), 53,
+    'spec late = Map::Topology + UI::Guard + 25×2 ui: element filters + AI::Graph');
+{
+    my @el = @$late[2 .. $#$late - 1];
+    ok(!(grep { $_ !~ /^Amin::Filter::UI::Element::/ } @el),
+        'every ui: element filter at late is Amin::Filter::UI::Element::*');
+    my %target;
+    for my $f ($by_pos{late}->@*) {
+        next unless $f->{class} =~ /^Amin::Filter::UI::Element::/;
+        $target{ $f->{meta}{target} // '' }++;
+    }
+    is($target{ios}, 25, 'late declares 25 ios element candidates');
+    is($target{android}, 25, 'late declares 25 android element candidates');
+    is(scalar(keys %target), 2,
+        'ui: element filters are target-scoped only (ios/android) — a neutral host splices none');
+}
 
 my $bare_chain = Amin::Machine::Dispatcher::_build_chain(
     Amin::Handler::Writer->new, Amin::Log::Standard->new(stderr=>0), 'render',
@@ -53,18 +67,24 @@ is($by_pos{middle}[3]{class},  'Amin::Command::Autoconf',  'spec middle idx 3 = 
 is($by_pos{middle}[4]{class},  'Amin::Command::Automake',  'spec middle idx 4 = Automake');
 is($by_pos{middle}[5]{class},  'Amin::Command::Autoreconf','spec middle idx 5 = Autoreconf');
 my $last = $#{$by_pos{middle}};
-is($by_pos{middle}[$last-8]{class}, 'Amin::Command::Exec',    'spec middle idx -9 = Exec');
-is($by_pos{middle}[$last-7]{class}, 'Amin::Command::Spawn',   'spec middle idx -8 = Spawn');
-is($by_pos{middle}[$last-6]{class}, 'Amin::Command::Signal',  'spec middle idx -7 = Signal');
-is($by_pos{middle}[$last-5]{class}, 'Amin::Sandbox',          'spec middle idx -6 = Sandbox (AC-NF-1 ordering)');
-is($by_pos{middle}[$last-4]{class}, 'Amin::Net::Fabric',      'spec middle idx -5 = Net::Fabric');
-is($by_pos{middle}[$last-3]{class}, 'Amin::AI::Inference',    'spec middle idx -4 = AI::Inference');
-is($by_pos{middle}[$last-2]{class}, 'Amin::AI::Embed',        'spec middle idx -3 = AI::Embed (RAG memory ingest)');
-is($by_pos{middle}[$last-1]{class}, 'Amin::AI::Memory',       'spec middle idx -2 = AI::Memory (RAG retrieval)');
+is($by_pos{middle}[$last-11]{class}, 'Amin::Command::Exec',    'spec middle idx -12 = Exec');
+is($by_pos{middle}[$last-10]{class}, 'Amin::Command::Spawn',   'spec middle idx -11 = Spawn');
+is($by_pos{middle}[$last-9]{class},  'Amin::Command::Signal',  'spec middle idx -10 = Signal');
+is($by_pos{middle}[$last-8]{class},  'Amin::Sandbox',          'spec middle idx -9 = Sandbox (AC-NF-1 ordering)');
+is($by_pos{middle}[$last-7]{class},  'Amin::Net::Fabric',      'spec middle idx -8 = Net::Fabric');
+is($by_pos{middle}[$last-6]{class},  'Amin::AI::Inference',    'spec middle idx -7 = AI::Inference');
+is($by_pos{middle}[$last-5]{class},  'Amin::AI::Embed',        'spec middle idx -6 = AI::Embed (RAG memory ingest)');
+is($by_pos{middle}[$last-4]{class},  'Amin::AI::Memory',       'spec middle idx -5 = AI::Memory (RAG retrieval)');
+is($by_pos{middle}[$last-3]{class},  'Amin::Filter::Crypto::RatchetOpen',
+    'spec middle idx -4 = sec::RatchetOpen (element-scoped candidate)');
+is($by_pos{middle}[$last-2]{class},  'Amin::Filter::Crypto::Prekey',
+    'spec middle idx -3 = sec::Prekey (initiator role; element=bundle)');
+is($by_pos{middle}[$last-1]{class},  'Amin::Filter::Crypto::Prekey',
+    'spec middle idx -2 = sec::Prekey (responder role; element=prekey)');
 is($by_pos{middle}[$last]{class},   'Amin::Filter::Storage::Bitcache',
     'spec middle idx -1 = Bitcache (innermost of middle array; spec-declared)');
-is(scalar($by_pos{middle}->@*), 278,
-    'spec middle position count = 278 (267 commands + UCC::Sales/UCC::Instruments + Exec/Spawn/Signal + Sandbox/Net + AI::Inference/Embed/Memory + Bitcache)');
+is(scalar($by_pos{middle}->@*), 281,
+    'spec middle position count = 281 (267 commands + UCC::Sales/UCC::Instruments + Exec/Spawn/Signal + Sandbox/Net + AI::Inference/Embed/Memory + sec::RatchetOpen/sec::Prekey×2 + Bitcache)');
 
 is($by_pos{begin}[0]{class}, 'Amin::Auth::ZCap',
     'spec begin idx 0 = Auth::ZCap (outermost, fires first auth boundary)');

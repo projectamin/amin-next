@@ -65,6 +65,7 @@ sub _parse ($self, $xml) {
         log       => undef,
         generator => undef,
         name      => undef,
+        ui_dialects => {},
     };
     if (!defined $xml || !length $xml) {
         if ($self->{_from_bitcache}) {
@@ -101,6 +102,18 @@ sub _parse ($self, $xml) {
     $result->{filters} = \@filters;
     $result->{allowed} = (scalar keys %allowed) ? \%allowed
         : ($self->{_from_bitcache} ? {} : $self->_allow_all_registered);
+
+    # ui: render targets are contract facts too: which dialect class serves a
+    # profile-declared target (ios/android).  The Dispatcher reads this to build
+    # the shared render context the ui: element filters inject as `Render`.
+    my %ui_dialects;
+    for my $node ($doc->findnodes('//ui-dialect')) {
+        my $t = $node->getAttribute('target');
+        my $c = $node->getAttribute('class') // $node->getAttribute('name');
+        next unless defined $t && length $t && defined $c && length $c;
+        $ui_dialects{$t} = { class => $c };
+    }
+    $result->{ui_dialects} = \%ui_dialects;
 
     for my $tag (qw(handler log generator)) {
         my ($node) = $doc->findnodes("//$tag");

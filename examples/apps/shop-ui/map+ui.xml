@@ -18,7 +18,7 @@
     amin:version="0.1.0-bootstrap">
 
   <!-- ═══════════════════════════════════════════════════════════════
-       1. UI LAYER  (consumed by Filter::UI::SwiftUIView / ComposeView)
+       1. UI LAYER  (consumed by the Filter::UI::Element::* fleet + UI::Target::*)
        Declarative view graph with SAX-event-to-SwiftUI publisher binds.
        ═══════════════════════════════════════════════════════════════ -->
   <ui:app amin:id="shop-ui" title="Amin Fabric — Shop">

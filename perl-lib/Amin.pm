@@ -32,6 +32,8 @@ sub parse ($self, $xml) {
     my $machine = Amin::Machine::Dispatcher->new(
         Mode => $self->{mode},
         late_filters_enable => $self->{late_filters_enable},
+        ui_os   => $self->{ui_os},
+        map_out => $self->{map_out},
         (defined $self->{handler}           ? (Handler => $self->{handler})           : ()),
         (defined $self->{log}               ? (Log     => $self->{log})               : ()),
         (defined $self->{machine_spec}      ? (machine_spec      => $self->{machine_spec})      : ()),

@@ -60,7 +60,7 @@ mise run test
 profile.xml ──SAX──▶ Amin::Machine::Dispatcher ──begin/middle/late filters──▶ Handler (XML / BSAX)
                          │                                            │
                          │  Amin::Cond::OS                            ├─ Amin::Filter::Map::Topology (late)
-                         │  Amin::Command::{Build,Exec,Mkdir,Echo,…}  ├─ Amin::Filter::UI::SwiftUIView (late)
+                         │  Amin::Command::{Build,Exec,Mkdir,Echo,…}  ├─ Amin::Filter::UI::Element::* (late, fleet)
                          │  Amin::Elt (IPC::Run harness)              │
                          └────── BSAX ⇄ XML roundtrip ────────────────┘
                              (Generator / Handler under perl-lib/Amin/)
@@ -162,7 +162,7 @@ Every `.amina` bundle is composite-signed with ML-DSA.  Every cross-control-plan
 **Medium-term:**
 - Network-management filter family: switch config, vlan plans, sflow/mirror, rack-topology output with verification contracts.
 - Custom Linux image build pipeline as a first-class filter pack (`amin build image …`).
-- Android Jetpack Compose late `ui:` filter, parallel to SwiftUIView.
+- ✅ Android Jetpack Compose late `ui:` filter, parallel to the SwiftUI projection (a fleet of per-kind `Amin::Filter::UI::Element::*` filters projecting through `Amin::UI::Target::{SwiftUI,Compose}`, selected by `--os`).
 - Sandbox tier enforcement: `prod` apps → `linux-strict` Landlock; `staging` → `posix-minimal`; mismatch is a hard reject before parse.
 - QUIC transport for AWP/3 via the `quic` feature flag.
 - Provenance byte-identity guarantee: same inputs → byte-identical `provenance.xml` pre-signature, across control planes.

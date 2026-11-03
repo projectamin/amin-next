@@ -46,22 +46,26 @@ markup in and emitted SAX; AXA takes SAX out and emits markup.
 
 The seams AXA needs are already there, but the render side is stubbed:
 
-- `bin/amin` accepts `--os=html` and validates it
-  ([bin/amin:119](../bin/amin)), but `Amin->new` stores `ui_os` and
-  `Amin::parse` never forwards it to the Dispatcher
-  ([perl-lib/Amin.pm:21](../perl-lib/Amin.pm)). The value is dead.
+- `bin/amin` accepts `--os=ios|android|html|tty` and validates it, and
+  `ui_os` now reaches the Dispatcher (`Amin->parse` → `Dispatcher->new` →
+  `_build_chain`), which composes the neutral `ui:` Guard plus the
+  target-scoped element-filter fleet and one dialect target for the effective
+  `--os` (`ios`/`android`; `tty`/`html` splice nothing and pass `ui:` through).
 - `--out=svg|dot|xml` is likewise parsed and validated, and `map_out` is
   never passed to `Amin::Filter::Map::Topology`. `amin map … --out=svg`
   returns **XML**, not SVG.
-- `Amin::Filter::UI::SwiftUIView` is an identity normalizer: `_map_view()`
-  re-emits the same `ui:*` element with re-prefixed attributes. It does
-  not generate SwiftUI, let alone HTML.
+- A fleet of per-kind `Amin::Filter::UI::Element::*` filters (declared `late`
+  and target-scoped) splices itself in on each `<ui:*>` element and prepends an
+  additive `amin:stream` render fragment; a neutral `Amin::Filter::UI::Guard`
+  enforces the closed-world vocabulary fail-closed on every host. The shared
+  render context is one `Amin::UI::Target::{SwiftUI,Compose}` instance
+  (`--os=ios` / `--os=android`), selected by the spec's `<ui-dialect>` entry.
 - `Amin::Filter::Map::Topology` accumulates nodes/regions/edges in memory
   and emits `map:node` events; nothing serializes them to SVG/DOT.
 - There is no HTTP server, no PSGI/Plack, no template engine anywhere in
   the tree or `cpanfile`.
 
-So: `amin ui --os=html` today prints the `ui:` tree as XML. The layer is
+So: `amin ui --os=html` today prints the `ui:` subtree as XML. The layer is
 absent, and the CLI hook for it is already reserved.
 
 ---
@@ -333,10 +337,10 @@ isolation question is *what may outlive a document*, and it has four
 answers — three of which are already correct in the codebase and one that is
 not.**Safe to keep for the process lifetime.** The parsed spec (`$spec->{filters}`
 is an array of `{class, meta}` hashes, read-only after parse) and the
-read-only memoized caches — `MachineSpec`, `SwiftUIView`'s `%known`,
-`Bitcache`, `ToolPaths`, `AI::Embed`, `UCC::Instruments`, `ZCap`'s `$cv`,
-`Discovery::Mesh`'s `$MOCK` — all of which are `state`-initialized constants
-or frozen hashes.
+read-only memoized caches — `MachineSpec`, `UI::Guard`'s `%KIND`,
+`UI::Target::Base`'s `%CONTAINER`, `Bitcache`, `ToolPaths`, `AI::Embed`,
+`UCC::Instruments`, `ZCap`'s `$cv`, `Discovery::Mesh`'s `$MOCK` — all of
+which are `state`-initialized constants or frozen hashes.
 
 **Mutable globals that must be sealed before serving.** Two registries look
 process-scoped but are not read-only, and both would silently change the
@@ -380,7 +384,7 @@ calls the accessor (`$self->stack`, [BSAX.pm:159](../perl-lib/Amin/Handler/BSAX.
 [BSAX.pm:163](../perl-lib/Amin/Handler/BSAX.pm#L163)). It is latent today
 only because one process handles one document.
 
-The rest of the codebase dodges this by accident: `SwiftUIView`, `Topology`,
+The rest of the codebase dodges this by accident: `Topology`,
 `Generator::BSAX`, `Bitcache` and `Elt` all declare the same kind of ref
 default but read their fields by direct hash access (`$self->{stack}`), which
 autovivifies fresh and leaves the declared default as dead code. The fix is
@@ -694,7 +698,7 @@ Files:
   `element → required permissions` map, per-element check, `-5121` on deny.
 - `perl-lib/Amin/AXA/FormCodec.pm` — form encoding → the app's own
   declared fragment. No policy, no domain knowledge (§4.2).
-- `perl-lib/Amin/Handler/BSAX.pm`, `Filter/UI/SwiftUIView.pm`,
+- `perl-lib/Amin/Handler/BSAX.pm`, `Filter/UI/{Tree,SwiftUI,Compose}.pm`,
   `Filter/Map/Topology.pm`, `Generator/BSAX.pm`, `Filter/Storage/Bitcache.pm`,
   `Elt.pm` — **ref-valued `Class::Tiny` defaults become `sub { [] }` /
   `sub { {} }`** (§4.9). `Amin::Handler::Writer` already does this; the rest

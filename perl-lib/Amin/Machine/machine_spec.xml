@@ -293,11 +293,88 @@
   <filter class="Amin::AI::Inference" position="middle" element="request" namespace="http://projectamin.org/ns/ai/1" />
   <filter class="Amin::AI::Embed" position="middle" element="embed" namespace="http://projectamin.org/ns/ai/1" />
   <filter class="Amin::AI::Memory" position="middle" element="query" namespace="http://projectamin.org/ns/ai/1" />
+  <!-- sec: post-quantum E2EE (payload-neutral Double Ratchet).  Element-scoped
+       candidates: the gate splices each in only while its element flows, so a
+       machine that never sees sec: elements pays nothing.  Prekey appears twice
+       because PQXDH has two roles keyed off two elements — `bundle` (initiator
+       consumes a peer's published prekeys) and `prekey` (responder consumes the
+       initial message).  RatchetSeal is the innermost `end` stage: sealing is
+       the last filter the plaintext crosses before the writer. -->
+  <filter class="Amin::Filter::Crypto::RatchetOpen" position="middle" element="sealed" namespace="http://projectamin.org/ns/sec/1" />
+  <filter class="Amin::Filter::Crypto::Prekey" position="middle" element="bundle" namespace="http://projectamin.org/ns/sec/1" />
+  <filter class="Amin::Filter::Crypto::Prekey" position="middle" element="prekey" namespace="http://projectamin.org/ns/sec/1" />
   <filter class="Amin::Filter::Storage::Bitcache" position="middle" element="object" namespace="http://projectamin.org/ns/bc/" />
   <filter class="Amin::Filter::Map::Topology" position="late" namespace="http://projectamin.org/ns/map/1" />
-  <filter class="Amin::Filter::UI::SwiftUIView" position="late" namespace="http://projectamin.org/ns/ui/1" />
+  <!-- ui: closed-world guard.  Always present and neutral: a known ui: kind is
+       forwarded untouched — so a host with no render filters passes the whole
+       ui: subtree through in full — while an unknown kind is a logged error
+       and its subtree dropped (fail-closed, independent of the render target). -->
+  <filter class="Amin::Filter::UI::Guard" position="late" namespace="http://projectamin.org/ns/ui/1" />
+  <!-- ui: which dialect renders a target is a contract fact, not a class-name
+       rule in the Dispatcher.  The Dispatcher builds the shared render context
+       from this and injects it into the ui: element filters as `Render`. -->
+  <ui-dialect target="ios"     class="Amin::UI::Target::SwiftUI" />
+  <ui-dialect target="android" class="Amin::UI::Target::Compose" />
+  <!-- ui: projection fleet — ONE filter per ui: kind (axa-plan §4.3).  Each is
+       an element-scoped `late` candidate bound to a target, so the position's
+       _LazyGate splices in only while its element flows: a machine that never
+       sees a ui: element pays nothing, and a tty/neutral host (no matching
+       target) lets the subtree pass through untouched for the next host.  The
+       filter is additive — it prepends an <amin:stream channel="ui-…"> fragment
+       and forwards the original element verbatim. -->
+  <filter class="Amin::Filter::UI::Element::Alert" position="late" element="alert" namespace="http://projectamin.org/ns/ui/1" target="ios" />
+  <filter class="Amin::Filter::UI::Element::Alert" position="late" element="alert" namespace="http://projectamin.org/ns/ui/1" target="android" />
+  <filter class="Amin::Filter::UI::Element::App" position="late" element="app" namespace="http://projectamin.org/ns/ui/1" target="ios" />
+  <filter class="Amin::Filter::UI::Element::App" position="late" element="app" namespace="http://projectamin.org/ns/ui/1" target="android" />
+  <filter class="Amin::Filter::UI::Element::AsyncImage" position="late" element="asyncimage" namespace="http://projectamin.org/ns/ui/1" target="ios" />
+  <filter class="Amin::Filter::UI::Element::AsyncImage" position="late" element="asyncimage" namespace="http://projectamin.org/ns/ui/1" target="android" />
+  <filter class="Amin::Filter::UI::Element::Badge" position="late" element="badge" namespace="http://projectamin.org/ns/ui/1" target="ios" />
+  <filter class="Amin::Filter::UI::Element::Badge" position="late" element="badge" namespace="http://projectamin.org/ns/ui/1" target="android" />
+  <filter class="Amin::Filter::UI::Element::Button" position="late" element="button" namespace="http://projectamin.org/ns/ui/1" target="ios" />
+  <filter class="Amin::Filter::UI::Element::Button" position="late" element="button" namespace="http://projectamin.org/ns/ui/1" target="android" />
+  <filter class="Amin::Filter::UI::Element::Card" position="late" element="card" namespace="http://projectamin.org/ns/ui/1" target="ios" />
+  <filter class="Amin::Filter::UI::Element::Card" position="late" element="card" namespace="http://projectamin.org/ns/ui/1" target="android" />
+  <filter class="Amin::Filter::UI::Element::Column" position="late" element="column" namespace="http://projectamin.org/ns/ui/1" target="ios" />
+  <filter class="Amin::Filter::UI::Element::Column" position="late" element="column" namespace="http://projectamin.org/ns/ui/1" target="android" />
+  <filter class="Amin::Filter::UI::Element::Grid" position="late" element="grid" namespace="http://projectamin.org/ns/ui/1" target="ios" />
+  <filter class="Amin::Filter::UI::Element::Grid" position="late" element="grid" namespace="http://projectamin.org/ns/ui/1" target="android" />
+  <filter class="Amin::Filter::UI::Element::HStack" position="late" element="hstack" namespace="http://projectamin.org/ns/ui/1" target="ios" />
+  <filter class="Amin::Filter::UI::Element::HStack" position="late" element="hstack" namespace="http://projectamin.org/ns/ui/1" target="android" />
+  <filter class="Amin::Filter::UI::Element::Image" position="late" element="image" namespace="http://projectamin.org/ns/ui/1" target="ios" />
+  <filter class="Amin::Filter::UI::Element::Image" position="late" element="image" namespace="http://projectamin.org/ns/ui/1" target="android" />
+  <filter class="Amin::Filter::UI::Element::Item" position="late" element="item" namespace="http://projectamin.org/ns/ui/1" target="ios" />
+  <filter class="Amin::Filter::UI::Element::Item" position="late" element="item" namespace="http://projectamin.org/ns/ui/1" target="android" />
+  <filter class="Amin::Filter::UI::Element::Label" position="late" element="label" namespace="http://projectamin.org/ns/ui/1" target="ios" />
+  <filter class="Amin::Filter::UI::Element::Label" position="late" element="label" namespace="http://projectamin.org/ns/ui/1" target="android" />
+  <filter class="Amin::Filter::UI::Element::List" position="late" element="list" namespace="http://projectamin.org/ns/ui/1" target="ios" />
+  <filter class="Amin::Filter::UI::Element::List" position="late" element="list" namespace="http://projectamin.org/ns/ui/1" target="android" />
+  <filter class="Amin::Filter::UI::Element::Navigate" position="late" element="navigate" namespace="http://projectamin.org/ns/ui/1" target="ios" />
+  <filter class="Amin::Filter::UI::Element::Navigate" position="late" element="navigate" namespace="http://projectamin.org/ns/ui/1" target="android" />
+  <filter class="Amin::Filter::UI::Element::Progress" position="late" element="progress" namespace="http://projectamin.org/ns/ui/1" target="ios" />
+  <filter class="Amin::Filter::UI::Element::Progress" position="late" element="progress" namespace="http://projectamin.org/ns/ui/1" target="android" />
+  <filter class="Amin::Filter::UI::Element::Row" position="late" element="row" namespace="http://projectamin.org/ns/ui/1" target="ios" />
+  <filter class="Amin::Filter::UI::Element::Row" position="late" element="row" namespace="http://projectamin.org/ns/ui/1" target="android" />
+  <filter class="Amin::Filter::UI::Element::Scene" position="late" element="scene" namespace="http://projectamin.org/ns/ui/1" target="ios" />
+  <filter class="Amin::Filter::UI::Element::Scene" position="late" element="scene" namespace="http://projectamin.org/ns/ui/1" target="android" />
+  <filter class="Amin::Filter::UI::Element::Searchable" position="late" element="searchable" namespace="http://projectamin.org/ns/ui/1" target="ios" />
+  <filter class="Amin::Filter::UI::Element::Searchable" position="late" element="searchable" namespace="http://projectamin.org/ns/ui/1" target="android" />
+  <filter class="Amin::Filter::UI::Element::Section" position="late" element="section" namespace="http://projectamin.org/ns/ui/1" target="ios" />
+  <filter class="Amin::Filter::UI::Element::Section" position="late" element="section" namespace="http://projectamin.org/ns/ui/1" target="android" />
+  <filter class="Amin::Filter::UI::Element::Sheet" position="late" element="sheet" namespace="http://projectamin.org/ns/ui/1" target="ios" />
+  <filter class="Amin::Filter::UI::Element::Sheet" position="late" element="sheet" namespace="http://projectamin.org/ns/ui/1" target="android" />
+  <filter class="Amin::Filter::UI::Element::Sparkline" position="late" element="sparkline" namespace="http://projectamin.org/ns/ui/1" target="ios" />
+  <filter class="Amin::Filter::UI::Element::Sparkline" position="late" element="sparkline" namespace="http://projectamin.org/ns/ui/1" target="android" />
+  <filter class="Amin::Filter::UI::Element::Stack" position="late" element="stack" namespace="http://projectamin.org/ns/ui/1" target="ios" />
+  <filter class="Amin::Filter::UI::Element::Stack" position="late" element="stack" namespace="http://projectamin.org/ns/ui/1" target="android" />
+  <filter class="Amin::Filter::UI::Element::Text" position="late" element="text" namespace="http://projectamin.org/ns/ui/1" target="ios" />
+  <filter class="Amin::Filter::UI::Element::Text" position="late" element="text" namespace="http://projectamin.org/ns/ui/1" target="android" />
+  <filter class="Amin::Filter::UI::Element::Toolbar" position="late" element="toolbar" namespace="http://projectamin.org/ns/ui/1" target="ios" />
+  <filter class="Amin::Filter::UI::Element::Toolbar" position="late" element="toolbar" namespace="http://projectamin.org/ns/ui/1" target="android" />
+  <filter class="Amin::Filter::UI::Element::VStack" position="late" element="vstack" namespace="http://projectamin.org/ns/ui/1" target="ios" />
+  <filter class="Amin::Filter::UI::Element::VStack" position="late" element="vstack" namespace="http://projectamin.org/ns/ui/1" target="android" />
   <filter class="Amin::AI::Graph" position="late" namespace="http://projectamin.org/ns/ai/1" />
   <filter class="Amin::Filter::Billing::CgroupV2" position="end" namespace="http://projectamin.org/ns/2026/" />
   <filter class="Amin::UCC::Settlement" position="end" namespace="http://projectamin.org/ns/ucc/1" />
   <filter class="Amin::AI::Provenance" position="end" namespace="http://projectamin.org/ns/ai/1" />
+  <filter class="Amin::Filter::Crypto::RatchetSeal" position="end" element="seal" namespace="http://projectamin.org/ns/sec/1" />
 </machine>

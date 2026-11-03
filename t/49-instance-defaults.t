@@ -8,7 +8,7 @@
 #      swept over every filter class in the stock machine spec,
 #   3. the original repro: Amin::Handler::BSAX — instance 2 must not start
 #      with instance 1's unclosed nesting.
-# (This fails on Amin::Handler::BSAX, SwiftUIView, Topology, Bitcache, Elt
+# (This fails on Amin::Handler::BSAX, UI::Tree, Topology, Bitcache, Elt
 #  and Generator::BSAX before the fix — see docs/axa-plan.md §4.9/M1.)
 use v5.38; use warnings; use utf8;
 use Test2::V0;
@@ -28,7 +28,6 @@ my @classes = (
         Amin::Handler::BSAX
         Amin::Generator::BSAX
         Amin::Elt
-        Amin::Filter::UI::SwiftUIView
         Amin::Filter::Map::Topology
         Amin::Filter::Storage::Bitcache
         Amin::Test::RecordingHandler
