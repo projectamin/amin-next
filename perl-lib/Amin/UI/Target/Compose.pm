@@ -61,6 +61,11 @@ sub _cont ($self, $k, $pad, $pad1, $a) {
              close_empty => ")" }                      if $k eq 'toolbar';
     return { head => "$pad" . "ModalBottomSheet(onDismissRequest = { })" } if $k eq 'sheet';
     return { head => "$pad" . "AlertDialog(onDismissRequest = { })" }      if $k eq 'alert';
+    return { head => "$pad" . "Column" }               if $k eq 'form';
+    return { head => "$pad" . "Column" }               if $k eq 'select';
+    return { head => "$pad" . "Column" }               if $k eq 'table';
+    return { head => "$pad" . "Row" }                  if $k eq 'tr';
+    return { head => "$pad" . "Box" }                  if $k eq 'cell';
     return undef;
 }
 
@@ -81,6 +86,10 @@ sub _leaf ($self, $k, $pad, $a, $text) {
                                                                if $k eq 'asyncimage';
     return $pad . "Sparkline(points = $points)"                if $k eq 'sparkline';
     return $pad . "/* ui:searchable */"                        if $k eq 'searchable';
+    return $pad . "TextField(value = " . $self->lit($self->attr($a, 'value'))
+                 . ", onValueChange = { })"                    if $k eq 'field';
+    return $pad . "Text(" . $self->lit($text) . ")"            if $k eq 'option';
+    return $pad . "/* ui:style */"                             if $k eq 'style';
     return $pad . "/* ui:$k unimplemented */";
 }
 

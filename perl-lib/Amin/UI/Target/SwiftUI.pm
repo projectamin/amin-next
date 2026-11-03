@@ -49,6 +49,12 @@ sub _cont ($self, $k, $pad, $pad1, $a) {
     return { head => "$pad" . ".sheet(isPresented: \$showSheet)" } if $k eq 'sheet';
     return { head => "$pad" . ".alert(" . $self->lit($title) . ", isPresented: \$showAlert)" }
                                                        if $k eq 'alert';
+    return { head => "$pad" . "Form" }                 if $k eq 'form';
+    return { head => "$pad" . "Picker(\"\", selection: .constant(0))" }
+                                                       if $k eq 'select';
+    return { head => "$pad" . "VStack" }               if $k eq 'table';
+    return { head => "$pad" . "HStack" }               if $k eq 'tr';
+    return { head => "$pad" . "Group" }                if $k eq 'cell';
     return undef;
 }
 
@@ -69,6 +75,10 @@ sub _leaf ($self, $k, $pad, $a, $text) {
     return $pad . ".searchable(text: \$query)"                 if $k eq 'searchable';
     return $pad . "Text(" . $self->lit($text) . ").badge(" . (length $points ? $points : 1) . ")"
                                                                if $k eq 'badge';
+    return $pad . "TextField(" . $self->lit($self->attr($a, 'name')) . ", text: .constant("
+                 . $self->lit($self->attr($a, 'value')) . "))" if $k eq 'field';
+    return $pad . "Text(" . $self->lit($text) . ")"            if $k eq 'option';
+    return $pad . "/* ui:style */"                             if $k eq 'style';
     return $pad . "EmptyView() /* ui:$k unimplemented */";
 }
 

@@ -48,9 +48,9 @@ sub app ($class, %opts) {
     # full M1 merge lands in Amin::AXA::App later).  Registered ONCE at
     # boot — §4.9: nothing registers after the first request is served.
     push $spec->{filters}->@*, (
-        { class => 'Amin::Example::Shop', meta => { position => 'late',
+        { class => 'Amin::Example::Shop', meta => { position => 'middle',
             element => 'request', namespace => SHOP_NS, permissions => '' } },
-        { class => 'Amin::Example::Shop', meta => { position => 'late',
+        { class => 'Amin::Example::Shop', meta => { position => 'middle',
             element => 'action',  namespace => SHOP_NS, permissions => '' } },
     );
 
@@ -61,6 +61,7 @@ sub app ($class, %opts) {
         machine_spec   => $spec,
         source_xml     => '<amin:profile xmlns:amin="' . AMIN_NS . '"/>',
         late_filters_enable => { map => 1, ui => 1 },
+        ui_os          => 'html',
     );
 
     my $stream = $opts{stream} // 0;
@@ -186,6 +187,7 @@ sub render ($class, $spec, $fragment, $values) {
                 Log     => Amin::Log::Standard->new(stderr => 0),
                 machine_spec        => $spec,
                 late_filters_enable => { map => 1, ui => 1 },
+                ui_os               => 'html',
             )->parse($doc);
             1;
         };
@@ -236,6 +238,7 @@ sub render_stream ($class, $spec, $fragment, $values, $extra_headers = []) {
                 Log     => Amin::Log::Standard->new(stderr => 0),
                 machine_spec        => $spec,
                 late_filters_enable => { map => 1, ui => 1 },
+                ui_os               => 'html',
             )->parse($doc);
             1;
         };

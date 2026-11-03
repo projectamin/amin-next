@@ -5,10 +5,12 @@
 //! files (`perl-lib/Amin/Handler/BSAX.pm` and `perl-lib/Amin/Generator/BSAX.pm`)
 //! — the decoder/encoder only stay 1:1 if the byte-level vocab order matches.
 //!
-//! Escape marker is auto-derived as `BY_ID.len() as u32` (currently 122 → one
-//! LEB128 byte, same wire cost as the old hard-coded 62 but without manual
-//! slot-counting collisions).  Any LocalName unknown to this table is sent on
-//! the wire as the escape marker + length-prefixed UTF-8 (larger + slower).
+//! Escape marker is auto-derived as `BY_ID.len() as u32` (currently 137 → a
+//! 2-byte LEB128 code point).  Crossing 128 was the deliberate
+//! "name-id-2-byte-mode" revision that let the ui: form vocabulary grow; the
+//! name ids themselves are unchanged in meaning, only their wire width.  Any
+//! LocalName unknown to this table is sent on the wire as the escape marker +
+//! length-prefixed UTF-8 (larger + slower).
 
 /// 4-bit NS_ID inline constants.  MUST stay 1:1 with Perl Handler/Generator::BSAX
 /// `use constant { NS_NONE => 0, NS_AMIN => 1, NS_UI => 2, NS_MAP => 3, NS_BITCACHE => 4,
@@ -52,12 +54,20 @@ pub const BY_ID: &[&[u8]] = &[
     // ── map:* — Amin::Filter::Map::Topology element+attr LocalNames
     b"region", b"server", b"link", b"node", b"a", b"b", b"cost", b"phase",
     b"flavor", b"latency_ms", b"bw_gbps", b"tier", b"zone", b"value",
-    // ── ui:*  — closed-world ui: vocabulary (25 kinds) + late-sax attrs
+    // ── ui:*  — closed-world ui: vocabulary (33 kinds) + late-sax attrs
+    //      The 8 form/table/style kinds and 7 form attrs were grown IN PLACE
+    //      (the deliberate 2-byte NAME_ID revision): appended to the ui: slice,
+    //      shifting every downstream region's NAME_ID by 15 while the ui: ids
+    //      themselves stay stable.
     b"app", b"scene", b"list", b"row", b"column", b"hstack", b"vstack",
     b"stack", b"grid", b"section", b"card", b"progress", b"alert", b"sheet",
     b"toolbar", b"searchable", b"item", b"label", b"text", b"badge",
     b"sparkline", b"button", b"navigate", b"image", b"asyncimage",
+    b"form", b"field", b"select", b"option", b"table", b"tr", b"cell",
+    b"style",
     b"title", b"spacing", b"points", b"for-each", b"bind", b"url",
+    b"action", b"method", b"min", b"max", b"placeholder", b"selected",
+    b"header",
     // ── bc:*  — projectamin/bitcache 2014 namespace LocalNames
     //      (object/signer envelope, networkmap mesh, slab lifecycle ops)
     b"object", b"hash", b"date", b"signer", b"networkmap", b"server",
@@ -108,19 +118,18 @@ mod tests {
 
     #[test]
     fn vocab_count_kept_in_sync_with_perl() {
-        // Perl's @VOCAB currently has 122 entries across
+        // Perl's @VOCAB currently has 137 entries across
         // amin/map/ui/bc/ainit/exec-net/sec.
         // If this fails, update both sides together with the same reordering.
-        assert_eq!(BY_ID.len(), 122);
-        assert_eq!(escape_id(), 122);
-        // Hard architecture guard (AC-2): VOCAB size ≤ 127 means every NAME_ID
-        // fits in one LEB128 byte on the wire.  If we ever exceed 127 we need
-        // a formal spec revision (name-id-2-byte-mode) NOT a silent 2-byte
-        // LEB expansion because that changes the wire-size of ALL inner
-        // elements (every <status>, <result>, <stream>, …).  Keep adding new
-        // region entries here freely until we hit 126; above that, talk to the
-        // spec owner first.
-        assert!(BY_ID.len() <= 127, "VOCAB exceeded 127 entries — requires wire-format spec revision");
+        assert_eq!(BY_ID.len(), 137);
+        assert_eq!(escape_id(), 137);
+        // Architecture guard (AC-2): the vocabulary is in the 2-byte LEB128
+        // "name-id-2-byte-mode" (>127) introduced for the ui: form surface, so
+        // every NAME_ID now costs two LEB bytes.  That revision was a one-off:
+        // stay under 256 (still a 2-byte LEB) and talk to the spec owner before
+        // any further growth, because the next threshold changes the wire size
+        // of ALL inner elements again.
+        assert!(BY_ID.len() <= 255, "VOCAB exceeded 255 entries — requires another wire-format spec revision");
     }
     #[test]
     fn amin_kind_maps_id_9() {
@@ -141,42 +150,55 @@ mod tests {
         assert_eq!(BY_ID[37], b"app");
     }
     #[test]
-    fn bc_object_region_starts_at_68() {
-        // 23 amin + 14 map + 31 ui = 68 → bc:* region starts at index 68
-        assert_eq!(by_name(b"object"), Some(68));
-        assert_eq!(BY_ID[68], b"object");
-        // Final bc entry push sits at 68 + 18 = 86
-        assert_eq!(by_name(b"push"), Some(86));
-        assert_eq!(BY_ID[86], b"push");
+    fn ui_form_region_appended_in_place() {
+        // The 8 new kinds sit between the original 25 kinds and the attrs.
+        assert_eq!(by_name(b"asyncimage"), Some(61));
+        assert_eq!(by_name(b"form"),  Some(62));
+        assert_eq!(by_name(b"style"), Some(69));
+        // New attrs follow the original 6 (title..url @70..75).
+        assert_eq!(by_name(b"url"),     Some(75));
+        assert_eq!(by_name(b"action"),  Some(76));
+        // `header` reuses the sec: LocalName (multi-region name, like value/
+        // server); by_name returns the FIRST match, the ui: slot.
+        assert_eq!(by_name(b"header"),  Some(82));
     }
     #[test]
-    fn ainit_stage_region_starts_at_87() {
-        assert_eq!(by_name(b"stage"), Some(87));
-        assert_eq!(BY_ID[87], b"stage");
-        assert_eq!(by_name(b"slab_dev"), Some(92));
+    fn bc_object_region_starts_at_83() {
+        // 23 amin + 14 map + 46 ui = 83 → bc:* region starts at index 83
+        assert_eq!(by_name(b"object"), Some(83));
+        assert_eq!(BY_ID[83], b"object");
+        // Final bc entry push sits at 83 + 18 = 101
+        assert_eq!(by_name(b"push"), Some(101));
+        assert_eq!(BY_ID[101], b"push");
     }
     #[test]
-    fn exec_net_region_starts_at_93() {
-        assert_eq!(by_name(b"exec"), Some(93));
-        assert_eq!(BY_ID[93], b"exec");
-        // Final entry netpolicy sits at 93 + 13 = 106 (last vocab index; escape = 107)
-        assert_eq!(by_name(b"netpolicy"), Some(106));
-        assert_eq!(BY_ID[106], b"netpolicy");
+    fn ainit_stage_region_starts_at_102() {
+        assert_eq!(by_name(b"stage"), Some(102));
+        assert_eq!(BY_ID[102], b"stage");
+        assert_eq!(by_name(b"slab_dev"), Some(107));
     }
     #[test]
-    fn sec_region_starts_at_107() {
-        // 23 amin + 14 map + 31 ui + 19 bc + 6 ainit + 14 exec-net = 107
-        // → the sec:* region is appended at index 107.
-        assert_eq!(by_name(b"seal"), Some(107));
-        assert_eq!(BY_ID[107], b"seal");
-        assert_eq!(by_name(b"sealed"), Some(108));
+    fn exec_net_region_starts_at_108() {
+        assert_eq!(by_name(b"exec"), Some(108));
+        assert_eq!(BY_ID[108], b"exec");
+        // Final entry netpolicy sits at 108 + 13 = 121 (last vocab index; escape = 122)
+        assert_eq!(by_name(b"netpolicy"), Some(121));
+        assert_eq!(BY_ID[121], b"netpolicy");
+    }
+    #[test]
+    fn sec_region_starts_at_122() {
+        // 23 amin + 14 map + 46 ui + 19 bc + 6 ainit + 14 exec-net = 122
+        // → the sec:* region is appended at index 122.
+        assert_eq!(by_name(b"seal"), Some(122));
+        assert_eq!(BY_ID[122], b"seal");
+        assert_eq!(by_name(b"sealed"), Some(123));
         // The Double Ratchet header fields sit contiguously.
-        assert_eq!(by_name(b"ratchet"), Some(111));
-        assert_eq!(by_name(b"prev_count"), Some(112));
-        assert_eq!(by_name(b"msg_index"), Some(113));
-        // Final sec entry `require` sits at 107 + 14 = 121 (last index; escape = 122).
-        assert_eq!(by_name(b"require"), Some(121));
-        assert_eq!(BY_ID[121], b"require");
+        assert_eq!(by_name(b"ratchet"), Some(126));
+        assert_eq!(by_name(b"prev_count"), Some(127));
+        assert_eq!(by_name(b"msg_index"), Some(128));
+        // Final sec entry `require` sits at 122 + 14 = 136 (last index; escape = 137).
+        assert_eq!(by_name(b"require"), Some(136));
+        assert_eq!(BY_ID[136], b"require");
     }
     #[test]
     fn ns_sec_constant_matches_perl_handler() {

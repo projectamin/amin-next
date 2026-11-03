@@ -5,43 +5,46 @@ use Amin::AXA::App;
 use Amin::AXA::Store;
 
 # The shop example, for real, in its own namespace (urn:projectamin:example:shop).
-# A late-position element filter spliced by _LazyGate on <shop:request> and
+# A middle-position element filter spliced by _LazyGate on <shop:request> and
 # <shop:action> — the plan §4.3 mechanism applied to the app's own elements:
 # one filter, element-scoped, declared in the bundle's filter list (the
 # adapter merges it into the machine spec at boot, §5.2's machine-first shape).
 #
-# What flows downstream of this filter is html:* only: the app element is
-# swallowed, never forwarded. Output escaping stays in Amin::Handler::HTML
-# (§4.5 — HTML never comes from strings, and there is exactly one escaper).
+# What flows downstream of this filter is the canonical ui: IR, emitted one
+# element at a time through $self->Handler.  It is `middle`, not `late`, on
+# purpose: the terminal `late` region holds the ui: Guard and the projection
+# fleet, and a middle filter's emitted events flow DOWN through those — a late
+# filter's would land below them and reach Handler::HTML unrendered.  So the
+# app speaks the closed-world ui: vocabulary and never builds markup: the
+# selected Amin::UI::Target::* (Target::HTML, chosen by ui_os=html) turns each
+# ui: element into real html:* SAX events, and Amin::Handler::HTML serialises
+# and escapes them (§4.5 — one escaper, HTML never built from a string).
+#
 # State lives behind Amin::AXA::Store keyed by the session id the transport
 # supplied (§4.7).  It is SQLite-backed, so it survives a prefork worker
 # swap — an in-process hash would give each worker its own cart.
 
 use constant SHOP_NS => 'urn:projectamin:example:shop';
-use constant XHTML   => 'http://www.w3.org/1999/xhtml';
+use constant UI_NS   => 'http://projectamin.org/ns/ui/1';
 
+# CSS rides the IR as a ui:style leaf: it projects to <style> in HTML and is a
+# no-op in SwiftUI/Compose.  Selectors target the tags the html dialect emits.
 my $CSS = <<'CSS';
 body{font-family:system-ui,sans-serif;margin:0;background:#f6f7f9;color:#1a1d21}
-nav.nav{display:flex;gap:1rem;padding:.75rem 1.25rem;background:#1a1d21}
-nav.nav a{color:#f6f7f9;text-decoration:none;font-weight:600}
+nav{display:flex;gap:1rem;padding:.75rem 1.25rem;background:#1a1d21}
+nav a{color:#f6f7f9;text-decoration:none;font-weight:600}
 main{max-width:60rem;margin:1.5rem auto;padding:0 1rem}
-h1{font-size:1.5rem}
+article{background:#fff;border:1px solid #e3e6ea;border-radius:.5rem;padding:1rem}
 .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(14rem,1fr));gap:1rem}
-.card{background:#fff;border:1px solid #e3e6ea;border-radius:.5rem;padding:1rem}
-.card h2{font-size:1.05rem;margin:.25rem 0}
-.price{font-weight:700;color:#0a5c2e}
-.muted{color:#5b6470;font-size:.9rem}
 table{width:100%;border-collapse:collapse;background:#fff}
 th,td{padding:.5rem .6rem;border-bottom:1px solid #e3e6ea;text-align:left}
-form.inline{display:inline-flex;gap:.4rem;align-items:center}
+form{display:inline-flex;gap:.4rem;align-items:center}
 button{background:#0a5c2e;color:#fff;border:0;border-radius:.35rem;padding:.45rem .8rem;cursor:pointer}
-button.secondary{background:#8a1c1c}
-input[type=number]{width:4.5rem;padding:.3rem}
-.alert{background:#fff4d6;border:1px solid #e0c060;padding:.75rem 1rem;border-radius:.5rem}
+div[role=alert]{background:#fff4d6;border:1px solid #e0c060;padding:.75rem 1rem;border-radius:.5rem}
 a{color:#0a5c2e}
 CSS
 
-# ── filter contract: see its own elements, swallow them, emit html ─────
+# ── filter contract: see its own elements, swallow them, emit ui: ─────
 sub start_element ($self, $el) {
     return unless ($el->{NamespaceURI} // '') eq SHOP_NS;
     my $ln = $el->{LocalName} // '';
@@ -113,170 +116,183 @@ sub _cart_rec ($self, $sid) {
 
 sub _cart ($self, $sid) { my (undef, $cart) = $self->_cart_rec($sid); return $cart }
 
-# ── pages ──────────────────────────────────────────────────────────────
+# ── pages: emit the canonical ui: IR ──────────────────────────────────
 sub _page_catalog ($self, $a, $cart) {
     my $products = Amin::AXA::App->default->catalog;
-    $self->_layout('Shop — Catalogue', $cart, sub {
-        $self->_start('h1'); $self->_text('Catalogue'); $self->_end('h1');
+    $self->_page('Shop — Catalogue', $cart, sub {
+        $self->_ui_text_el('Catalogue');
         if (!@$products) {
-            $self->_start('p', class => 'muted'); $self->_text('No products.');
-            $self->_end('p'); return;
+            $self->_ui_text_el('No products.');
+            return;
         }
-        $self->_start('div', class => 'grid');
+        $self->_ui_start('grid');
         for my $p ($products->@*) {
-            $self->_start('div', class => 'card');
-            $self->_start('a', href => '/product?sku=' . _u($p->{sku}));
-            $self->_text($p->{name}); $self->_end('a');
-            $self->_start('p', class => 'price'); $self->_text(_money($p->{price})); $self->_end('p');
-            $self->_start('p', class => 'muted');
-            $self->_text(_stock($p->{stock})); $self->_end('p');
-            $self->_end('div');
+            $self->_ui_start('card');
+            $self->_ui_start('navigate', to => '/product?sku=' . _u($p->{sku}),
+                                      title => $p->{name});
+            $self->_ui_end('navigate');
+            $self->_ui_text_el(_money($p->{price}));
+            $self->_ui_text_el(_stock($p->{stock}));
+            $self->_ui_end('card');
         }
-        $self->_end('div');
+        $self->_ui_end('grid');
     });
 }
 
 sub _page_product ($self, $a, $cart) {
     my $p = Amin::AXA::App->default->product($a->{sku} // '');
-    $self->_layout($p ? "$p->{name} — Shop" : 'Unknown product — Shop', $cart, sub {
+    $self->_page($p ? "$p->{name} — Shop" : 'Unknown product — Shop', $cart, sub {
         if (!$p) {
-            $self->_start('div', class => 'alert');
-            $self->_start('strong'); $self->_text('Unknown product: '); $self->_end('strong');
-            $self->_text($a->{sku} // '');   # escaped by Handler::HTML
-            $self->_end('div');
-            $self->_start('p'); $self->_start('a', href => '/');
-            $self->_text('Back to catalogue'); $self->_end('a'); $self->_end('p');
+            $self->_ui_start('alert');
+            $self->_ui_text('Unknown product: ' . ($a->{sku} // ''));  # escaped by Handler::HTML
+            $self->_ui_end('alert');
+            $self->_nav_home;
             return;
         }
-        $self->_start('h1'); $self->_text($p->{name}); $self->_end('h1');
-        $self->_start('p', class => 'price'); $self->_text(_money($p->{price})); $self->_end('p');
-        $self->_start('p', class => 'muted'); $self->_text(_stock($p->{stock})); $self->_end('p');
-        $self->_start('form', method => 'post', action => '/cart');
+        $self->_ui_text_el($p->{name});
+        $self->_ui_text_el(_money($p->{price}));
+        $self->_ui_text_el(_stock($p->{stock}));
+        $self->_ui_start('form', method => 'post', action => '/cart');
         $self->_hidden('axa.action', 'cart.add');
         $self->_hidden('axa.param.sku', $p->{sku});
         $self->_hidden('axa.csrf', $a->{csrf} // '');
-        $self->_start('button', type => 'submit');
-        $self->_text('Add to cart'); $self->_end('button');
-        $self->_end('form');
-        $self->_start('p'); $self->_start('a', href => '/');
-        $self->_text('Back to catalogue'); $self->_end('a'); $self->_end('p');
+        $self->_ui_start('button', title => 'Add to cart');
+        $self->_ui_end('button');
+        $self->_ui_end('form');
+        $self->_nav_home;
     });
 }
 
 sub _page_cart ($self, $a, $cart) {
-    $self->_layout('Cart — Shop', $cart, sub {
-        $self->_start('h1'); $self->_text('Your cart'); $self->_end('h1');
+    $self->_page('Cart — Shop', $cart, sub {
+        $self->_ui_text_el('Your cart');
         if (!%$cart) {
-            $self->_start('p', class => 'muted'); $self->_text('Your cart is empty.');
-            $self->_end('p');
-            $self->_start('p'); $self->_start('a', href => '/');
-            $self->_text('Back to catalogue'); $self->_end('a'); $self->_end('p');
+            $self->_ui_text_el('Your cart is empty.');
+            $self->_nav_home;
             return;
         }
-        my $store = Amin::AXA::Store->default;
         my $total = 0;
-        $self->_start('table');
-        $self->_start('tr');
-        $self->_start('th'); $self->_text('Product'); $self->_end('th');
-        $self->_start('th'); $self->_text('Price');   $self->_end('th');
-        $self->_start('th'); $self->_text('Qty');     $self->_end('th');
-        $self->_start('th'); $self->_text('Total');   $self->_end('th');
-        $self->_start('th'); $self->_text('');        $self->_end('th');
-        $self->_end('tr');
+        $self->_ui_start('table');
+        $self->_ui_start('tr');
+        $self->_ui_head_cell($_) for qw(Product Price Qty Total);
+        $self->_ui_start('cell'); $self->_ui_end('cell');   # actions column head
+        $self->_ui_end('tr');
         for my $sku (sort keys %$cart) {
             my $qty = $cart->{$sku};
             my $p   = Amin::AXA::App->default->product($sku);
             my $price = ($p && $p->{price} =~ /^-?\d+(?:\.\d+)?$/) ? 0 + $p->{price} : 0;
             my $line  = $price * $qty;
             $total += $line;
-            $self->_start('tr');
-            $self->_start('td'); $self->_text($p ? $p->{name} : $sku); $self->_end('td');
-            $self->_start('td'); $self->_text(_money($price));          $self->_end('td');
-            $self->_start('td');
-            $self->_start('form', class => 'inline', method => 'post', action => '/cart');
+            $self->_ui_start('tr');
+            $self->_ui_cell($p ? $p->{name} : $sku);
+            $self->_ui_cell(_money($price));
+            $self->_ui_start('cell');
+            $self->_ui_start('form', method => 'post', action => '/cart');
             $self->_hidden('axa.action', 'cart.set_qty');
             $self->_hidden('axa.param.sku', $sku);
             $self->_hidden('axa.csrf', $a->{csrf} // '');
-            $self->_start('input', type => 'number', name => 'axa.param.qty',
-                value => "$qty", min => '0', max => '999');
-            $self->_start('button', type => 'submit');
-            $self->_text('Update'); $self->_end('button');
-            $self->_end('form');
-            $self->_end('td');
-            $self->_start('td'); $self->_text(_money($line)); $self->_end('td');
-            $self->_start('td');
-            $self->_start('form', class => 'inline', method => 'post', action => '/cart');
+            $self->_ui_void('field', type => 'number', name => 'axa.param.qty',
+                                    value => "$qty", min => '0', max => '999');
+            $self->_ui_start('button', title => 'Update');
+            $self->_ui_end('button');
+            $self->_ui_end('form');
+            $self->_ui_end('cell');
+            $self->_ui_cell(_money($line));
+            $self->_ui_start('cell');
+            $self->_ui_start('form', method => 'post', action => '/cart');
             $self->_hidden('axa.action', 'cart.remove');
             $self->_hidden('axa.param.sku', $sku);
             $self->_hidden('axa.csrf', $a->{csrf} // '');
-            $self->_start('button', class => 'secondary', type => 'submit');
-            $self->_text('Remove'); $self->_end('button');
-            $self->_end('form');
-            $self->_end('td');
-            $self->_end('tr');
+            $self->_ui_start('button', title => 'Remove');
+            $self->_ui_end('button');
+            $self->_ui_end('form');
+            $self->_ui_end('cell');
+            $self->_ui_end('tr');
         }
-        $self->_start('tr');
-        $self->_start('td'); $self->_end('td');
-        $self->_start('td'); $self->_end('td');
-        $self->_start('td'); $self->_end('td');
-        $self->_start('td');
-        $self->_start('strong'); $self->_text(_money($total)); $self->_end('strong');
-        $self->_end('td');
-        $self->_start('td'); $self->_end('td');
-        $self->_end('tr');
-        $self->_end('table');
-        $self->_start('p', class => 'muted');
-        $self->_text('Checkout is not wired up in this first pass.');
-        $self->_end('p');
-        $self->_start('p'); $self->_start('a', href => '/');
-        $self->_text('Back to catalogue'); $self->_end('a'); $self->_end('p');
+        $self->_ui_start('tr');
+        $self->_ui_start('cell'); $self->_ui_end('cell');
+        $self->_ui_start('cell'); $self->_ui_end('cell');
+        $self->_ui_start('cell'); $self->_ui_end('cell');
+        $self->_ui_cell(_money($total));
+        $self->_ui_start('cell'); $self->_ui_end('cell');
+        $self->_ui_end('tr');
+        $self->_ui_end('table');
+        $self->_ui_text_el('Checkout is not wired up in this first pass.');
+        $self->_nav_home;
     });
 }
 
-sub _layout ($self, $title, $cart, $body) {
-    $self->_start('html', lang => 'en');
-    $self->_start('head');
-    $self->_start('title'); $self->_text($title); $self->_end('title');
-    $self->_start('style'); $self->_text($CSS);   $self->_end('style');
-    $self->_end('head');
-    $self->_start('body');
-    $self->_start('nav', class => 'nav');
-    $self->_start('a', href => '/');       $self->_text('Catalogue'); $self->_end('a');
-    $self->_start('a', href => '/cart');
-    $self->_text('Cart (' . scalar(keys %$cart) . ')'); $self->_end('a');
-    $self->_end('nav');
-    $self->_start('main');
+# The page shell: ui:app (html/head/title/body) → ui:style → ui:toolbar (nav)
+# → ui:scene (main).  Every page shares it.
+sub _page ($self, $title, $cart, $body) {
+    $self->_ui_start('app', title => $title);
+    $self->_ui_start('style'); $self->_ui_text($CSS); $self->_ui_end('style');
+    $self->_ui_start('toolbar');
+    $self->_ui_start('navigate', to => '/',     title => 'Catalogue');
+    $self->_ui_end('navigate');
+    $self->_ui_start('navigate', to => '/cart', title => 'Cart (' . scalar(keys %$cart) . ')');
+    $self->_ui_end('navigate');
+    $self->_ui_end('toolbar');
+    $self->_ui_start('scene');
     $body->();
-    $self->_end('main');
-    $self->_end('body');
-    $self->_end('html');
+    $self->_ui_end('scene');
+    $self->_ui_end('app');
 }
 
-# ── html event emission into the inner chain ───────────────────────────
-sub _start ($self, $ln, %attrs) {
+# ── ui: IR emission into the inner chain ──────────────────────────────
+# An element with character-content (ui:text, ui:label, …).
+sub _ui_text_el ($self, $text) {
+    $self->_ui_start('text');
+    $self->_ui_text($text);
+    $self->_ui_end('text');
+    return;
+}
+# A table cell: ui:cell carries a `header` attribute to project to <th>.
+sub _ui_cell ($self, $text) {
+    $self->_ui_start('cell'); $self->_ui_text($text); $self->_ui_end('cell');
+    return;
+}
+sub _ui_head_cell ($self, $text) {
+    $self->_ui_start('cell', header => 1); $self->_ui_text($text); $self->_ui_end('cell');
+    return;
+}
+sub _nav_home ($self) {
+    $self->_ui_start('navigate', to => '/', title => 'Back to catalogue');
+    $self->_ui_end('navigate');
+    return;
+}
+sub _hidden ($self, $name, $value) {
+    $self->_ui_void('field', type => 'hidden', name => $name, value => $value);
+    return;
+}
+
+sub _ui_start ($self, $ln, %attrs) {
     my $h = $self->Handler or return;
     $h->start_element({
-        NamespaceURI => XHTML, LocalName => $ln, Name => $ln, Prefix => '',
+        NamespaceURI => UI_NS, LocalName => $ln, Name => "ui:$ln", Prefix => 'ui',
         Attributes => { map {
-            ; "{}$_" => { Name => $_, LocalName => $_, Prefix => '',
-                          NamespaceURI => XHTML, Value => "$attrs{$_}" }
+            ; "{}${_}" => { Name => $_, LocalName => $_, Prefix => '',
+                            NamespaceURI => '', Value => "$attrs{$_}" }
         } keys %attrs },
     });
     return;
 }
-sub _end ($self, $ln) {
+sub _ui_end ($self, $ln) {
     my $h = $self->Handler or return;
-    $h->end_element({ NamespaceURI => XHTML, LocalName => $ln, Name => $ln,
-                      Prefix => '', Attributes => {} });
+    $h->end_element({ NamespaceURI => UI_NS, LocalName => $ln, Name => "ui:$ln",
+                      Prefix => 'ui', Attributes => {} });
     return;
 }
-sub _text ($self, $t) {
+sub _ui_text ($self, $t) {
     my $h = $self->Handler or return;
     $h->characters({ Data => "$t" });
     return;
 }
-sub _hidden ($self, $name, $value) {
-    $self->_start('input', type => 'hidden', name => $name, value => $value);
+# a void ui: element (ui:field → <input>): open + close with no content, so the
+# projection's frame stack stays balanced.
+sub _ui_void ($self, $ln, %attrs) {
+    $self->_ui_start($ln, %attrs);
+    $self->_ui_end($ln);
     return;
 }
 

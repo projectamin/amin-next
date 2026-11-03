@@ -373,6 +373,24 @@
   <filter class="Amin::Filter::UI::Element::Toolbar" position="late" element="toolbar" namespace="http://projectamin.org/ns/ui/1" target="android" />
   <filter class="Amin::Filter::UI::Element::VStack" position="late" element="vstack" namespace="http://projectamin.org/ns/ui/1" target="ios" />
   <filter class="Amin::Filter::UI::Element::VStack" position="late" element="vstack" namespace="http://projectamin.org/ns/ui/1" target="android" />
+  <!-- The full form/table surface added in the ui: vocabulary revision (still
+       one filter per kind per target). -->
+  <filter class="Amin::Filter::UI::Element::Form" position="late" element="form" namespace="http://projectamin.org/ns/ui/1" target="ios" />
+  <filter class="Amin::Filter::UI::Element::Form" position="late" element="form" namespace="http://projectamin.org/ns/ui/1" target="android" />
+  <filter class="Amin::Filter::UI::Element::Field" position="late" element="field" namespace="http://projectamin.org/ns/ui/1" target="ios" />
+  <filter class="Amin::Filter::UI::Element::Field" position="late" element="field" namespace="http://projectamin.org/ns/ui/1" target="android" />
+  <filter class="Amin::Filter::UI::Element::Select" position="late" element="select" namespace="http://projectamin.org/ns/ui/1" target="ios" />
+  <filter class="Amin::Filter::UI::Element::Select" position="late" element="select" namespace="http://projectamin.org/ns/ui/1" target="android" />
+  <filter class="Amin::Filter::UI::Element::Option" position="late" element="option" namespace="http://projectamin.org/ns/ui/1" target="ios" />
+  <filter class="Amin::Filter::UI::Element::Option" position="late" element="option" namespace="http://projectamin.org/ns/ui/1" target="android" />
+  <filter class="Amin::Filter::UI::Element::Table" position="late" element="table" namespace="http://projectamin.org/ns/ui/1" target="ios" />
+  <filter class="Amin::Filter::UI::Element::Table" position="late" element="table" namespace="http://projectamin.org/ns/ui/1" target="android" />
+  <filter class="Amin::Filter::UI::Element::Tr" position="late" element="tr" namespace="http://projectamin.org/ns/ui/1" target="ios" />
+  <filter class="Amin::Filter::UI::Element::Tr" position="late" element="tr" namespace="http://projectamin.org/ns/ui/1" target="android" />
+  <filter class="Amin::Filter::UI::Element::Cell" position="late" element="cell" namespace="http://projectamin.org/ns/ui/1" target="ios" />
+  <filter class="Amin::Filter::UI::Element::Cell" position="late" element="cell" namespace="http://projectamin.org/ns/ui/1" target="android" />
+  <filter class="Amin::Filter::UI::Element::Style" position="late" element="style" namespace="http://projectamin.org/ns/ui/1" target="ios" />
+  <filter class="Amin::Filter::UI::Element::Style" position="late" element="style" namespace="http://projectamin.org/ns/ui/1" target="android" />
   <!-- The same fleet bound to the html target.  These filters share the
        SwiftUI/Compose classes; only the injected Render dialect differs, and
        Amin::UI::Target::HTML emits html:* events instead of stream text. -->
@@ -401,6 +419,14 @@
   <filter class="Amin::Filter::UI::Element::Text" position="late" element="text" namespace="http://projectamin.org/ns/ui/1" target="html" />
   <filter class="Amin::Filter::UI::Element::Toolbar" position="late" element="toolbar" namespace="http://projectamin.org/ns/ui/1" target="html" />
   <filter class="Amin::Filter::UI::Element::VStack" position="late" element="vstack" namespace="http://projectamin.org/ns/ui/1" target="html" />
+  <filter class="Amin::Filter::UI::Element::Form" position="late" element="form" namespace="http://projectamin.org/ns/ui/1" target="html" />
+  <filter class="Amin::Filter::UI::Element::Field" position="late" element="field" namespace="http://projectamin.org/ns/ui/1" target="html" />
+  <filter class="Amin::Filter::UI::Element::Select" position="late" element="select" namespace="http://projectamin.org/ns/ui/1" target="html" />
+  <filter class="Amin::Filter::UI::Element::Option" position="late" element="option" namespace="http://projectamin.org/ns/ui/1" target="html" />
+  <filter class="Amin::Filter::UI::Element::Table" position="late" element="table" namespace="http://projectamin.org/ns/ui/1" target="html" />
+  <filter class="Amin::Filter::UI::Element::Tr" position="late" element="tr" namespace="http://projectamin.org/ns/ui/1" target="html" />
+  <filter class="Amin::Filter::UI::Element::Cell" position="late" element="cell" namespace="http://projectamin.org/ns/ui/1" target="html" />
+  <filter class="Amin::Filter::UI::Element::Style" position="late" element="style" namespace="http://projectamin.org/ns/ui/1" target="html" />
   <filter class="Amin::AI::Graph" position="late" namespace="http://projectamin.org/ns/ai/1" />
   <filter class="Amin::Filter::Billing::CgroupV2" position="end" namespace="http://projectamin.org/ns/2026/" />
   <filter class="Amin::UCC::Settlement" position="end" namespace="http://projectamin.org/ns/ucc/1" />

@@ -56,11 +56,18 @@ BEGIN {
         # map:*      (Amin::Filter::Map::Topology element + attr LocalNames)
         qw(region server link node a b cost phase flavor
            latency_ms bw_gbps tier zone value),
-        # ui:*       (closed-world ui: vocabulary — 25 kinds + late-sax attrs)
+        # ui:*       (closed-world ui: vocabulary — 33 kinds + late-sax attrs.
+        #             The 8 form/table/style kinds and 7 form attrs are grown
+        #             IN PLACE by appending to the ui: slice; that is the
+        #             deliberate 2-byte NAME_ID revision — it shifts every
+        #             downstream region's NAME_ID by 15 rather than renumbering
+        #             the existing ui: kinds, so the ui: ids stay stable.)
         qw(app scene list row column hstack vstack stack grid section
            card progress alert sheet toolbar searchable item label
            text badge sparkline button navigate image asyncimage
-           title spacing points for-each bind url),
+           form field select option table tr cell style
+           title spacing points for-each bind url
+           action method min max placeholder selected header),
         # bc:*       (projectamin/bitcache 2014 namespace LocalNames —
         #             object envelope, signer envelope, mesh topology, slab lifecycle)
         qw(object hash date signer networkmap server ip port search ref
@@ -81,7 +88,7 @@ BEGIN {
     # ESCAPE constant via direct symbol-table import so subsequent runtime
     # code (e.g. start_element L122) can say `ESCAPE` bareword.
     require constant;
-    constant->import(ESCAPE => scalar @VOCAB);  # 1 LEB byte still (<128)
+    constant->import(ESCAPE => scalar @VOCAB);  # 137 ⇒ 2-byte LEB128 (≥128)
     # Populate package %ID (declared `our` above) for runtime lookup.
     %ID = ();
     @ID{@VOCAB} = (0 .. $#VOCAB);

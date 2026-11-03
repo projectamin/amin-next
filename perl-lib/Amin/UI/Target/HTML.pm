@@ -19,7 +19,8 @@ sub channel ($self) { 'ui-html' }
 
 # Container kinds → the tag they open, plus any static attributes.  `app` and
 # `section` are handled separately (they carry a heading), and `navigate`,
-# `image`, `asyncimage` and `searchable` pull their attributes from the IR.
+# `image`, `asyncimage`, `searchable`, `form`, `select` and `cell` pull their
+# attributes from the IR.
 my %TAG = (
     scene   => ['main'],
     list    => ['ul'],
@@ -35,6 +36,8 @@ my %TAG = (
     toolbar => ['nav'],
     sheet   => ['dialog'],
     alert   => ['div', role => 'alert'],
+    table   => ['table'],
+    tr      => ['tr'],
 );
 
 # Leaf kinds → the tag whose content is the element's text.
@@ -44,11 +47,11 @@ my %LEAF = (
     badge     => ['span', class => 'badge'],
     progress  => ['progress'],
     sparkline => ['canvas', class => 'sparkline'],
+    style     => ['style'],
 );
 
-# open: push a frame carrying the tags to close and whether the element's text
-# is its content, then emit the opening events.  A void element (img, input)
-# closes itself and has no content.
+# open: push a frame carrying the tags to close, then emit the opening events.
+# A void element (img, input) closes itself and has no content.
 sub open ($self, $k, $a, $h) {
     $a //= {};
     my $f = { kind => $k, text => '', closes => [], leaf => 0 };
@@ -90,6 +93,43 @@ sub open ($self, $k, $a, $h) {
     elsif ($k eq 'searchable') {
         $self->_start($h, 'input', type => 'search');
     }
+    elsif ($k eq 'form') {
+        my @at;
+        push @at, method => $self->attr($a, 'method') if length $self->attr($a, 'method');
+        push @at, action => $self->attr($a, 'action') if length $self->attr($a, 'action');
+        $self->_start($h, 'form', @at);
+        $f->{closes} = ['form'];
+    }
+    elsif ($k eq 'select') {
+        my @at;
+        push @at, name => $self->attr($a, 'name') if length $self->attr($a, 'name');
+        $self->_start($h, 'select', @at);
+        $f->{closes} = ['select'];
+    }
+    elsif ($k eq 'field') {
+        # a void element: <input> closes itself and has no content
+        my @at;
+        my $type = $self->attr($a, 'type');
+        push @at, type => (length $type ? $type : 'text');
+        for my $n (qw(name value placeholder min max)) {
+            my $v = $self->attr($a, $n);
+            push @at, $n => $v if length $v;
+        }
+        $self->_start($h, 'input', @at);
+    }
+    elsif ($k eq 'option') {
+        my @at;
+        push @at, value => $self->attr($a, 'value') if length $self->attr($a, 'value');
+        push @at, selected => 'selected'        if length $self->attr($a, 'selected');
+        $self->_start($h, 'option', @at);
+        $f->{closes} = ['option'];
+        $f->{leaf}   = 1;
+    }
+    elsif ($k eq 'cell') {
+        my $tag = length $self->attr($a, 'header') ? 'th' : 'td';
+        $self->_start($h, $tag);
+        $f->{closes} = [$tag];
+    }
     elsif (my $t = $TAG{$k}) {
         $self->_start($h, $t->[0], @$t[1 .. $#$t]);
         $f->{closes} = [$t->[0]];
@@ -99,6 +139,12 @@ sub open ($self, $k, $a, $h) {
         $f->{closes} = [$l->[0]];
         $f->{leaf}   = 1;
     }
+    # A cell (<td>/<th>) and an alert (<div role=alert>) hold their text inline:
+    # like a leaf, that text is the element's sole content and is flushed on
+    # close.  (Character data must be emitted at close — after the additive raw
+    # ui: element's own close has been forwarded — or Handler::HTML, whose scope
+    # top is then still the dropped ui: subtree, would discard it.)
+    $f->{leaf} = 1 if $k eq 'cell' || $k eq 'alert';
     # an unknown kind emits nothing — the neutral Guard already dropped unknowns
     return $self;
 }

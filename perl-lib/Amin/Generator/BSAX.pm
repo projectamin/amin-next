@@ -36,11 +36,13 @@ BEGIN {
         # map:*
         qw(region server link node a b cost phase flavor
            latency_ms bw_gbps tier zone value),
-        # ui:*
+        # ui:*  (33 kinds + late-sax attrs; grown in place — see Handler::BSAX)
         qw(app scene list row column hstack vstack stack grid section
            card progress alert sheet toolbar searchable item label
            text badge sparkline button navigate image asyncimage
-           title spacing points for-each bind url),
+           form field select option table tr cell style
+           title spacing points for-each bind url
+           action method min max placeholder selected header),
         # bc:*  (projectamin/bitcache 2014 ns: object/signer/networkmap/slab)
         qw(object hash date signer networkmap server ip port search ref
            refcount stripe parity redundancy slab snap gc pull push),
@@ -56,7 +58,7 @@ BEGIN {
            senderkey identity require),
     );
     require constant;
-    constant->import(ESCAPE => scalar @VOCAB);
+    constant->import(ESCAPE => scalar @VOCAB);  # 137 ⇒ 2-byte LEB128 (≥128)
     %NAMEBYID = ();
     @NAMEBYID{0 .. $#VOCAB} = @VOCAB;
 }
@@ -135,23 +137,30 @@ sub parse_bytes ($self, $bytes) {
                 my $av = substr($bytes,$p,$vl); $p += $vl;
                 # Attribute namespace is derived from VOCAB REGION of the
                 # attribute NAME_ID, since the VOCAB is split contiguously:
-                #   0..22  amin core (NS_AMIN)
-                #  23..36  map       (NS_MAP)
-                #  37..67  ui        (NS_UI)
-                #  68..86  bc        (NS_BITCACHE)
-                #  87..106 ainit-stage + exec-net/sandbox — these attr names live
-                #          on amin:* elements so use NS_AMIN.
-                # 107..121 sec:* post-quantum E2EE surface (NS_SEC).
-                # Anything >= ESCAPE falls back to the parent element's NS
-                # (possibly a Corp custom escape URI).
+                #   0..22   amin core (NS_AMIN)
+                #  23..36   map       (NS_MAP)
+                #  37..82   ui        (NS_UI)  — 33 kinds + 13 attrs
+                #  83..101  bc        (NS_BITCACHE)
+                # 102..107  ainit-stage — these attr names live on amin:*
+                #           elements so use NS_AMIN.
+                # 108..121  exec-net/sandbox — likewise NS_AMIN.
+                # 122..136  sec:* post-quantum E2EE surface (NS_SEC).
+                # Anything >= ESCAPE (137) falls back to the parent element's
+                # NS (possibly a Corp custom escape URI).
                 my $a_ns;
                 if    ($aid < 23)      { $a_ns = NS_AMIN }
                 elsif ($aid < 37)      { $a_ns = NS_MAP }
-                elsif ($aid < 68)      { $a_ns = NS_UI }
-                elsif ($aid < 87)      { $a_ns = NS_BITCACHE }
-                elsif ($aid < 107)     { $a_ns = NS_AMIN }
+                elsif ($aid < 83)      { $a_ns = NS_UI }
+                elsif ($aid < 102)     { $a_ns = NS_BITCACHE }
+                elsif ($aid < 108)     { $a_ns = NS_AMIN }
                 elsif ($aid < ESCAPE)  { $a_ns = NS_SEC }
                 else                   { $a_ns = $ns_id }   # unknown: inherit elem NS
+                # Element-aware override: `type`/`name`/`value` are ui: form
+                # attributes but their LocalNames also occupy the amin/map NAME_ID
+                # slots, so the region rule above would resolve a ui: form's
+                # attribute to the wrong NS.  Every attribute of a ui: element
+                # belongs to the ui: vocabulary regardless of its NAME_ID region.
+                $a_ns = NS_UI if $ns_id == NS_UI && $aid < ESCAPE;
                 # For custom escape NS, use the element's already-resolved
                 # $ns_uri (possibly the inline Corp URI) not the (undefined)
                 # $NSBYID{NS_ESCAPE} entry.

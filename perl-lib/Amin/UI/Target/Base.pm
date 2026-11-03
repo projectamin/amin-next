@@ -27,11 +27,12 @@ use Class::Tiny { sink => undef, buf => '' }, { stack => sub { [] } };
 # downstream target can pick its projection out of the stream by channel.
 use constant AMIN_NS => 'http://projectamin.org/ns/2026/';
 
-# The 17 container kinds.  Every other kind in the 25-element ui: vocabulary is
+# The 22 container kinds.  Every other kind in the 33-element ui: vocabulary is
 # a leaf whose whole expression is produced on close().
 our %CONTAINER = map {; $_ => 1 } qw(
     app scene list row column hstack vstack stack grid section card
     button navigate toolbar sheet alert item
+    form select table tr cell
 );
 
 sub is_container ($self, $k) { $CONTAINER{$k} ? 1 : 0 }
@@ -145,9 +146,10 @@ sub _deliver ($self, $h) {
 }
 
 # ── shared IR accessors / folding ──────────────────────────────────────────
-# A `ui:` attribute value (unnamespaced; the closed-view vocab has six:
-# title spacing points for-each bind url) or '' when absent.  Attribute keys
-# are Clark notation, exactly as the canonical IR carries them.
+# A `ui:` attribute value (unnamespaced; the closed-view vocab has thirteen:
+# title spacing points for-each bind url action method min max placeholder
+# selected header) or '' when absent.  Attribute keys are Clark notation,
+# exactly as the canonical IR carries them.
 sub attr ($self, $a, $name) {
     my $x = $a->{"{}${name}"} // return '';
     return $x->{Value} // '';

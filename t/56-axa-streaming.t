@@ -54,7 +54,7 @@ Amin::AXA::App->set_default($app);
 
 my $spec = Amin::Machine::MachineSpec->new->spec;
 push $spec->{filters}->@*, (
-    { class => 'Amin::Example::Shop', meta => { position => 'late',
+    { class => 'Amin::Example::Shop', meta => { position => 'middle',
         element => 'request', namespace => 'urn:projectamin:example:shop',
         permissions => '' } },
 );

@@ -3,7 +3,7 @@
 # payload-neutral post-quantum E2EE vocabulary (Double Ratchet + PQXDH).
 #
 # Proves the Perl Handler/Generator::BSAX mirrors are 1:1 with the Rust
-# bsax/src/vocab.rs BY_ID slice at the SAME indices (107..121, ESCAPE=122),
+# bsax/src/vocab.rs BY_ID slice at the SAME indices (122..136, ESCAPE=137),
 # that sec: rides the first-class NS_ID=5 slot rather than the NS_ESCAPE
 # length-prefixed path, and that a sec: event stream survives a full
 # BSAX encode → decode roundtrip identically to the XML path.
@@ -48,23 +48,23 @@ sub _el ($ns,$pfx,$ln,%a) {
 }
 
 # ── 1. Perl vocab is 1:1 with Rust bsax/src/vocab.rs BY_ID ───────────────────
-# Rust asserts BY_ID.len() == 122 and BY_ID[107] == b"seal" .. BY_ID[121] ==
+# Rust asserts BY_ID.len() == 137 and BY_ID[122] == b"seal" .. BY_ID[136] ==
 # b"require".  Assert the Perl mirrors land on exactly the same slots.
-is Amin::Handler::BSAX::ESCAPE(),        122, 'Handler::BSAX ESCAPE == 122 (= BY_ID.len)';
-is Amin::Generator::BSAX::ESCAPE(),      122, 'Generator::BSAX ESCAPE == 122';
+is Amin::Handler::BSAX::ESCAPE(),        137, 'Handler::BSAX ESCAPE == 137 (= BY_ID.len)';
+is Amin::Generator::BSAX::ESCAPE(),      137, 'Generator::BSAX ESCAPE == 137';
 is Amin::Handler::BSAX::NS_SEC(),          5, 'Handler::BSAX NS_SEC == 5';
 is Amin::Generator::BSAX::NS_SEC(),        5, 'Generator::BSAX NS_SEC == 5';
 
-is $Amin::Handler::BSAX::ID{seal},      107, 'Handler::BSAX sec:seal      => 107';
-is $Amin::Handler::BSAX::ID{sealed},    108, 'Handler::BSAX sec:sealed    => 108';
-is $Amin::Handler::BSAX::ID{ratchet},   111, 'Handler::BSAX sec:ratchet   => 111';
-is $Amin::Handler::BSAX::ID{prev_count},112, 'Handler::BSAX sec:prev_count=> 112';
-is $Amin::Handler::BSAX::ID{msg_index}, 113, 'Handler::BSAX sec:msg_index => 113';
-is $Amin::Handler::BSAX::ID{require},   121, 'Handler::BSAX sec:require   => 121';
+is $Amin::Handler::BSAX::ID{seal},      122, 'Handler::BSAX sec:seal      => 122';
+is $Amin::Handler::BSAX::ID{sealed},    123, 'Handler::BSAX sec:sealed    => 123';
+is $Amin::Handler::BSAX::ID{ratchet},   126, 'Handler::BSAX sec:ratchet   => 126';
+is $Amin::Handler::BSAX::ID{prev_count},127, 'Handler::BSAX sec:prev_count=> 127';
+is $Amin::Handler::BSAX::ID{msg_index}, 128, 'Handler::BSAX sec:msg_index => 128';
+is $Amin::Handler::BSAX::ID{require},   136, 'Handler::BSAX sec:require   => 136';
 
-is $Amin::Generator::BSAX::NAMEBYID{107}, 'seal',       'Generator::BSAX 107 => seal';
-is $Amin::Generator::BSAX::NAMEBYID{121}, 'require',    'Generator::BSAX 121 => require';
-is $Amin::Generator::BSAX::NAMEBYID{111}, 'ratchet',    'Generator::BSAX 111 => ratchet';
+is $Amin::Generator::BSAX::NAMEBYID{122}, 'seal',       'Generator::BSAX 122 => seal';
+is $Amin::Generator::BSAX::NAMEBYID{136}, 'require',    'Generator::BSAX 136 => require';
+is $Amin::Generator::BSAX::NAMEBYID{126}, 'ratchet',    'Generator::BSAX 126 => ratchet';
 
 # ── 2. NS_ID=5 is first-class: no per-element URI on the wire ───────────────
 # Encode one <sec:sealed sec:msg_index="7"/> under the sec: URI (known →
