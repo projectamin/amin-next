@@ -13,7 +13,7 @@ use Class::Tiny qw(Handler), {
 # and rust/crates/bsax/src/vocab.rs BY_ID slice.
 # and rust/crates/bsax/src/vocab.rs BY_ID slice.
 use constant {
-    NS_NONE=>0, NS_AMIN=>1, NS_UI=>2, NS_MAP=>3, NS_BITCACHE=>4, NS_ESCAPE=>15
+    NS_NONE=>0, NS_AMIN=>1, NS_UI=>2, NS_MAP=>3, NS_BITCACHE=>4, NS_SEC=>5, NS_ESCAPE=>15
 };
 my %NSBYID = (
     NS_NONE, '',
@@ -21,6 +21,7 @@ my %NSBYID = (
     NS_UI,   'http://projectamin.org/ns/ui/1',
     NS_MAP,  'http://projectamin.org/ns/map/1',
     NS_BITCACHE, 'http://projectamin.org/ns/bc/',
+    NS_SEC,  'http://projectamin.org/ns/sec/1',
 );
 # See Handler::BSAX comment for BEGIN-ordering explanation: `use constant` runs
 # its RHS at BEGIN so we must populate VOCAB first inside the same explicit BEGIN.
@@ -48,6 +49,11 @@ BEGIN {
         # exec+net sandbox/surface (Sandbox + Net::Fabric + expanded Command)
         qw(exec spawn signal sandbox cpu_max memory_high landlock_ro seccomp
            vpc subnet lb vip backends netpolicy),
+        # sec:* post-quantum E2EE surface (Handler::BSAX 1:1 copy; appended last)
+        qw(seal sealed ciphertext header
+           ratchet prev_count msg_index
+           session prekey pqprekey onetime bundle
+           senderkey identity require),
     );
     require constant;
     constant->import(ESCAPE => scalar @VOCAB);
@@ -135,6 +141,7 @@ sub parse_bytes ($self, $bytes) {
                 #  68..86  bc        (NS_BITCACHE)
                 #  87..106 ainit-stage + exec-net/sandbox — these attr names live
                 #          on amin:* elements so use NS_AMIN.
+                # 107..121 sec:* post-quantum E2EE surface (NS_SEC).
                 # Anything >= ESCAPE falls back to the parent element's NS
                 # (possibly a Corp custom escape URI).
                 my $a_ns;
@@ -142,7 +149,8 @@ sub parse_bytes ($self, $bytes) {
                 elsif ($aid < 37)      { $a_ns = NS_MAP }
                 elsif ($aid < 68)      { $a_ns = NS_UI }
                 elsif ($aid < 87)      { $a_ns = NS_BITCACHE }
-                elsif ($aid < ESCAPE)  { $a_ns = NS_AMIN }
+                elsif ($aid < 107)     { $a_ns = NS_AMIN }
+                elsif ($aid < ESCAPE)  { $a_ns = NS_SEC }
                 else                   { $a_ns = $ns_id }   # unknown: inherit elem NS
                 # For custom escape NS, use the element's already-resolved
                 # $ns_uri (possibly the inline Corp URI) not the (undefined)
@@ -153,7 +161,8 @@ sub parse_bytes ($self, $bytes) {
                 my $a_pfx = $a_ns == NS_AMIN     ? 'amin'
                           : $a_ns == NS_UI       ? 'ui'
                           : $a_ns == NS_MAP      ? 'map'
-                          : $a_ns == NS_BITCACHE ? 'bc' : '';
+                          : $a_ns == NS_BITCACHE ? 'bc'
+                          : $a_ns == NS_SEC      ? 'sec' : '';
                 my $a_qname = length($a_pfx) ? "$a_pfx:$an" : $an;
                 $attrs->{"{}$an"} = {
                     Name => $a_qname, LocalName => $an, Prefix => $a_pfx,
@@ -163,7 +172,8 @@ sub parse_bytes ($self, $bytes) {
             my $pfx = $ns_id == NS_AMIN ? 'amin'
                      : $ns_id == NS_UI   ? 'ui'
                      : $ns_id == NS_MAP  ? 'map'
-                     : $ns_id == NS_BITCACHE ? 'bc' : '';
+                     : $ns_id == NS_BITCACHE ? 'bc'
+                     : $ns_id == NS_SEC  ? 'sec' : '';
             my $qname = length($pfx) ? "$pfx:$ln" : $ln;
             push @{$self->{stack}}, [$ln, $ns_uri, $qname, $pfx];
             $h->start_element({

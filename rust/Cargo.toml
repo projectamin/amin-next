@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members  = ["crates/awp3", "crates/aminexec", "crates/bsax", "crates/bitcache", "crates/ainit"]
+members  = ["crates/awp3", "crates/aminexec", "crates/bsax", "crates/bitcache", "crates/ainit", "crates/ratchet"]
 
 [workspace.package]
 version      = "3.0.0"
@@ -18,6 +18,17 @@ libc                  = "0.2"
 # ── Post-quantum signatures (legacy 2014 Bitcache used RSA-2048; Amin 3.0
 #    carries forward the <bc:signer> envelope primitive with ML-DSA-87).
 ml-dsa                = "0.1.1"
+
+# ── Double Ratchet / PQXDH (ratchet crate): hybrid PQ key agreement
+#    (ML-KEM-768 + X25519) + HKDF/HMAC KDF chains + XChaCha20-Poly1305 AEAD.
+ml-kem                = "0.2"
+x25519-dalek          = { version = "2", features = ["static_secrets"] }
+hkdf                  = "0.12"
+hmac                  = "0.12"
+sha2                  = "0.10"
+chacha20poly1305      = "0.10"
+zeroize               = { version = "1", features = ["derive"] }
+rand                  = "0.8"
 
 # ── Wire + transport ─────────────────────────────────────────────────────
 quinn                 = { version = "0.11", default-features = false, features = ["runtime-tokio"] }

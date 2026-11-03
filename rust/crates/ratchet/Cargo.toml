@@ -1,0 +1,38 @@
+[package]
+name         = "ratchet"
+version.workspace      = true
+edition.workspace      = true
+rust-version.workspace = true
+license.workspace      = true
+homepage.workspace     = true
+repository.workspace   = true
+description  = "Amin 3.0 Double Ratchet + PQXDH: hybrid post-quantum (ML-KEM-768 + X25519) forward-secret session crypto. Transport- and serialisation-agnostic — the same state machine drives the sec: SAX filter on the wire and the on-device Rust core."
+
+[features]
+default = ["std"]
+std     = []
+
+[dependencies]
+ml-dsa.workspace        = true
+ml-kem.workspace        = true
+x25519-dalek.workspace  = true
+hkdf.workspace          = true
+hmac.workspace          = true
+sha2.workspace          = true
+chacha20poly1305.workspace = true
+zeroize.workspace       = true
+rand.workspace          = true
+blake3.workspace        = true
+thiserror.workspace     = true
+clap                    = { version = "4", features = ["derive"] }
+
+[dev-dependencies]
+rand = "0.8"
+
+[lib]
+name = "ratchet"
+path = "src/lib.rs"
+
+[[bin]]
+name = "rctool"
+path = "src/bin/rctool.rs"

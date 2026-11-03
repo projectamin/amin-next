@@ -5,17 +5,17 @@
 //! files (`perl-lib/Amin/Handler/BSAX.pm` and `perl-lib/Amin/Generator/BSAX.pm`)
 //! — the decoder/encoder only stay 1:1 if the byte-level vocab order matches.
 //!
-//! Escape marker is auto-derived as `BY_ID.len() as u32` (currently 107 → one
+//! Escape marker is auto-derived as `BY_ID.len() as u32` (currently 122 → one
 //! LEB128 byte, same wire cost as the old hard-coded 62 but without manual
 //! slot-counting collisions).  Any LocalName unknown to this table is sent on
 //! the wire as the escape marker + length-prefixed UTF-8 (larger + slower).
 
 /// 4-bit NS_ID inline constants.  MUST stay 1:1 with Perl Handler/Generator::BSAX
 /// `use constant { NS_NONE => 0, NS_AMIN => 1, NS_UI => 2, NS_MAP => 3, NS_BITCACHE => 4,
-/// NS_ESCAPE => 15 }` blocks.  Values 5..=14 are reserved for future forward-compatible
-/// Amin-owned namespace slots; any third-party custom namespace uses NS_ESCAPE (15)
-/// with length-prefixed UTF-8 URI inline so CORP-style filter custom NSes work
-/// without Amin fork (see spec DI-2 / NS_ESCAPE=15 path).
+/// NS_SEC => 5, NS_ESCAPE => 15 }` blocks.  Values 6..=14 remain reserved for future
+/// forward-compatible Amin-owned namespace slots; any third-party custom namespace uses
+/// NS_ESCAPE (15) with length-prefixed UTF-8 URI inline so CORP-style filter custom NSes
+/// work without Amin fork (see spec DI-2 / NS_ESCAPE=15 path).
 #[allow(dead_code)]
 pub mod ns_id {
     /// Empty / no namespace (`xmlns=""`).
@@ -28,6 +28,11 @@ pub mod ns_id {
     pub const MAP: u8      = 3;
     /// Legacy Bitcache 2014 object/signer envelope namespace — `http://projectamin.org/ns/bc/`.
     pub const BITCACHE: u8 = 4;
+    /// Amin `sec:` post-quantum E2EE namespace — `http://projectamin.org/ns/sec/1`.
+    /// Payload-neutral end-to-end encryption: the Double Ratchet + PQXDH exposed
+    /// as a SAX filter pair, not a chat-specific construct.  First Amin-owned use
+    /// of the `5..=14` reserved slot range.
+    pub const SEC: u8      = 5;
     /// Escape hatch — `NS_ESCAPE` means a length-prefixed UTF-8 namespace URI
     /// string is carried inline on the wire.  Used by CORP custom filters to
     /// preserve extensibility (see spec § DI-2).
@@ -35,8 +40,9 @@ pub mod ns_id {
 }
 
 /// Closed-world vocabulary slice.  `BY_ID[id as usize]` returns the LocalName
-/// as UTF-8 bytes.  Sorted into six contiguous regions for human reader
-/// convenience only — encode/decode treat the whole list as flat.
+/// as UTF-8 bytes.  Sorted into seven contiguous regions for human reader
+/// convenience only — encode/decode treat the whole list as flat, and new
+/// regions are always APPENDED so existing NAME_IDs keep their wired byte value.
 pub const BY_ID: &[&[u8]] = &[
     // ── Amin core: elements + attribute LocalNames used by inner SAX chain
     b"profile", b"result", b"command", b"stream", b"status", b"cond", b"argv",
@@ -46,7 +52,7 @@ pub const BY_ID: &[&[u8]] = &[
     // ── map:* — Amin::Filter::Map::Topology element+attr LocalNames
     b"region", b"server", b"link", b"node", b"a", b"b", b"cost", b"phase",
     b"flavor", b"latency_ms", b"bw_gbps", b"tier", b"zone", b"value",
-    // ── ui:*  — Amin::Filter::UI::SwiftUIView known-views + late-sax attrs
+    // ── ui:*  — closed-world ui: vocabulary (25 kinds) + late-sax attrs
     b"app", b"scene", b"list", b"row", b"column", b"hstack", b"vstack",
     b"stack", b"grid", b"section", b"card", b"progress", b"alert", b"sheet",
     b"toolbar", b"searchable", b"item", b"label", b"text", b"badge",
@@ -64,6 +70,13 @@ pub const BY_ID: &[&[u8]] = &[
     b"exec", b"spawn", b"signal", b"sandbox", b"cpu_max", b"memory_high",
     b"landlock_ro", b"seccomp", b"vpc", b"subnet", b"lb", b"vip",
     b"backends", b"netpolicy",
+    // ── sec:*  — payload-neutral post-quantum E2EE surface (Double Ratchet +
+    //      PQXDH as a SAX filter pair; also the on-device `rctool` bridge).
+    //      Appended LAST so every NAME_ID above keeps its wired byte value.
+    b"seal", b"sealed", b"ciphertext", b"header",
+    b"ratchet", b"prev_count", b"msg_index",
+    b"session", b"prekey", b"pqprekey", b"onetime", b"bundle",
+    b"senderkey", b"identity", b"require",
 ];
 
 /// NAME_ID escape marker: always the first ID past the last vocab slot.
@@ -95,10 +108,11 @@ mod tests {
 
     #[test]
     fn vocab_count_kept_in_sync_with_perl() {
-        // Perl's @VOCAB currently has 107 entries across amin/map/ui/bc/ainit/exec-net.
+        // Perl's @VOCAB currently has 122 entries across
+        // amin/map/ui/bc/ainit/exec-net/sec.
         // If this fails, update both sides together with the same reordering.
-        assert_eq!(BY_ID.len(), 107);
-        assert_eq!(escape_id(), 107);
+        assert_eq!(BY_ID.len(), 122);
+        assert_eq!(escape_id(), 122);
         // Hard architecture guard (AC-2): VOCAB size ≤ 127 means every NAME_ID
         // fits in one LEB128 byte on the wire.  If we ever exceed 127 we need
         // a formal spec revision (name-id-2-byte-mode) NOT a silent 2-byte
@@ -148,6 +162,29 @@ mod tests {
         // Final entry netpolicy sits at 93 + 13 = 106 (last vocab index; escape = 107)
         assert_eq!(by_name(b"netpolicy"), Some(106));
         assert_eq!(BY_ID[106], b"netpolicy");
+    }
+    #[test]
+    fn sec_region_starts_at_107() {
+        // 23 amin + 14 map + 31 ui + 19 bc + 6 ainit + 14 exec-net = 107
+        // → the sec:* region is appended at index 107.
+        assert_eq!(by_name(b"seal"), Some(107));
+        assert_eq!(BY_ID[107], b"seal");
+        assert_eq!(by_name(b"sealed"), Some(108));
+        // The Double Ratchet header fields sit contiguously.
+        assert_eq!(by_name(b"ratchet"), Some(111));
+        assert_eq!(by_name(b"prev_count"), Some(112));
+        assert_eq!(by_name(b"msg_index"), Some(113));
+        // Final sec entry `require` sits at 107 + 14 = 121 (last index; escape = 122).
+        assert_eq!(by_name(b"require"), Some(121));
+        assert_eq!(BY_ID[121], b"require");
+    }
+    #[test]
+    fn ns_sec_constant_matches_perl_handler() {
+        // Perl Handler/Generator::BSAX both say NS_SEC = 5, the first Amin-owned
+        // slot of the reserved 5..14 range.  A mismatch would send every sec:*
+        // element down the NS_ESCAPE path (length-prefixed URI per element).
+        use ns_id::*;
+        assert_eq!(SEC, 5);
     }
     #[test]
     fn ns_bitcache_constant_matches_perl_handler() {

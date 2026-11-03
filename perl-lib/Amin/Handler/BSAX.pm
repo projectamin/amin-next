@@ -18,6 +18,7 @@ use constant {
     NS_UI      => 2,
     NS_MAP     => 3,
     NS_BITCACHE=> 4,   # http://projectamin.org/ns/bc/  (legacy Bitcache namespace URI)
+    NS_SEC     => 5,   # http://projectamin.org/ns/sec/1 (post-quantum Double Ratchet / PQXDH)
     NS_ESCAPE  => 15,
 };
 
@@ -26,6 +27,7 @@ my %NS2ID = (
     'http://projectamin.org/ns/ui/1'     => NS_UI,
     'http://projectamin.org/ns/map/1'    => NS_MAP,
     'http://projectamin.org/ns/bc/'      => NS_BITCACHE,
+    'http://projectamin.org/ns/sec/1'    => NS_SEC,
     ''                                   => NS_NONE,
 );
 
@@ -54,7 +56,7 @@ BEGIN {
         # map:*      (Amin::Filter::Map::Topology element + attr LocalNames)
         qw(region server link node a b cost phase flavor
            latency_ms bw_gbps tier zone value),
-        # ui:*       (Amin::Filter::UI::SwiftUIView known-views + late-sax attrs)
+        # ui:*       (closed-world ui: vocabulary — 25 kinds + late-sax attrs)
         qw(app scene list row column hstack vstack stack grid section
            card progress alert sheet toolbar searchable item label
            text badge sparkline button navigate image asyncimage
@@ -68,6 +70,13 @@ BEGIN {
         # exec+net   (Sandbox + Net::Fabric + expanded Command surface inner names)
         qw(exec spawn signal sandbox cpu_max memory_high landlock_ro seccomp
            vpc subnet lb vip backends netpolicy),
+        # sec:*      (payload-neutral post-quantum E2EE surface — Double Ratchet +
+        #             PQXDH as a SAX filter pair, plus the on-device rctool bridge.
+        #             Appended LAST so every NAME_ID above keeps its wired byte value.)
+        qw(seal sealed ciphertext header
+           ratchet prev_count msg_index
+           session prekey pqprekey onetime bundle
+           senderkey identity require),
     );
     # ESCAPE constant via direct symbol-table import so subsequent runtime
     # code (e.g. start_element L122) can say `ESCAPE` bareword.

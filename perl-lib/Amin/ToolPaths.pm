@@ -6,12 +6,13 @@ package Amin::ToolPaths;
 # Cargo builds land in ./target/{debug,release} via CARGO_TARGET_DIR (= $PWD/
 # target in .mise.toml); the legacy layout ./rust/target/{debug,release} is
 # kept as a fallback for checkouts that build without the override, then
-# PATH.  $ENV{AMIN_BCTOOL} / $ENV{AMIN_AMINEXEC} pin an authority-managed
-# install (metal mode grants landlock FILE__EXECUTE per-path, so the
-# resolved absolute path must be stable).
+# PATH.  $ENV{AMIN_BCTOOL} / $ENV{AMIN_AMINEXEC} / $ENV{AMIN_RCTOOL} pin an
+# authority-managed install (metal mode grants landlock FILE__EXECUTE
+# per-path, so the resolved absolute path must be stable).
 #
-# One resolver, not six: bitcache storage, AI embeds, the sandbox executor
-# and the test signer originally resolved these independently and drifted.
+# One resolver, not six: bitcache storage, AI embeds, the sandbox executor,
+# the sec: ratchet bridge and the test signer originally resolved these
+# independently and drifted.
 # ═══════════════════════════════════════════════════════════════════════════
 
 use v5.38;
@@ -21,7 +22,7 @@ use experimental 'signatures';
 
 use Exporter 'import';
 our @ISA       = ('Exporter');
-our @EXPORT_OK = qw(tool_aminexec tool_bctool);
+our @EXPORT_OK = qw(tool_aminexec tool_bctool tool_rctool);
 
 sub _project_root {
     # __FILE__ may be ABSOLUTE (()=-@INC normalization) or a bare relative
@@ -58,6 +59,12 @@ sub tool_bctool {
     state $t;
     return $t if defined $t;
     return $t = _pick('AMIN_BCTOOL', 'bctool');
+}
+
+sub tool_rctool {
+    state $t;
+    return $t if defined $t;
+    return $t = _pick('AMIN_RCTOOL', 'rctool');
 }
 
 1;

@@ -53,10 +53,11 @@
 //!                     channel dir mode level value type size
 //!  23..36  map:*     : region server link node a b cost phase flavor
 //!                     latency_ms bw_gbps tier zone  (note: status shared with amin core)
-//!  37..67  ui:*      : 31-entry vocabulary per Amin::Filter::UI::SwiftUIView
+//!  37..67  ui:*      : 31-entry closed-world ui: vocabulary (25 kinds + attrs)
 //!  68..86  bc:*      : projectamin/bitcache 2014 ns — object/signer/networkmap/slab ops
 //!  87..92  ainit:*   : init-profile.xml stage vocabulary (PID 1 handoff)
 //!  93..106 exec-net  : Sandbox + Net::Fabric + expanded Command surface names
+//! 107..121 sec:*     : payload-neutral PQ E2EE (Double Ratchet + PQXDH filter pair)
 //!      ESCAPE        → NAME_ID:LEB = BY_ID.len() then LEN_PREFIXED(utf8 raw name) follows
 //! ```
 //!
@@ -64,7 +65,8 @@
 //!
 //! ```text
 //! 0 = none   1 = http://projectamin.org/ns/2026/
-//! 2 = ui/1   3 = map/1   4 = bc/ (Bitcache 2014 legacy)   5..14 reserved
+//! 2 = ui/1   3 = map/1   4 = bc/ (Bitcache 2014 legacy)
+//! 5 = sec/1 (post-quantum E2EE)   6..14 reserved
 //! 15 = escape → LEN_PREFIXED(URI string) — used by third-party corp
 //!             custom namespaces without Amin fork (see spec DI-2)
 //! ```
