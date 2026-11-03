@@ -3,35 +3,34 @@ package Amin::Filter::UI::Element::Base;
 # ui: element  →  additive render fragment.  One filter per ui: kind
 # (axa-plan §4.3): every kind owns a tiny Amin::Filter::UI::Element::* class,
 # declared in machine_spec.xml as a `late`, element-scoped candidate bound to a
-# `target` (ios / android).  The position's _LazyGate splices the filter in the
-# moment its element's start_element flows through and un-splices it after the
-# matching end_element — the profile itself is the switch.  No pre-scan, no DOM.
+# `target` (ios / android / html).  The position's _LazyGate splices the filter
+# in the moment its element's start_element flows through and un-splices it
+# after the matching end_element — the profile itself is the switch.  No
+# pre-scan, no DOM.
 #
 # The filter is ADDITIVE: it never consumes or rewrites the ui: element.  It
-# prepends a synthetic sibling — the render fragment, carried the way the sec:
-# filters carry payloads —
+# prepends a synthetic sibling produced by the target and forwards <ui:X …>
+# byte-for-byte.  What that sibling is depends on the dialect: a text target
+# (SwiftUI / Compose) emits it as characters on an
+# <amin:stream channel="ui-…"> element, while the event target (HTML) emits
+# real html:* SAX events.  Either way the fragment is handed straight to this
+# filter's own Handler, so it lands exactly where a sibling would.  A host with
+# no ui: filters loaded (a tty/neutral host, or a machine upstream of the
+# render host) therefore sees the whole ui: subtree pass through untouched, to
+# be forwarded on in full to the next target with this machine's contribution
+# added.
 #
-#   <amin:stream channel="ui-swiftui">…fragment…</amin:stream>
-#
-# and forwards <ui:X …> byte-for-byte.  A host with no ui: filters loaded
-# (a tty/neutral host, or a machine upstream of the render host) therefore sees
-# the whole ui: subtree pass through untouched, to be forwarded on in full to
-# the next target with this machine's contribution added.
-#
-# The fragment comes from ONE shared render context per chain — a
-# Amin::UI::Target::{SwiftUI,Compose} instance injected as `Render`, chosen by
-# the spec's <ui-dialect> entry for the effective target.  That target owns a
-# bounded frame stack, so every ui: element nests correctly across the fleet
-# while nothing retains a child subtree: open()/take at start, close()/take at
-# end.  Concatenating every fragment on the channel reproduces the target's
-# whole projection byte-for-byte.
+# The fragment comes from ONE shared render context per chain — an
+# Amin::UI::Target::* instance injected as `Render`, chosen by the spec's
+# <ui-dialect> entry for the effective target.  That target owns a bounded
+# frame stack, so every ui: element nests correctly across the fleet while
+# nothing retains a child subtree: open() at start, close() at end.
 
 use v5.38; use warnings; use utf8; use experimental 'signatures';
 use parent 'XML::SAX::Base';
 use Class::Tiny qw(Handler Log Mode Name Element Render);
 
-our $UI_NS   = 'http://projectamin.org/ns/ui/1';
-our $AMIN_NS = 'http://projectamin.org/ns/2026/';
+our $UI_NS = 'http://projectamin.org/ns/ui/1';
 
 # The ui: kind this filter projects.  Every concrete subclass states exactly one.
 sub kind ($self) { die ref($self) . " must define kind()\n" }
@@ -55,35 +54,12 @@ sub _clark ($m) {
     return \%out;
 }
 
-# Serialise one fragment downstream as a synthetic sibling, the way the sec:
-# filters carry recovered payloads.
-sub _emit_stream ($self, $text) {
-    return unless defined $text && length $text;
-    my $h = $self->Handler or return;
-    my $ch = $self->Render ? $self->Render->channel : '';
-    my $ns = $AMIN_NS;
-    $h->start_element({
-        NamespaceURI => $ns, LocalName => 'stream',
-        Name => 'amin:stream', Prefix => 'amin',
-        Attributes => { "{$ns}channel" => {
-            Name => 'amin:channel', LocalName => 'channel', Prefix => 'amin',
-            NamespaceURI => $ns, Value => $ch } },
-    });
-    $h->characters({ Data => $text });
-    $h->end_element({
-        NamespaceURI => $ns, LocalName => 'stream',
-        Name => 'amin:stream', Prefix => 'amin',
-    });
-    return;
-}
-
 sub start_element ($self, $e) {
     # Additive prepend: this element's fragment goes BEFORE it.  The original
     # element is then forwarded verbatim (SUPER → Handler).
     if (my $r = $self->Render) {
         if (_is_mine($self, $e)) {
-            $r->open($self->kind, _clark($e->{Attributes} // {}));
-            $self->_emit_stream($r->take);
+            $r->open($self->kind, _clark($e->{Attributes} // {}), $self->Handler);
         }
     }
     return $self->SUPER::start_element($e);
@@ -106,10 +82,7 @@ sub end_element ($self, $e) {
     my $r = $self->Render;
     my $mine = ($r && _is_mine($self, $e)) ? 1 : 0;
     my $ret = $self->SUPER::end_element($e);   # forward the original close first
-    if ($mine) {
-        $r->close($self->kind);
-        $self->_emit_stream($r->take);
-    }
+    $r->close($self->kind, $self->Handler) if $mine;
     return $ret;
 }
 

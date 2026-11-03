@@ -1,6 +1,6 @@
 package Amin::UI::Target::Base;
 
-# ui: canonical IR  →  one target dialect (SwiftUI / Compose / Tree).
+# ui: canonical IR  →  one target dialect (SwiftUI / Compose / HTML).
 #
 # The streaming contract (axa-plan §4.3, "no DOM anywhere"): a target is driven
 # one element at a time — open(), then text() and any nested open…close, then
@@ -22,11 +22,16 @@ package Amin::UI::Target::Base;
 use v5.38; use warnings; use utf8; use experimental 'signatures';
 use Class::Tiny { sink => undef, buf => '' }, { stack => sub { [] } };
 
+# Synthetic-sibling wrapper for a text dialect's fragment (the sec: convention):
+# the fragment rides as characters on an <amin:stream channel="…"> element so a
+# downstream target can pick its projection out of the stream by channel.
+use constant AMIN_NS => 'http://projectamin.org/ns/2026/';
+
 # The 17 container kinds.  Every other kind in the 25-element ui: vocabulary is
 # a leaf whose whole expression is produced on close().
 our %CONTAINER = map {; $_ => 1 } qw(
     app scene list row column hstack vstack stack grid section card
-    button navigate toolbar sheet alert
+    button navigate toolbar sheet alert item
 );
 
 sub is_container ($self, $k) { $CONTAINER{$k} ? 1 : 0 }
@@ -65,8 +70,10 @@ sub ind ($self, $n) { '    ' x $n }
 # ── the streaming verbs ────────────────────────────────────────────────────
 # open: emit the parent's separator, then this element's head, and push a
 # frame.  close: pop the frame and emit its tail (a container's block close or
-# a leaf's whole expression).
-sub open ($self, $k, $a) {
+# a leaf's whole expression).  Each verb ends by handing the fragment it
+# produced to the caller's downstream handler ($h) — the element filter passes
+# its own Handler, so a fragment lands exactly where a synthetic sibling would.
+sub open ($self, $k, $a, $h) {
     my $st  = $self->stack;
     my $pad = $self->ind(scalar $st->@*);
 
@@ -89,6 +96,7 @@ sub open ($self, $k, $a) {
         $self->emit($c->{head});
     }
     push @$st, $f;
+    $self->_deliver($h);
     return $self;
 }
 
@@ -98,7 +106,7 @@ sub text ($self, $t) {
     return $self;
 }
 
-sub close ($self, $k) {
+sub close ($self, $k, $h) {
     my $f = pop @{ $self->stack };
     if ($f->{container}) {
         $self->emit($f->{had} ? $f->{close_had} : $f->{close_empty});
@@ -106,7 +114,34 @@ sub close ($self, $k) {
     } else {
         $self->emit($self->_leaf($k, $f->{pad}, $f->{attrs}, $f->{text}));
     }
+    $self->_deliver($h);
     return $self;
+}
+
+# Hand the fragment the last verb produced to the downstream handler.  A text
+# dialect's fragment is characters, so wrap it in an amin:stream sibling tagged
+# with this dialect's channel.  An event dialect (HTML) overrides the verbs
+# themselves: its fragments are already real events and never come from a
+# string (§4.5).
+sub _deliver ($self, $h) {
+    my $text = $self->take;
+    return unless defined $text && length $text;
+    return unless $h;
+    my $ns = AMIN_NS;
+    my $ch = $self->channel;
+    $h->start_element({
+        NamespaceURI => $ns, LocalName => 'stream',
+        Name => 'amin:stream', Prefix => 'amin',
+        Attributes => { "{$ns}channel" => {
+            Name => 'amin:channel', LocalName => 'channel', Prefix => 'amin',
+            NamespaceURI => $ns, Value => $ch } },
+    });
+    $h->characters({ Data => $text });
+    $h->end_element({
+        NamespaceURI => $ns, LocalName => 'stream',
+        Name => 'amin:stream', Prefix => 'amin',
+    });
+    return;
 }
 
 # ── shared IR accessors / folding ──────────────────────────────────────────
