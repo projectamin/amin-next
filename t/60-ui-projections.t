@@ -9,6 +9,8 @@
 #                              prepended per element, <ui:*> still forwarded
 #           ──android──────▶  <amin:stream channel="ui-compose">…Kotlin…</amin:stream>
 #                              prepended per element, <ui:*> still forwarded
+#           ──html─────────▶  real html:* XHTML events (never from a string),
+#                              per element, <ui:*> still forwarded
 #
 # Proves the closed-world Guard fails closed everywhere; that a neutral host
 # passes the whole ui: subtree through in full; that a target host splices
@@ -222,11 +224,11 @@ subtest 'E: machine_spec declares the ui: filter family' => sub {
         'E2: the retired SwiftUIView stub is gone');
 
     my @el = grep { $_->{class} =~ /^Amin::Filter::UI::Element::/ } @all;
-    is(scalar @el, 50, 'E3: one element filter per kind per target (25 × 2)');
-    is([sort map { $_->{meta}{position} // '' } @el], [('late') x 50],
+    is(scalar @el, 75, 'E3: one element filter per kind per target (25 × 3)');
+    is([sort map { $_->{meta}{position} // '' } @el], [('late') x 75],
         'E4: every element filter sits at the late position');
-    is([sort keys %{ { map { ($_->{meta}{target} // '') => 1 } @el } }], ['android', 'ios'],
-        'E5: every element filter is target-scoped (ios / android only)');
+    is([sort keys %{ { map { ($_->{meta}{target} // '') => 1 } @el } }], ['android', 'html', 'ios'],
+        'E5: every element filter is target-scoped (ios / android / html only)');
 
     my @ios_kinds = sort map { $_->{meta}{element} } grep { ($_->{meta}{target} // '') eq 'ios' } @el;
     is(scalar @ios_kinds, 25, 'E6: 25 ios candidates');
@@ -238,7 +240,8 @@ subtest 'E: machine_spec declares the ui: filter family' => sub {
 
     is($spec->{ui_dialects},
         { ios     => { class => 'Amin::UI::Target::SwiftUI' },
-          android => { class => 'Amin::UI::Target::Compose' } },
+          android => { class => 'Amin::UI::Target::Compose' },
+          html    => { class => 'Amin::UI::Target::HTML' } },
         'E10: the target → dialect binding is a spec fact, not a class-name rule');
 };
 
@@ -259,6 +262,25 @@ subtest 'F: free-form titles fold to legal identifiers' => sub {
     drive(fleet('android', $cc, $log), $xml);
     like($cc->stream_of('ui-compose'), qr/fun AminFabricShop\(\)/,
         'F2: Compose function name is a valid identifier');
+};
+
+# ═══════════════════════════════════════════════════════════════════════════
+# G. An html host projects the IR to XHTML SAX events (never from a string).
+# ═══════════════════════════════════════════════════════════════════════════
+subtest 'G: an html host projects the IR to XHTML events' => sub {
+    my $log = Amin::Log::Standard->new(stderr => 0);
+    my $cap = UICapture->new;
+    drive(fleet('html', $cap, $log), $DEMO);
+
+    my @n = $cap->names;
+    ok((grep { $_ eq 'html' } @n),   'G1: ui:app opens <html> (the page root)');
+    ok((grep { $_ eq 'title' } @n),  'G2: ui:app title → <title>');
+    ok((grep { $_ eq 'p' } @n),      'G3: ui:text → <p>');
+    ok((grep { $_ eq 'button' } @n), 'G4: ui:button → <button>');
+    is([$cap->ui_names], ['ui:app', 'ui:vstack', 'ui:text', 'ui:button'],
+        'G5: additive — the ui: subtree is still emitted in full');
+    is($cap->stream_of('ui-swiftui'), '', 'G6: the ios dialect is not spliced');
+    is($cap->stream_of('ui-compose'), '', 'G7: the android dialect is not spliced');
 };
 
 done_testing;

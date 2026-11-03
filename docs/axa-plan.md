@@ -679,13 +679,15 @@ Acceptance:
   `ProductCard` filter renders correctly without touching core.
 - **Override:** an app filter for `ui:text` with higher `priority` wins;
   duplicate priority is a hard error.
-- `--os=tty` output is byte-identical to today's, byte for byte — the
-  regression check runs the CLI, not the dispatcher, so attribute-order
-  drift cannot hide in it. (Baseline today: 5,963 bytes for
-  `map+ui.xml`.) Note `--os=html` is *already* accepted and today emits a
-  profile with `ui:` elements intact and no doctype, differing from
-  `--os=tty` only in attribute order — so "`--os=html` is unchanged" is not
-  a property that exists to preserve.
+- `--os=tty` output is byte-identical to the pre-fleet baseline, byte for
+  byte — the regression check runs the CLI, not the dispatcher, so
+  attribute-order drift cannot hide in it. (Baseline: 5,920 bytes for
+  `map+ui.xml`, asserted by `t/62-ui-html.t`. The earlier 5,963 figure
+  predated the per-element fleet; `--os=tty` is now a pure pass-through —
+  it re-emits the whole `ui:` subtree for a later render host.) Note
+  `--os=html` *is* a property that exists to preserve: it now emits a real
+  XHTML document (doctype, one `<html lang>`, no `ui:` elements) via
+  `Amin::UI::Target::HTML` + `Amin::Handler::HTML`.
 - Existing `t/10-app-shop-ui.t` still passes.
 
 ### M1 — Profile in, profile out (no HTTP)

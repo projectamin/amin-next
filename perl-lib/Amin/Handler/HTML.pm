@@ -6,6 +6,7 @@ use Amin qw(NS);
 use Class::Tiny qw(fh autoflush sink), {
     buf   => '',
     stack => sub { [] },
+    scope => sub { [] },   # 1/0 per open element: is it a kept (XHTML) element?
 };
 
 # Dumb serializer (plan §4.3/§4.5): void elements self-close so the output
@@ -44,8 +45,13 @@ sub start_document ($self, @) {
 
 sub start_element ($self, $el) {
     my $ns = $el->{NamespaceURI} // '';
-    return unless $ns eq XHTML;
-    my $ln = $el->{LocalName} // $el->{Name} // return;
+    my $ln = $el->{LocalName} // $el->{Name} // '';
+    my $html = ($ns eq XHTML) ? 1 : 0;
+    # A void element is self-contained: it can hold no content, so it neither
+    # opens a scope nor waits for a close (end_element skips it symmetrically).
+    my $void = ($html && length $ln && VOID->{$ln}) ? 1 : 0;
+    push @{ $self->scope }, $html unless $void;
+    return unless $html;
     $self->_push("<$ln");
     # sorted: attribute order in the output must not depend on hash
     # randomization — byte-stable pages, testable assertions (§4.3 dumb serializer)
@@ -65,19 +71,22 @@ sub start_element ($self, $el) {
 }
 
 sub end_element ($self, $el) {
-    my $ns = $el->{NamespaceURI} // '';
-    return unless $ns eq XHTML;
-    my $ln = pop @{$self->stack};
-    return unless defined $ln;
-    return if VOID->{$ln};
-    $self->_push("</$ln>\n");
+    my $ln = $el->{LocalName} // $el->{Name} // '';
+    return if length $ln && VOID->{$ln};     # void: nothing was opened, nothing to close
+    return unless pop @{ $self->scope };     # leave a dropped (non-html) scope: nothing to close
+    my $top = pop @{$self->stack};
+    return unless defined $top;
+    $self->_push("</$top>\n");
     return;
 }
 
 sub characters ($self, $d) {
+    my $sc = $self->scope;
+    # emit only text sitting directly inside a kept (XHTML) element — text from a
+    # ui:/amin: scope (raw profile content forwarded alongside our fragments) is dropped
+    return unless @$sc && $sc->[-1];
     my $t = $d->{Data} // '';
     return unless length $t;
-    return unless @{$self->stack};   # drop text outside any html element
     $self->_push(_e($t));
     return;
 }

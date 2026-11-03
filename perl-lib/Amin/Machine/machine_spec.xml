@@ -315,6 +315,7 @@
        from this and injects it into the ui: element filters as `Render`. -->
   <ui-dialect target="ios"     class="Amin::UI::Target::SwiftUI" />
   <ui-dialect target="android" class="Amin::UI::Target::Compose" />
+  <ui-dialect target="html"    class="Amin::UI::Target::HTML" />
   <!-- ui: projection fleet — ONE filter per ui: kind (axa-plan §4.3).  Each is
        an element-scoped `late` candidate bound to a target, so the position's
        _LazyGate splices in only while its element flows: a machine that never
@@ -372,6 +373,34 @@
   <filter class="Amin::Filter::UI::Element::Toolbar" position="late" element="toolbar" namespace="http://projectamin.org/ns/ui/1" target="android" />
   <filter class="Amin::Filter::UI::Element::VStack" position="late" element="vstack" namespace="http://projectamin.org/ns/ui/1" target="ios" />
   <filter class="Amin::Filter::UI::Element::VStack" position="late" element="vstack" namespace="http://projectamin.org/ns/ui/1" target="android" />
+  <!-- The same fleet bound to the html target.  These filters share the
+       SwiftUI/Compose classes; only the injected Render dialect differs, and
+       Amin::UI::Target::HTML emits html:* events instead of stream text. -->
+  <filter class="Amin::Filter::UI::Element::Alert" position="late" element="alert" namespace="http://projectamin.org/ns/ui/1" target="html" />
+  <filter class="Amin::Filter::UI::Element::App" position="late" element="app" namespace="http://projectamin.org/ns/ui/1" target="html" />
+  <filter class="Amin::Filter::UI::Element::AsyncImage" position="late" element="asyncimage" namespace="http://projectamin.org/ns/ui/1" target="html" />
+  <filter class="Amin::Filter::UI::Element::Badge" position="late" element="badge" namespace="http://projectamin.org/ns/ui/1" target="html" />
+  <filter class="Amin::Filter::UI::Element::Button" position="late" element="button" namespace="http://projectamin.org/ns/ui/1" target="html" />
+  <filter class="Amin::Filter::UI::Element::Card" position="late" element="card" namespace="http://projectamin.org/ns/ui/1" target="html" />
+  <filter class="Amin::Filter::UI::Element::Column" position="late" element="column" namespace="http://projectamin.org/ns/ui/1" target="html" />
+  <filter class="Amin::Filter::UI::Element::Grid" position="late" element="grid" namespace="http://projectamin.org/ns/ui/1" target="html" />
+  <filter class="Amin::Filter::UI::Element::HStack" position="late" element="hstack" namespace="http://projectamin.org/ns/ui/1" target="html" />
+  <filter class="Amin::Filter::UI::Element::Image" position="late" element="image" namespace="http://projectamin.org/ns/ui/1" target="html" />
+  <filter class="Amin::Filter::UI::Element::Item" position="late" element="item" namespace="http://projectamin.org/ns/ui/1" target="html" />
+  <filter class="Amin::Filter::UI::Element::Label" position="late" element="label" namespace="http://projectamin.org/ns/ui/1" target="html" />
+  <filter class="Amin::Filter::UI::Element::List" position="late" element="list" namespace="http://projectamin.org/ns/ui/1" target="html" />
+  <filter class="Amin::Filter::UI::Element::Navigate" position="late" element="navigate" namespace="http://projectamin.org/ns/ui/1" target="html" />
+  <filter class="Amin::Filter::UI::Element::Progress" position="late" element="progress" namespace="http://projectamin.org/ns/ui/1" target="html" />
+  <filter class="Amin::Filter::UI::Element::Row" position="late" element="row" namespace="http://projectamin.org/ns/ui/1" target="html" />
+  <filter class="Amin::Filter::UI::Element::Scene" position="late" element="scene" namespace="http://projectamin.org/ns/ui/1" target="html" />
+  <filter class="Amin::Filter::UI::Element::Searchable" position="late" element="searchable" namespace="http://projectamin.org/ns/ui/1" target="html" />
+  <filter class="Amin::Filter::UI::Element::Section" position="late" element="section" namespace="http://projectamin.org/ns/ui/1" target="html" />
+  <filter class="Amin::Filter::UI::Element::Sheet" position="late" element="sheet" namespace="http://projectamin.org/ns/ui/1" target="html" />
+  <filter class="Amin::Filter::UI::Element::Sparkline" position="late" element="sparkline" namespace="http://projectamin.org/ns/ui/1" target="html" />
+  <filter class="Amin::Filter::UI::Element::Stack" position="late" element="stack" namespace="http://projectamin.org/ns/ui/1" target="html" />
+  <filter class="Amin::Filter::UI::Element::Text" position="late" element="text" namespace="http://projectamin.org/ns/ui/1" target="html" />
+  <filter class="Amin::Filter::UI::Element::Toolbar" position="late" element="toolbar" namespace="http://projectamin.org/ns/ui/1" target="html" />
+  <filter class="Amin::Filter::UI::Element::VStack" position="late" element="vstack" namespace="http://projectamin.org/ns/ui/1" target="html" />
   <filter class="Amin::AI::Graph" position="late" namespace="http://projectamin.org/ns/ai/1" />
   <filter class="Amin::Filter::Billing::CgroupV2" position="end" namespace="http://projectamin.org/ns/2026/" />
   <filter class="Amin::UCC::Settlement" position="end" namespace="http://projectamin.org/ns/ucc/1" />

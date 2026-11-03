@@ -205,6 +205,10 @@ my $spec = $ms->spec;
 
 my $handler_class = ($spec->{handler} && $spec->{handler}{class})
     ? $spec->{handler}{class} : 'Amin::Handler::Writer';
+# --os=html renders the ui: IR into XHTML events, so the dumb HTML serializer
+# replaces the spec's XML writer for that target (the spec declares
+# Amin::Handler::Writer for the XML/map modes).  It ignores `indent`.
+$handler_class = 'Amin::Handler::HTML' if $LATE_UI && $UI_OS eq 'html';
 (my $handler_file = "$handler_class.pm") =~ s{::}{/}g;
 eval { require $handler_file };
 die "Cannot load machine-spec handler '$handler_class': $@" if $@;

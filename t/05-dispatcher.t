@@ -36,8 +36,8 @@ is($late->[0], 'Amin::Filter::Map::Topology', 'spec late idx 0 = Map::Topology')
 is($late->[1], 'Amin::Filter::UI::Guard',
     'spec late idx 1 = neutral ui: Guard (always on — fail-closed on every host)');
 is($late->[-1], 'Amin::AI::Graph', 'spec late idx -1 = AI::Graph');
-is(scalar($late->@*), 53,
-    'spec late = Map::Topology + UI::Guard + 25×2 ui: element filters + AI::Graph');
+is(scalar($late->@*), 78,
+    'spec late = Map::Topology + UI::Guard + 25×3 ui: element filters + AI::Graph');
 {
     my @el = @$late[2 .. $#$late - 1];
     ok(!(grep { $_ !~ /^Amin::Filter::UI::Element::/ } @el),
@@ -49,8 +49,9 @@ is(scalar($late->@*), 53,
     }
     is($target{ios}, 25, 'late declares 25 ios element candidates');
     is($target{android}, 25, 'late declares 25 android element candidates');
-    is(scalar(keys %target), 2,
-        'ui: element filters are target-scoped only (ios/android) — a neutral host splices none');
+    is($target{html}, 25, 'late declares 25 html element candidates');
+    is(scalar(keys %target), 3,
+        'ui: element filters are target-scoped only (ios/android/html) — a neutral host splices none');
 }
 
 my $bare_chain = Amin::Machine::Dispatcher::_build_chain(
