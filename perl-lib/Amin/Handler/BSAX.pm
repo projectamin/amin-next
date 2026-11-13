@@ -183,7 +183,11 @@ sub end_element ($self, @) {
 sub characters ($self, $d) {
     my $t = $d->{Data} // '';
     return unless length $t;
-    if (length($t) < 32) {
+    # Short form carries the length in the tag's low 5 bits, but flag value
+    # 31 (0x1F) is the long-form sentinel the decoder keys on — so the short
+    # form is only valid for lengths 0..30.  A 31-byte chunk must take the
+    # long form or the decoder reads a LEB length that was never written.
+    if (length($t) < 31) {
         $self->_push(chr(0x80 | length($t)));  # Tag::Chars short form
         $self->_push($t);
     } else {

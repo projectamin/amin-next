@@ -19,7 +19,7 @@
 //!
 //! | byte offset |  value          | meaning |
 //! |-------------|-----------------|---------|
-//! | 0..8        | `AMIN\x00BSAX1` | **stream magic** (8 bytes). Lets any reader auto-detect binary vs XML by peeking 8 bytes; also allows concatenating streams. |
+//! | 0..8        | `AMINBSA1`      | **stream magic** (8 bytes). Lets any reader auto-detect binary vs XML by peeking 8 bytes; also allows concatenating streams. |
 //! | 8..         | event stream    | tag-flat byte stream — no length-prefixes at stream level; frame-level length is handled by [`awp3::frame`] (ASCON-128a AEAD framed). |
 //!
 //! ### Event tag byte — `high 3 bits = kind`, `low 5 bits = per-kind flags`
@@ -52,12 +52,12 @@
 //!                     id version kind rc pid duration exit_kind name target
 //!                     channel dir mode level value type size
 //!  23..36  map:*     : region server link node a b cost phase flavor
-//!                     latency_ms bw_gbps tier zone  (note: status shared with amin core)
-//!  37..67  ui:*      : 31-entry closed-world ui: vocabulary (25 kinds + attrs)
-//!  68..86  bc:*      : projectamin/bitcache 2014 ns — object/signer/networkmap/slab ops
-//!  87..92  ainit:*   : init-profile.xml stage vocabulary (PID 1 handoff)
-//!  93..106 exec-net  : Sandbox + Net::Fabric + expanded Command surface names
-//! 107..121 sec:*     : payload-neutral PQ E2EE (Double Ratchet + PQXDH filter pair)
+//!                     latency_ms bw_gbps tier zone value
+//!  37..82  ui:*      : 46-entry closed-world ui: vocabulary (kinds + attrs)
+//!  83..101 bc:*      : projectamin/bitcache 2014 ns — object/signer/networkmap/slab ops
+//! 102..107 ainit:*   : init-profile.xml stage vocabulary (PID 1 handoff)
+//! 108..121 exec-net  : Sandbox + Net::Fabric + expanded Command surface names
+//! 122..136 sec:*     : payload-neutral PQ E2EE (Double Ratchet + PQXDH filter pair)
 //!      ESCAPE        → NAME_ID:LEB = BY_ID.len() then LEN_PREFIXED(utf8 raw name) follows
 //! ```
 //!
@@ -77,13 +77,40 @@
 //!   validated against [`Amin::Util::Fold`] allowed-name hashes BEFORE the
 //!   event is forwarded to the 5-position chain.  Unknown names never reach
 //!   user filters.
-//! * **B (eBPF/ubpf)** : On the Rust side, `decode_iter()` is a single
-//!   `&[u8] -> impl Iterator<Item=Event>` function with no heap allocations
-//!   inside the `simd-tag` feature loop; perfect for XDP/syscall hook validation.
+//! * **B (eBPF/ubpf)** : On the Rust side, [`decode::StreamDecoder`] is a
+//!   resumable state machine (`feed` bytes in, `poll_event` out).  No parsing
+//!   cost is incurred until a whole event is buffered, so it is safe to drive
+//!   from XDP/syscall hooks that see a stream in fragments.
 //! * **N (Landlock/seccomp)** : `bsax::decode` never opens files, never execs,
 //!   never touches networking.  All it does is read bytes → emit tagged enums.
 //!   A Landlock allow-list of `{}` + seccomp `read/write/exit` only is
 //!   sufficient; see [`crate::decode::Bounds`].
+//!
+//! ## Escape hatches are not a trust boundary
+//!
+//! Three wire constructs carry **producer-controlled strings outside the
+//! closed-world NAME_ID vocabulary**, and are therefore escape hatches rather
+//! than named vocabulary:
+//!
+//! * `PI` (0xC0) — `Target` + `Data`;
+//! * `DICT_ENTRY` (0xE0) — interned names;
+//! * `NS_ID` / `NAME_ID` escape — inline UTF-8 URI / LocalName.
+//!
+//! `PI` is **not** an Amin invention: it is a straight mirror of the XML::SAX
+//! `processing_instruction` event (`<?target data?>`), and the codec only gives
+//! it a binary tag.  Amin's command event is `processing_command`, not the XML
+//! PI; the Dispatcher adds no `processing_instruction` to its forwarded event
+//! set, but it does implement `processing_instruction` as **warn-and-drop** —
+//! the PI never enters the chain, and the attempt is recorded on the machine's
+//! loaded Log so an operator sees that something tried one.
+//!
+//! Because the transport auto-detects XML vs BSAX by peeking the first byte,
+//! dropping or rewriting a PI in the codec would create a **parser
+//! differential**: the same document would mean different things depending on
+//! its encoding.  Equivalence with the XML path is the security property, so
+//! the codec stays 1:1.  Any policy on `Target`/`Data` — allow-list or refusal
+//! — belongs in a single gate in the filter chain (where names are
+//! allow-listed for P/B/N), never in the codec.
 //!
 //! ## Integration with AWP/3 transport
 //!
@@ -165,6 +192,36 @@ impl Tag {
     }
 }
 
+/// One decoded attribute of a `start_element`.
+///
+/// `name_id < vocab::escape_id()` names a closed-world vocabulary slot, looked
+/// up via `vocab::BY_ID[name_id]`.  When `name_id == vocab::escape_id()` the
+/// LocalName was not in the vocabulary and is carried verbatim in
+/// `name_override` (a length-prefixed UTF-8 string on the wire).  Use
+/// [`Attr::local_name`] to resolve either case without branching.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Attr<'a> {
+    /// `< vocab::escape_id()` → closed-world vocab; `== escape_id()` → escaped.
+    pub name_id: u8,
+    /// Raw UTF-8 LocalName, populated only on the escape path.
+    pub name_override: Option<&'a [u8]>,
+    /// Attribute value bytes (UTF-8 by the SAX contract).
+    pub value: &'a [u8],
+}
+
+impl<'a> Attr<'a> {
+    /// Resolve the LocalName: the closed-world vocab entry when `name_id`
+    /// addresses one, otherwise the escaped raw name.  `None` only if the id
+    /// is neither in range nor accompanied by an override (malformed).
+    #[must_use]
+    pub fn local_name(&self) -> Option<&'a [u8]> {
+        match vocab::BY_ID.get(self.name_id as usize) {
+            Some(name) => Some(name),
+            None => self.name_override,
+        }
+    }
+}
+
 /// A decoded SAX event, borrowing bytes from the original input buffer.
 /// Generic over the lifetime of the source slice so the hot path never
 /// allocates for characters/attribute values.
@@ -175,8 +232,8 @@ pub enum Event<'a> {
     /// Corresponds to `end_document()`
     EndDocument,
     /// Corresponds to `start_element($el)`.
-    /// `attrs` are `(name_id, value_bytes)` tuples; `name_id < vocab::escape_id()`
-    /// → look up via `vocab::BY_ID[name_id]`; else use `local_name_override`.
+    /// `name_id < vocab::escape_id()` → look up via `vocab::BY_ID[name_id]`;
+    /// else use `local_name_override`.
     StartElement {
         /// 4-bit NS_ID.  If 15 (=escape), read `ns_uri_override` instead.
         ns_id: u8,
@@ -186,8 +243,8 @@ pub enum Event<'a> {
         ns_uri_override: Option<&'a [u8]>,
         /// Only populated when `name_id >= vocab::escape_id()` (escape).
         local_name_override: Option<&'a [u8]>,
-        /// `(name_id, value_bytes)`.
-        attrs: Vec<(u8, &'a [u8])>,
+        /// Decoded attributes in wire order.
+        attrs: Vec<Attr<'a>>,
     },
     /// Corresponds to `end_element()`. Name is NOT repeated (pop from stack);
     /// the Perl/Rust decoder side maintains `Vec<String>` stack mirroring

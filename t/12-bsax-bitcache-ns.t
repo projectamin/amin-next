@@ -76,7 +76,7 @@ sub emit_event_stream ($handler) {
     $handler->end_element(_el($NS_BC,'bc','signer'));
     $handler->end_element(_el($NS_BC,'bc','object'));
 
-    # 2. ainit stage NAME_IDs — `stage` should be vocab index 87 (1 byte).
+    # 2. ainit stage NAME_IDs — `stage` should be vocab index 102 (2-byte LEB).
     for (
         [1, 'hwcheck'   => 'n143-rack2'],
         [2, 'fwupdate'  => 'n143-rack2'],
@@ -94,7 +94,8 @@ sub emit_event_stream ($handler) {
         $handler->end_element(_el($NS_AMIN,'amin','stage'));
     }
 
-    # 3. sandbox + net names (indices 96, 102-106).
+    # 3. sandbox + net names (sandbox=111; exec/spawn/signal=108..=110;
+    #    lb=118; netpolicy=121).
     $handler->start_element(_el($NS_AMIN,'amin','sandbox',
         'amin:cpu_max' => '200000 1000000',
         'amin:memory_high' => '8G',
@@ -179,5 +180,31 @@ for my $ev (@bin) {
 }
 cmp_ok($sox_seen, '>=', 1,
    "NS_ESCAPE custom namespace (sox:*) element reached RecordingHandler after BSAX decode");
+
+# ── 7. Streaming parity with NS_ESCAPE straddling every chunk boundary.  BSAX
+#       is ONLY a streamed protocol: feeding the wire one byte at a time must
+#       emit the identical event sequence as the one-shot parse_bytes(), even
+#       for the length-prefixed inline URI + escaped LocalNames of sox:* that
+#       get split across many 1-byte chunks.
+{
+    my $href = Amin::Test::RecordingHandler->new;
+    Amin::Generator::BSAX->new(Handler => $href)->parse_bytes($BIN);
+
+    my $hchunk = Amin::Test::RecordingHandler->new;
+    my $g = Amin::Generator::BSAX->new(Handler => $hchunk);
+    for my $i (0 .. length($BIN) - 1) { $g->feed(substr($BIN, $i, 1)) }
+    $g->finish;
+
+    is $hchunk->captured, $href->captured,
+       "feed(1-byte chunks) ≡ parse_bytes (incl. NS_ESCAPE sox:*)";
+
+    my $sox = 0;
+    for my $ev ($hchunk->captured->@*) {
+        next unless ref($ev) eq 'ARRAY' && $ev->[0] eq 'start_element';
+        ++$sox if ($ev->[1]{NamespaceURI} // '') eq $NS_SOX;
+    }
+    cmp_ok($sox, '>=', 1,
+       "sox:* NS_ESCAPE URI survived 1-byte-chunk streaming decode");
+}
 
 done_testing;

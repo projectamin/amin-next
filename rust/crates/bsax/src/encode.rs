@@ -61,25 +61,25 @@ pub fn write_start_elem<B: BufMut>(
 
 /// `characters` — raw UTF-8 bytes, length-prefixed with short-form optim.
 pub fn write_chars<B: BufMut>(out: &mut B, data: &[u8]) {
-    let len = data.len();
-    if len < 32 {
-        out.put_u8(Tag::Chars as u8 | (len as u8));
-        out.put_slice(data);
-    } else {
-        out.put_u8(Tag::Chars as u8 | 0x1F);
-        leb_u32(out, len as u32);
-        out.put_slice(data);
-    }
+    write_lengthed(out, Tag::Chars, data);
 }
 
 /// `ignorable_whitespace` (rare; filters drop it anyway).
 pub fn write_iws<B: BufMut>(out: &mut B, data: &[u8]) {
+    write_lengthed(out, Tag::Iws, data);
+}
+
+/// Shared CHARS/IWS body: low 5 tag bits carry the length for short chunks,
+/// but flag value 31 (`0x1F`) is the long-form sentinel the decoder keys on,
+/// so the short form only covers lengths 0..=30.  A 31-byte chunk must take
+/// the long form or the decoder reads a LEB length that was never written.
+fn write_lengthed<B: BufMut>(out: &mut B, tag: Tag, data: &[u8]) {
     let len = data.len();
-    if len < 32 {
-        out.put_u8(Tag::Iws as u8 | (len as u8));
+    if len < 31 {
+        out.put_u8(tag as u8 | (len as u8));
         out.put_slice(data);
     } else {
-        out.put_u8(Tag::Iws as u8 | 0x1F);
+        out.put_u8(tag as u8 | 0x1F);
         leb_u32(out, len as u32);
         out.put_slice(data);
     }

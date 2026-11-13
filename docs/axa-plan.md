@@ -905,6 +905,19 @@ demo is M0–M3; M4 is what makes it safe to expose.
    the response profile exposed" sufficient? Recommendation: sufficient —
    revisit only if a binding can reach a namespace the principal has no
    grant on.
+10. **Processing instructions and the trust boundary.** `processing_instruction`
+    (`<?target data?>`) is a standard XML::SAX event that BSAX mirrors 1:1
+    (`Tag::Pi`); it is not an Amin construct, only its binary tag is new. Amin's
+    command event is `processing_command`, and the Dispatcher answers a PI with
+    warn-and-drop: it never enters the chain, and the attempt is logged on the
+    machine's loaded Log. But `Target`/`Data` are arbitrary, outside the
+    closed-world vocabulary: if a filter ever *acts* on a
+    PI (an `xml-stylesheet`-style fetch, say) it is a §5.5-class bypass.
+    Recommendation: keep the codec 1:1 with XML — equivalence is the security
+    property, and a codec that drops PIs while the XML parser surfaces them is a
+    parser differential on an auto-detected transport. If PIs must ever be
+    honoured, allow-list the target at the single `middle`/`permanent` gate, not
+    in the decoder. See bsax `lib.rs` "Escape hatches are not a trust boundary".
 
 ---
 

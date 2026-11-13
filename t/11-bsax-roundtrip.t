@@ -140,4 +140,79 @@ my @fb;
 }
 is scalar(@fb), scalar(@xml), "XML fallback produces same event count";
 
+# 7. Streaming parity (BSAX is ONLY a streamed protocol): feeding the same
+#    bytes one byte at a time through feed()/finish() must emit EXACTLY the
+#    same event sequence as the one-shot parse_bytes() convenience.  This is
+#    what proves no event is lost or duplicated at a chunk boundary.
+{
+    my $href = Amin::Test::RecordingHandler->new;
+    Amin::Generator::BSAX->new(Handler => $href)->parse_bytes($BIN);
+
+    my $hchunk = Amin::Test::RecordingHandler->new;
+    my $gchunk = Amin::Generator::BSAX->new(Handler => $hchunk);
+    for my $i (0 .. length($BIN) - 1) { $gchunk->feed(substr($BIN, $i, 1)) }
+    $gchunk->finish;
+
+    is scalar($hchunk->captured->@*), scalar($href->captured->@*),
+       "feed(1-byte chunks) event count ≡ parse_bytes";
+    is $hchunk->captured, $href->captured,
+       "feed(1-byte chunks) event sequence ≡ parse_bytes";
+}
+
+# 8. Strict XML::SAX parity for the event kinds that are NOT start/end element.
+#    A hand-built stream exercises the three arms the aligned decoder must fire
+#    exactly once each, in document order:
+#      0xA0 IWS        → ignorable_whitespace   (must NOT fold into `characters`)
+#      0xC0 PI         → processing_instruction  (escaped/PROHIBITED target path)
+#      0xE0 DICT_ENTRY → no handler event; interns id → name, transparently
+#                        resolved by a LATER NAME_ID reference (_lex_name).
+{
+    my $leb = sub {                     # LEB128 u32, byte-string form
+        my $n = shift;
+        my $s = '';
+        do { my $b = $n & 0x7F; $n >>= 7; $b |= 0x80 if $n; $s .= chr($b) } while $n;
+        $s;
+    };
+    my $lpfx = sub { $leb->(length $_[0]) . $_[0] };   # LEB length + raw bytes
+
+    my $DICT_ID = 200;                  # ≥128 ⇒ never collides with a vocab slot
+    my $s  = "AMINBSA1";                # magic
+    $s .= "\x00";                       # StartDoc
+    # DICT_ENTRY: flags[4] = NS_ID (AMIN=1) ⇒ tag 0xF0; LEB id; len-prefixed name
+    $s .= "\xF0" . $leb->($DICT_ID) . $lpfx->('frobnicate');
+    # StartEl: NS present + 0 attrs ⇒ tag 0x50; NS byte 0x10 (AMIN); interned id
+    $s .= "\x50" . "\x10" . $leb->($DICT_ID);
+    $s .= "\x82" . "hi";               # Chars "hi"
+    $s .= "\xA3" . "\n  ";             # IWS
+    # PI: target id == ESCAPE(137) ⇒ inline len-prefixed target, then data blob
+    $s .= "\xC0" . $leb->(137) . $lpfx->('xml-stylesheet') . $lpfx->('type="text/xsl"');
+    $s .= "\x60";                       # EndEl
+    $s .= "\x20";                       # EndDoc
+
+    my $want = [
+        'start_document',
+        [start_element => { LocalName => 'frobnicate',
+                            NamespaceURI => $NS_AMIN, Attributes => [] }],
+        [characters => 'hi'],
+        [ignorable_whitespace => "\n  "],
+        [processing_instruction => { Target => 'xml-stylesheet',
+                                     Data   => 'type="text/xsl"' }],
+        [end_element => { LocalName => 'frobnicate', NamespaceURI => $NS_AMIN }],
+        'end_document',
+    ];
+
+    my $h = Amin::Test::RecordingHandler->new;
+    Amin::Generator::BSAX->new(Handler => $h)->parse_bytes($s);
+    is $h->captured, $want,
+       "IWS→ignorable_whitespace, PI→processing_instruction, DICT name resolves";
+
+    # The same stream fed one byte at a time must be identical — interning,
+    # IWS and PI must all survive chunk boundaries intact.
+    my $hc = Amin::Test::RecordingHandler->new;
+    my $gc = Amin::Generator::BSAX->new(Handler => $hc);
+    for my $i (0 .. length($s) - 1) { $gc->feed(substr($s, $i, 1)) }
+    $gc->finish;
+    is $hc->captured, $want, "IWS/PI/DICT survive 1-byte chunked feed";
+}
+
 done_testing();

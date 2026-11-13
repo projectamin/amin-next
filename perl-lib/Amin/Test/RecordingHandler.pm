@@ -60,4 +60,18 @@ sub characters   ($self, $d) {
     push $self->captured->@*, [characters => $t];
 }
 
+# XML::SAX ignorable_whitespace (BSAX Tag::Iws 0xA0).  Kept distinct from
+# `characters` and NOT trimmed, so a stream carrying IWS is provably not being
+# silently folded into significant character data.
+sub ignorable_whitespace ($self, $d) {
+    push $self->captured->@*, [ignorable_whitespace => ($d->{Data} // '')];
+}
+
+# XML::SAX processing_instruction (BSAX Tag::Pi 0xC0).
+sub processing_instruction ($self, $d) {
+    push $self->captured->@*, [processing_instruction => {
+        Target => $d->{Target} // '', Data => $d->{Data} // '',
+    }];
+}
+
 1;
