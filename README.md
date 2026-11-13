@@ -96,10 +96,12 @@ Contracts, signatures, and trust boundaries are enforced on *every* pass, not ju
 | [`perl-lib/Amin/Generator/BSAX.pm`](./perl-lib/Amin/Generator/BSAX.pm) + [`perl-lib/Amin/Handler/BSAX.pm`](./perl-lib/Amin/Handler/BSAX.pm) | Binary SAX codec; 1:1 vocab parity with `rust/crates/bsax/src/vocab.rs`. |
 | [`perl-lib/Amin/Util/`](./perl-lib/Amin/Util/) | Shared helpers (Fold/allow-lists, provenance tags, …). |
 | [`rust/crates/awp3/`](./rust/crates/awp3/) | **A**min **W**ire **P**rotocol v3 — PQ-safe framed transport. |
+| [`rust/crates/ainit/`](./rust/crates/ainit/) | Netboot initrd PID 1: mesh BOOT_OFFER verify, Bitcache CAS profile fetch, stages 1..=4, descriptor hand-off. |
 | [`rust/crates/aminexec/`](./rust/crates/aminexec/) | Per-process sandbox, cgroup v2 metrics, platform impls for Linux / FreeBSD / iOS / Android. |
 | [`rust/crates/bsax/`](./rust/crates/bsax/) | Rust Binary SAX codec; `no_std` compatible; `std` feature adds `bytes`. |
 | [`examples/apps/shop-ui/`](./examples/apps/shop-ui/) | Reference app bundle. |
 | [`docs/app-bundle-contract.md`](./docs/app-bundle-contract.md) | Full `.amina` bundle spec, including AI-assisted authoring tiers. |
+| [`docs/pid1-split.md`](./docs/pid1-split.md) | Why `ainit` and `aminexec` are two phases of one PID 1, and where the boundary between them is defined. |
 | [`t/`](./t/) | Perl integration tests.  Run with `prove -r t/` or `mise run test`. |
 | [`.mise.toml`](./.mise.toml) | Toolchain, env vars, tasks, auto-bootstrap hooks. |
 | [`cpanfile`](./cpanfile) | Runtime CPAN requirements — intentionally **unpinned** (latest stable); `cpanfile.snapshot` is the reproducibility lock. |

@@ -1,6 +1,6 @@
 //! BSAX micro-decoder for ainit stage vocabulary — understands ONLY the
 //! ainit-vocab-region elements: `stage`, `order`, `node_id`, `refused`,
-//! `init_profile_ref`, `slab_dev` (vocab indices 87..=92).  Any other
+//! `init_profile_ref`, `slab_dev` (vocab indices 102..=107).  Any other
 //! element (e.g. supervisor/workload stages 5-6) is silently skipped via
 //! the closed-world drop-unknown pattern — identical behaviour to the
 //! Perl `Generator::BSAX` allow-list guard.
@@ -20,7 +20,7 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use anyhow::{anyhow, Context, Result};
-use bsax::decode::{Bounds, Decoder};
+use bsax::decode::{Bounds, Poll, StreamDecoder};
 use bsax::vocab;
 use bsax::Event;
 
@@ -82,7 +82,7 @@ impl Default for Stage {
 
 /// Parse a BSAX-encoded init-profile document and return only the
 /// ainit-relevant stages 1..=4.  Any element whose `name_id` is not
-/// inside the ainit vocab region (87..=92) OR whose parsed stage `order`
+/// inside the ainit vocab region (102..=107) OR whose parsed stage `order`
 /// is ≥ 5 is counted in [`ParsedInitProfile::skipped_elements`] rather
 /// than materialised — closed-world drop-unknown guarantee.
 pub fn parse_init_profile_bsax(bsax_bytes: &[u8]) -> Result<ParsedInitProfile> {
@@ -92,27 +92,37 @@ pub fn parse_init_profile_bsax(bsax_bytes: &[u8]) -> Result<ParsedInitProfile> {
     // embed bc:signer envelopes + any future names inside init-profile
     // without ainit choking (it just counts them as skipped).
     let bounds = Bounds { allow_vocab_only: true, ..Bounds::default() };
-    let decoder = Decoder::new(bsax_bytes, bounds)
-        .map_err(|e| anyhow!("BSAX decoder rejected init-profile: {e}"))?;
+    let mut decoder = StreamDecoder::new(bounds);
+    decoder.feed(bsax_bytes);
 
-    // Name → (attrs map as we gather per-element chars inside body).
+    // Name → (attrs map as we gather per-element chars inside body).  The
+    // values are OWNED because a streaming decoder's borrowed slices are only
+    // valid until the next `poll_event`; a stage's attrs must survive the
+    // chars/end events that follow its start tag.
     let mut stage_chars_buffer: Vec<u8> = Vec::new();
     let mut in_ainit_stage: bool = false;
-    let mut pending_attrs: BTreeMap<&[u8], &[u8]> = BTreeMap::new();
+    let mut pending_attrs: BTreeMap<Vec<u8>, Vec<u8>> = BTreeMap::new();
     let mut stages: BTreeMap<u32, Stage> = BTreeMap::new();
     let mut skipped: usize = 0;
 
     let mut elem_stack_depth: usize = 0; // inside any ainit stage el or children?
     let mut ainit_region_names: usize = 0;
 
-    for event in decoder {
-        let event = event.context("BSAX stream decode error inside init-profile")?;
+    loop {
+        let event = match decoder
+            .poll_event()
+            .context("BSAX stream decode error inside init-profile")?
+        {
+            Poll::Event(ev) => ev,
+            // We fed the whole document, so NeedMore == exhausted input.
+            Poll::NeedMore | Poll::Done => break,
+        };
         match event {
             Event::StartDocument | Event::EndDocument => {},
             Event::StartElement { ns_id, name_id, attrs, .. } => {
                 let is_amin = ns_id == vocab::ns_id::AMIN;
                 let name_bytes = vocab::BY_ID.get(name_id as usize).copied().unwrap_or(b"");
-                let is_ainit_region = (87..=92).contains(&u32::from(name_id));
+                let is_ainit_region = (102..=107).contains(&u32::from(name_id));
 
                 if is_ainit_region { ainit_region_names += 1; }
 
@@ -120,10 +130,11 @@ pub fn parse_init_profile_bsax(bsax_bytes: &[u8]) -> Result<ParsedInitProfile> {
                 if is_amin && name_bytes == b"stage" {
                     in_ainit_stage = true;
                     elem_stack_depth += 1;
-                    pending_attrs = BTreeMap::new();
-                    for (aid, v) in &attrs {
-                        let aname = vocab::BY_ID.get(*aid as usize).copied().unwrap_or(b"");
-                        pending_attrs.insert(aname, *v);
+                    pending_attrs.clear();
+                    for attr in &attrs {
+                        if let Some(aname) = attr.local_name() {
+                            pending_attrs.insert(aname.to_vec(), attr.value.to_vec());
+                        }
                     }
                     stage_chars_buffer.clear();
                     continue;
@@ -146,7 +157,7 @@ pub fn parse_init_profile_bsax(bsax_bytes: &[u8]) -> Result<ParsedInitProfile> {
                         // Flush pending stage.
                         let mut s = Stage::default();
                         for (k, v) in &pending_attrs {
-                            match *k {
+                            match k.as_slice() {
                                 b"name" => s.name = String::from_utf8_lossy(v).into_owned(),
                                 b"order" => s.order = parse_u32_lossy(v),
                                 b"node_id" => s.node_id = String::from_utf8_lossy(v).into_owned(),

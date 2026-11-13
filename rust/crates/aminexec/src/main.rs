@@ -347,23 +347,102 @@ fn write_stderr_error(code: i32, msg: &str) -> std::io::Result<()> {
     stderr.flush()
 }
 
+/// The Amin runtime that applies a boot profile: the Perl CLI, which reads
+/// the profile document (XML or BSAX) and runs its `amin:command` filters.
+/// It is installed beside its `perl-lib` sibling (bin/amin builds `$root`
+/// from its own path, then `use`s `$root/perl-lib`).
+const AMIN_CLI: &str = "/usr/share/amin/bin/amin";
+
+/// Perl as installed in the node rootfs (B3, `--prefix=/usr`).
+const PERL: &str = "/usr/bin/perl";
+
+/// A kernel-spawned init inherits no PATH; the profile's commands need one.
+const INIT_PATH: &str = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
+
 #[cfg(target_os = "linux")]
 fn pid1_entry() -> anyhow::Result<()> {
-    tracing::info!("running as PID 1 — executing Amin metal bringup");
+    if let Err(e) = pid1_run() {
+        pid1_fatal(&format!("{e:#}"));
+    }
+    Ok(())
+}
+
+/// A PID-1 failure must never *return*: when PID 1 exits the kernel panics
+/// ("Attempted to kill init!"), and with `panic=5` on the frame's command line
+/// the node reboots straight back into the same path — a silent loop around
+/// one bad line in the boot log, with nothing left to read it.  So report the
+/// failure where the boot log can actually see it (`/dev/kmsg`, not a stderr
+/// with no console behind it) and hold the machine alive instead.
+#[cfg(target_os = "linux")]
+fn pid1_fatal(msg: &str) -> ! {
+    use std::io::Write;
+    if let Ok(mut kmsg) = std::fs::OpenOptions::new().write(true).open("/dev/kmsg") {
+        let _ = writeln!(kmsg, "amin: PID1 fatal (holding, not exiting): {msg}");
+    }
+    let _ = writeln!(std::io::stderr(), "aminexec PID1 fatal (holding, not exiting): {msg}");
+    loop {
+        std::thread::park();
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn pid1_run() -> anyhow::Result<()> {
+    use anyhow::Context;
+
+    // Phase 1 (`ainit`) resolved *where the boot profile is* and exec'd us
+    // with that answer as the single argument.  Its scheme is the only thing
+    // that differs between a phone, a desktop, and a racked first boot.
+    let profile_ref = std::env::args().nth(1).context(
+        "aminexec as PID 1 needs the boot profile ref as argv[1] \
+         (ainit supplies it: `aminexec <profile>`)",
+    )?;
+    tracing::info!(%profile_ref, "running as PID 1 — executing Amin metal bringup");
+
     let bringup = aminexec::pid1::pid1_bringup()?;
     tracing::info!(
-        node_id = %bringup.cmdline.node_id,
-        init_profile = %bringup.cmdline.init_profile_ref,
-        slab_dev = %bringup.cmdline.slab_dev.display(),
         mounts_applied = bringup.applied_mounts.len(),
         cg_root = %bringup.cgroup_amin_root.display(),
         "pid1 bringup complete"
     );
-    // Future tasks (Task 9+): accept() on handoff_listener to grab mesh +
-    // slab + seal fds from ainit, then exec the Perl SAX dispatcher on the
-    // init profile document and run the workload.  For now we park the
-    // listener in a local so drop doesn't close it mid-observation and
-    // return cleanly.
+
+    // The handoff listener stays open for the life of PID 1: ainit's
+    // SCM_RIGHTS descriptors (mesh sockets, slab fd, seal-chain fd) arrive
+    // on it before it hands over.
     let _listener = bringup.handoff_listener;
-    Ok(())
+
+    let profile = aminexec::pid1::resolve_profile_ref(&profile_ref)?;
+    tracing::info!(profile = %profile.display(), "applying boot profile via the Amin runtime");
+
+    // `amin run` is a one-shot that applies the profile (mounts, network,
+    // services) and returns; PID 1 must outlive it.  So run the runtime as a
+    // child, reap it, then supervise: orphans the profile left behind
+    // reparent to a live PID 1 and are reaped here.  An exiting PID 1 would
+    // panic the kernel (and the frame's `panic=5` would reboot straight back
+    // into this path).
+    let status = std::process::Command::new(PERL)
+        .arg(AMIN_CLI)
+        .arg("run")
+        .arg(&profile)
+        .env("PATH", INIT_PATH)
+        .status()
+        .context("spawning the Amin runtime")?;
+    tracing::info!(?status, "boot profile applied");
+
+    loop {
+        let mut ws = 0i32;
+        // SAFETY: waitpid(-1) reaps any child; ws is a valid out-pointer.
+        let rc = unsafe { libc::waitpid(-1, &mut ws, 0) };
+        if rc < 0 {
+            let e = std::io::Error::last_os_error();
+            if e.kind() == std::io::ErrorKind::Interrupted {
+                continue;
+            }
+            // No children left to reap — idle as PID 1 for the life of the
+            // node rather than returning (returning would kill init).
+            break;
+        }
+    }
+    loop {
+        std::thread::park();
+    }
 }

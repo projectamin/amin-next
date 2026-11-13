@@ -1,23 +1,28 @@
 //! PID 1 kernel bringup for metal Amin nodes.
 //!
-//! When `aminexec` is invoked as PID 1 (UEFI HTTP Boot → ainit initrd →
-//! `pivot_root` into the Bitcache-backed Amin rootfs), we run
-//! [`pid1_bringup`] **before** any userland services:
+//! `aminexec` is **phase 2** of a two-phase PID 1.  Phase 1 is the tiny
+//! `ainit` binary, which answers exactly one question — *where is the boot
+//! profile* — and then `execve`s this binary with that answer as its single
+//! argument: `execve("/sbin/aminexec", ["aminexec", <profile>])`.  The ref's
+//! scheme is the only thing that varies by machine (`local:` here, a served
+//! `bitcache:`/`http(s)://` on a first-boot racked server).
+//!
+//! Before any userland service, [`pid1_bringup`] runs:
 //!
 //! 1. Mount the minimal trusted filesystem set (procfs / sysfs / devtmpfs /
 //!    devpts / tmpfs for /run + /tmp).
-//! 2. Parse the kernel command line from `/proc/cmdline` into
-//!    [`BootCommandLine`], extracting the Bitcache ref for the init profile,
-//!    the node's stable `node_id` fingerprint, the zcap token for this
-//!    boot, and the slab storage device.
-//! 3. Create the `/sys/fs/cgroup/amin` cgroup v2 subtree with
+//! 2. Create the `/sys/fs/cgroup/amin` cgroup v2 subtree with
 //!    `subtree_control = "+cpu +memory +io +pids"` — every spawned workload
 //!    lives under this subtree (NFR-7.1 closed-world: only 2 userland
 //!    processes at idle on the metal node).
-//! 4. Bind a `SOCK_SEQPACKET` Unix-domain listener to
+//! 3. Bind a `SOCK_SEQPACKET` Unix-domain listener to
 //!    `/run/amin/hand-off.sock` so the preceding ainit initrd can hand
 //!    over the mesh QUIC sockets, slab file descriptor, and seal-chain
 //!    append fd via `SCM_RIGHTS` prior to `pivot_root`.
+//!
+//! Then the resolved profile is handed to the Amin/Perl runtime, which brings
+//! up userspace.  Why the split exists, and the exact hand-off contract that
+//! connects the phases, is recorded in `docs/pid1-split.md`.
 //!
 //! The real PID-1 code path is only reachable when `getpid() == 1`.  For
 //! unit tests, CI, and local development, [`pid1_bringup_sim`] performs
@@ -27,108 +32,41 @@
 
 #![allow(unsafe_code)]
 
-use std::collections::BTreeMap;
 use std::ffi::{CString, OsStr};
 use std::fs;
-use std::io::{self, Read};
+use std::io;
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::net::UnixListener;
 use std::path::{Path, PathBuf};
 
 use anyhow::{anyhow, bail, Context, Result};
 
-// ── Kernel cmdline contract ──────────────────────────────────────────────
-// Exact key names from spec § FR-2.3.  Any future cmdline key MUST be added
-// to this struct AND to the exhaustive match below so unknown keys are
-// loudly rejected at boot (closed-world — we want to fail boot rather than
-// silently ignore operator typos like `amin.nodeid` instead of
-// `amin.node_id`).
+// ── Boot profile ref ─────────────────────────────────────────────────────
+// Phase 1 (`ainit`) hands phase 2 exactly one argument: where the boot
+// profile is.  The scheme is what varies by machine — a phone or desktop
+// boots a local document; a racked server's first boot is served one.  The
+// profile itself is the closed-world contract (node identity, storage,
+// mesh join, userland bring-up), so it is the only thing `aminexec` needs.
 
-/// Parsed kernel command line for an Amin PID 1 boot.
-///
-/// All fields except `node_id` carry a `bitcache:blake3:<hex>` style ref or
-/// a device path; see spec FR-2.3 for the authoritative contract.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct BootCommandLine {
-    /// Bitcache ref of the init-profile.xml.bsax document — the root SAX
-    /// document that describes the 6 boot stages for this metal node.
-    pub init_profile_ref: String,
-    /// Stable blake3-fingerprinted node identifier (spec NFR: derived from
-    /// CPU model + DIMM layout + NVMe/NIC PCIe BDFs of the cookie-cutter
-    /// metal hardware config).
-    pub node_id: String,
-    /// ML-DSA-87 capability token granting this boot authority to join
-    /// the mesh (scope = tier, zone, max-redundancy for this node).
-    pub zcap: String,
-    /// Block device path for the Bitcache slab file backing store —
-    /// typically `/dev/nvme0n1p2` on cookie-cutter x86_64 metal.
-    pub slab_dev: PathBuf,
-    /// Bitcache ref of the Amin rootfs (Bitcache CAS blob → overlayfs
-    /// lowerdir for all spawned workloads once we're PID 1).
-    pub aminexec_rootfs_ref: String,
-    /// Catch-all for any non-`amin.*` kernel keys (console=, root=, …).
-    /// Preserved verbatim for audit log / seal chain but not interpreted.
-    pub passthrough: BTreeMap<String, String>,
-}
+/// Scheme prefix of a profile that lives on this machine (FRAMEBOOT).
+pub const LOCAL_SCHEME: &str = "local:";
 
-impl BootCommandLine {
-    /// Parse `/proc/cmdline` (space-separated `key=value` or bare `flag`
-    /// tokens) into a [`BootCommandLine`].  Returns
-    /// `Error::BootCommandLineMissing` with a named field if any required
-    /// Amin key is absent.
-    pub fn parse(cmdline: &str) -> Result<Self> {
-        let mut init_profile_ref = None;
-        let mut node_id = None;
-        let mut zcap = None;
-        let mut slab_dev = None;
-        let mut aminexec_rootfs_ref = None;
-        let mut passthrough = BTreeMap::new();
-
-        for token in cmdline.split_whitespace() {
-            let (k, v) = match token.split_once('=') {
-                Some((k, v)) => (k, v.to_string()),
-                None => (token, String::new()),
-            };
-            match k {
-                "amin.init_profile_ref" | "amin.bootstrap" => init_profile_ref = Some(v),
-                "amin.node_id" => node_id = Some(v),
-                "amin.zcap" => zcap = Some(v),
-                "amin.slab_dev" => slab_dev = Some(PathBuf::from(v)),
-                "amin.aminexec_rootfs_ref" => aminexec_rootfs_ref = Some(v),
-                aminkey if aminkey.starts_with("amin.") => {
-                    bail!("unknown amin.* kernel cmdline key: {aminkey} \
-                           (typo? closed-world: unknown Amin keys hard-fail boot)")
-                }
-                other => {
-                    passthrough.insert(other.to_string(), v);
-                }
-            }
+/// Turn the ref `ainit` handed us into a profile document this node can
+/// read.  Only `local:` is implemented on the handset; a served
+/// `bitcache:`/`http(s)://` ref arrives with the `ToR`'s `BOOT_OFFER` on a
+/// racked first boot and is fetched over the mesh (not yet wired).
+pub fn resolve_profile_ref(profile_ref: &str) -> Result<PathBuf> {
+    if let Some(path) = profile_ref.strip_prefix(LOCAL_SCHEME) {
+        let path = PathBuf::from(path);
+        if path.is_file() {
+            return Ok(path);
         }
-
-        let require = |name: &str, val: Option<String>| -> Result<String> {
-            val.ok_or_else(|| anyhow!("missing required amin.* cmdline key: {name}"))
-        };
-
-        Ok(Self {
-            init_profile_ref: require("amin.init_profile_ref (or amin.bootstrap)", init_profile_ref)?,
-            node_id:           require("amin.node_id", node_id)?,
-            zcap:              require("amin.zcap", zcap)?,
-            slab_dev:          slab_dev.ok_or_else(|| anyhow!("missing required amin.* cmdline key: amin.slab_dev"))?,
-            aminexec_rootfs_ref: require("amin.aminexec_rootfs_ref", aminexec_rootfs_ref)?,
-            passthrough,
-        })
+        bail!("local boot profile {} does not exist", path.display());
     }
-
-    /// Convenience: open `/proc/cmdline` and feed its contents to
-    /// [`BootCommandLine::parse`].
-    pub fn read_proc_cmdline() -> Result<Self> {
-        let mut buf = String::new();
-        fs::File::open("/proc/cmdline")
-            .context("open /proc/cmdline")?
-            .read_to_string(&mut buf)
-            .context("read /proc/cmdline")?;
-        Self::parse(&buf)
-    }
+    bail!(
+        "boot profile ref {profile_ref:?}: only {LOCAL_SCHEME} is implemented on this \
+         node; a served http/bitcache ref arrives with the ToR BOOT_OFFER first boot"
+    )
 }
 
 // ── Mount plan ───────────────────────────────────────────────────────────
@@ -190,8 +128,6 @@ pub const HANDOFF_SOCK_PATH: &str = "/run/amin/hand-off.sock";
 /// Outcome of [`pid1_bringup`] or [`pid1_bringup_sim`].
 #[derive(Debug)]
 pub struct Pid1Bringup {
-    /// Parsed kernel command line.
-    pub cmdline: BootCommandLine,
     /// True PID-1 listener bound to [`HANDOFF_SOCK_PATH`], or a
     /// tempdir-rooted equivalent for [`pid1_bringup_sim`].
     pub handoff_listener: UnixListener,
@@ -234,42 +170,20 @@ pub fn pid1_bringup() -> Result<Pid1Bringup> {
 }
 
 /// Test-only / CI-safe equivalent of [`pid1_bringup`] that performs the
-/// exact same logic (cmdline parse + mkdir of mount target dirs + cgroup
-/// subtree file writes + bind listener) but rooted at a `tempfile::TempDir`.
+/// exact same logic (mkdir of mount target dirs + cgroup subtree file
+/// writes + bind listener) but rooted at a `tempfile::TempDir`.
 ///
 /// Does **not** issue real `mount(2)` syscalls (that would require root /
 /// user-namespace gymnastics in CI).  Instead it creates the target
 /// directory tree and writes a tiny 1-byte sentinel file
 /// `<target>/.mounted_from_<source>_<fstype>` into each so tests can assert
 /// the full set of mounts was applied and ordered correctly.
-pub fn pid1_bringup_sim(cmdline_override: Option<&str>) -> Result<Pid1Bringup> {
+pub fn pid1_bringup_sim() -> Result<Pid1Bringup> {
     let root = tempfile::Builder::new()
         .prefix("amin-pid1-sim-")
         .tempdir()
         .context("create tempdir for pid1 simulator")?;
     let root_path = root.path().to_path_buf();
-
-    // Create a fake /proc/cmdline inside the sim root with a well-formed
-    // cmdline unless the caller provided one (tests exercise the parser
-    // directly through BootCommandLine::parse instead).
-    let fake_proc = root_path.join("proc");
-    fs::create_dir_all(&fake_proc).ok();
-    let fake_cmdline = cmdline_override.unwrap_or(
-        "ro quiet console=tty0 \
-         amin.bootstrap=bitcache:blake3:abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890 \
-         amin.node_id=node-blake3-9a5b \
-         amin.zcap=zcap:mldsa87:base64tokenhere== \
-         amin.slab_dev=/dev/nvme0n1p2 \
-         amin.aminexec_rootfs_ref=bitcache:blake3:fedcba0987654321fedcba0987654321fedcba0987654321fedcba0987654321 \
-         init=/init"
-    );
-    fs::write(fake_proc.join("cmdline"), fake_cmdline).context("write sim cmdline")?;
-
-    // In sim mode, feed the override string directly to the cmdline parser
-    // (so parsing is exercised even without the fake-proc path being
-    // `/proc/cmdline` globally — which it won't be in tests running under
-    // a normal kernel /proc mount).
-    let cmdline = BootCommandLine::parse(fake_cmdline)?;
 
     let sim_sock_path = root_path.join("run/amin/hand-off.sock");
     let result = bringup_inner(&root_path, sim_sock_path.to_str().unwrap(), false)?;
@@ -281,7 +195,7 @@ pub fn pid1_bringup_sim(cmdline_override: Option<&str>) -> Result<Pid1Bringup> {
     #[allow(deprecated)]
     let _ = root.into_path();
 
-    Ok(Pid1Bringup { cmdline, ..result })
+    Ok(result)
 }
 
 // ── Shared core (identical for real PID 1 + simulator) ───────────────────
@@ -314,24 +228,7 @@ fn bringup_inner(root: &Path, sock_path: &str, real_mounts: bool) -> Result<Pid1
         });
     }
 
-    // 2. Cmdline — for real PID 1, read it now that /proc is mounted.
-    let cmdline = if real_mounts {
-        BootCommandLine::read_proc_cmdline()?
-    } else {
-        // Simulator already parsed it one level up; placeholder — the
-        // public pid1_bringup_sim fn overwrites it before returning.
-        BootCommandLine::parse("")
-            .unwrap_or_else(|_| BootCommandLine {
-                init_profile_ref: String::new(),
-                node_id: String::new(),
-                zcap: String::new(),
-                slab_dev: PathBuf::new(),
-                aminexec_rootfs_ref: String::new(),
-                passthrough: BTreeMap::new(),
-            })
-    };
-
-    // 3. Cgroup v2 /sys/fs/cgroup/amin subtree.  For the real path this
+    // 2. Cgroup v2 /sys/fs/cgroup/amin subtree.  For the real path this
     //    assumes cgroup2 is already mounted on /sys/fs/cgroup (it always is
     //    on Linux ≥ 6.2 unified-hierarchy kernels; ainit also mounts it
     //    explicitly).  For the simulator we create the directory tree so
@@ -346,7 +243,7 @@ fn bringup_inner(root: &Path, sock_path: &str, real_mounts: bool) -> Result<Pid1
         .with_context(|| format!("write cgroup.subtree_control = {:?} to {}",
                                  CGROUP_SUBTREE_CONTROL, subtree_file.display()))?;
 
-    // 4. /run/amin/hand-off.sock SOCK_SEQPACKET bind.
+    // 3. /run/amin/hand-off.sock SOCK_SEQPACKET bind.
     let sock_dir = Path::new(sock_path).parent()
         .ok_or_else(|| anyhow!("invalid handoff sock path: {sock_path}"))?;
     fs::create_dir_all(sock_dir)
@@ -360,7 +257,6 @@ fn bringup_inner(root: &Path, sock_path: &str, real_mounts: bool) -> Result<Pid1
         .with_context(|| format!("bind handoff listener on {sock_path}"))?;
 
     Ok(Pid1Bringup {
-        cmdline,
         handoff_listener: listener,
         root: root.to_path_buf(),
         applied_mounts,
@@ -407,66 +303,36 @@ fn osstr_to_cstring(s: &OsStr) -> std::result::Result<CString, std::ffi::NulErro
 mod tests {
     use super::*;
 
-    // ── cmdline parser happy / sad paths ───────────────────────────────
+    // ── profile ref resolution ─────────────────────────────────────────
 
     #[test]
-    fn cmdline_parse_happy_path_all_amin_keys() {
-        let line = "console=ttyS0,115200 ro \
-                    amin.bootstrap=bitcache:blake3:aabbccdd \
-                    amin.node_id=node-42 \
-                    amin.zcap=zcap:mldsa87:AAABBB \
-                    amin.slab_dev=/dev/nvme0n1p2 \
-                    amin.aminexec_rootfs_ref=bitcache:blake3:eeff0011 \
-                    init=/init";
-        let cl = BootCommandLine::parse(line).expect("parse OK");
-        assert_eq!(cl.init_profile_ref,    "bitcache:blake3:aabbccdd");
-        assert_eq!(cl.node_id,             "node-42");
-        assert_eq!(cl.zcap,                "zcap:mldsa87:AAABBB");
-        assert_eq!(cl.slab_dev,            PathBuf::from("/dev/nvme0n1p2"));
-        assert_eq!(cl.aminexec_rootfs_ref, "bitcache:blake3:eeff0011");
-        // Passthrough preserves non-amin keys
-        assert_eq!(cl.passthrough.get("console"), Some(&"ttyS0,115200".to_string()));
-        assert_eq!(cl.passthrough.get("init"),    Some(&"/init".to_string()));
-        assert_eq!(cl.passthrough.get("ro"),      Some(&String::new()));
+    fn local_ref_resolves_to_an_existing_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let profile = dir.path().join("init-profile.xml");
+        fs::write(&profile, b"<amin:profile/>").unwrap();
+        let got = resolve_profile_ref(&format!("local:{}", profile.display())).unwrap();
+        assert_eq!(got, profile);
     }
 
     #[test]
-    fn cmdline_bootstrap_alias_works() {
-        // Spec FR-2.3 says amin.bootstrap= or amin.init_profile_ref= work
-        // as aliases.  Confirm both.
-        let a = BootCommandLine::parse(
-            "amin.init_profile_ref=bitcache:blake3:1 amin.node_id=a amin.zcap=b \
-             amin.slab_dev=/dev/x amin.aminexec_rootfs_ref=bitcache:blake3:2"
-        ).unwrap();
-        let b = BootCommandLine::parse(
-            "amin.bootstrap=bitcache:blake3:1 amin.node_id=a amin.zcap=b \
-             amin.slab_dev=/dev/x amin.aminexec_rootfs_ref=bitcache:blake3:2"
-        ).unwrap();
-        assert_eq!(a.init_profile_ref, b.init_profile_ref);
+    fn local_ref_that_is_missing_is_an_error() {
+        let err = resolve_profile_ref("local:/nope/init-profile.xml").unwrap_err();
+        assert!(err.to_string().contains("/nope/init-profile.xml"), "got: {err}");
     }
 
     #[test]
-    fn cmdline_rejects_unknown_amin_key_closed_world() {
-        let line = "amin.node_id=a amin.bootstrap=x amin.zcap=b amin.slab_dev=/dev/x \
-                    amin.aminexec_rootfs_ref=y \
-                    amin.nodeid=oops_typo_missing_underscore";
-        let err = BootCommandLine::parse(line).expect_err("must reject unknown amin.* key");
-        assert!(err.to_string().contains("amin.nodeid"), "error should name the bad key; got: {err}");
-    }
-
-    #[test]
-    fn cmdline_missing_required_errors_named() {
-        // No amin.zcap.
-        let line = "amin.bootstrap=x amin.node_id=a amin.slab_dev=/dev/x amin.aminexec_rootfs_ref=y";
-        let err = BootCommandLine::parse(line).expect_err("must be missing zcap");
-        assert!(err.to_string().contains("amin.zcap"), "error must name missing amin.zcap; got {err}");
+    fn served_refs_are_not_yet_implemented_here() {
+        // A served ref is the ToR's job; until the mesh fetch is wired the
+        // node must say so plainly rather than silently boot nothing.
+        let err = resolve_profile_ref("bitcache:blake3:abcd").unwrap_err();
+        assert!(err.to_string().contains("bitcache:blake3:abcd"), "got: {err}");
     }
 
     // ── pid1 bringup simulator: verifies mount plan + cgroup + listener ─
 
     #[test]
     fn sim_bringup_applies_all_six_minimal_mounts() {
-        let b = pid1_bringup_sim(None).expect("sim bringup OK");
+        let b = pid1_bringup_sim().expect("sim bringup OK");
         let names: Vec<_> = b.applied_mounts.iter().map(|m| m.source.as_str()).collect();
         // Order MUST match PID1_MOUNTS exactly — it's the standard early
         // boot order.  If this fails, you re-ordered the array and broke
@@ -488,7 +354,7 @@ mod tests {
 
     #[test]
     fn sim_bringup_creates_cgroup_amin_subtree_with_control_file() {
-        let b = pid1_bringup_sim(None).expect("sim bringup OK");
+        let b = pid1_bringup_sim().expect("sim bringup OK");
         assert!(b.cgroup_amin_root.is_dir(), "cgroup amin root dir must exist");
         let cg = fs::read_to_string(b.cgroup_amin_root.join("cgroup.subtree_control"))
             .expect("subtree_control file must be readable");
@@ -497,20 +363,11 @@ mod tests {
 
     #[test]
     fn sim_bringup_bind_handoff_listener_and_sock_file_exists() {
-        let b = pid1_bringup_sim(None).expect("sim bringup OK");
+        let b = pid1_bringup_sim().expect("sim bringup OK");
         let sock_path = b.root.join("run/amin/hand-off.sock");
         assert!(sock_path.exists(), "handoff sock file must exist at {}", sock_path.display());
         // Verify listener actually accept()-able (connect + immediate drop).
         use std::os::unix::net::UnixStream;
         UnixStream::connect(&sock_path).expect("listener must accept a connection");
-    }
-
-    #[test]
-    fn sim_bringup_cmdline_parsed_correctly_including_passthrough() {
-        let b = pid1_bringup_sim(None).expect("sim bringup OK");
-        assert!(b.cmdline.init_profile_ref.starts_with("bitcache:blake3:"));
-        assert!(!b.cmdline.node_id.is_empty());
-        assert!(b.cmdline.slab_dev.starts_with("/dev/"));
-        assert_eq!(b.cmdline.passthrough.get("init"), Some(&"/init".to_string()));
     }
 }

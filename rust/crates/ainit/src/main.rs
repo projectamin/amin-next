@@ -82,7 +82,7 @@ fn run_simulated_entrypoint() -> anyhow::Result<()> {
     offer.verify(&hello, &TrustedAnchor::DevAcceptAll, 1_700_000_100)?;
 
     // Build a fake init-profile BSAX via encoder for end-to-end.
-    let bsax_bytes = build_bsax_init_profile();
+    let bsax_bytes = ainit::bootstrap::encode_boot_profile("sim-node", "/dev/nvme0n1p2");
     let stripe = RsStripe::encode_mk(&bsax_bytes, 3, 2)?;
     let fetched = stripe.reassemble()?;
     assert_eq!(fetched.n_recovered, 0);
@@ -118,35 +118,4 @@ fn run_simulated_entrypoint() -> anyhow::Result<()> {
         profile.skipped_elements
     );
     Ok(())
-}
-
-#[cfg(target_os = "linux")]
-fn build_bsax_init_profile() -> Vec<u8> {
-    use bsax::encode;
-    use bsax::vocab::{self, ns_id::AMIN};
-    use bytes::BytesMut;
-    let mut buf = BytesMut::new();
-    encode::write_magic(&mut buf);
-    encode::write_start_doc(&mut buf);
-    encode::write_start_elem(&mut buf, AMIN, vocab::by_name(b"profile").unwrap(), &[] as &[(u8, &[u8])]);
-    for (order, name, attrs) in [
-        (1u32, "hwcheck",      &[(b"slab_dev" as &[u8], b"/dev/nvme0n1p2" as &[u8])][..]),
-        (2,    "fw-update",    &[]),
-        (3,    "storage-init", &[(b"slab_dev", b"/dev/nvme0n1p2")]),
-        (4,    "mesh-join",    &[(b"node_id", b"sim-node")]),
-        (5,    "supervisor",   &[]),
-        (6,    "workload-ready",&[]),
-    ] {
-        let mut pair: Vec<(u8, Vec<u8>)> = vec![
-            (vocab::by_name(b"order").unwrap(), order.to_string().into_bytes()),
-            (vocab::by_name(b"name").unwrap(),  name.as_bytes().to_vec()),
-        ];
-        for (k, v) in attrs { pair.push((vocab::by_name(k).unwrap(), v.to_vec())); }
-        let borrowed: Vec<(u8, &[u8])> = pair.iter().map(|(a, b)| (*a, b.as_slice())).collect();
-        encode::write_start_elem(&mut buf, AMIN, vocab::by_name(b"stage").unwrap(), &borrowed);
-        encode::write_end_elem(&mut buf);
-    }
-    encode::write_end_elem(&mut buf);
-    encode::write_end_doc(&mut buf);
-    buf.freeze().to_vec()
 }

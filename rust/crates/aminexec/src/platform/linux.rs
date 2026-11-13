@@ -21,20 +21,11 @@ use std::path::{Path, PathBuf};
 
 pub struct Backend;
 
-// ── Landlock ABI 4 syscall numbers ─────────────────────────────────────────
-#[cfg(target_arch = "x86_64")]
-const SYS_LANDLOCK_CREATE_RULESET: libc::c_long = 444;
-#[cfg(target_arch = "x86_64")]
-const SYS_LANDLOCK_ADD_RULE:      libc::c_long = 445;
-#[cfg(target_arch = "x86_64")]
-const SYS_LANDLOCK_RESTRICT_SELF: libc::c_long = 446;
-
-#[cfg(target_arch = "aarch64")]
-const SYS_LANDLOCK_CREATE_RULESET: libc::c_long = 444;
-#[cfg(target_arch = "aarch64")]
-const SYS_LANDLOCK_ADD_RULE:      libc::c_long = 445;
-#[cfg(target_arch = "aarch64")]
-const SYS_LANDLOCK_RESTRICT_SELF: libc::c_long = 446;
+// Syscall numbers come from libc's own per-arch tables (libc::SYS_*), which
+// already carry the right value on every Linux ABI — including the mips
+// `4000 + n` offset.  That keeps this backend arch-generic (arm/armv7, aarch64,
+// x86_64, mips, riscv, …) instead of a hand-maintained per-arch whitelist that
+// silently fails to compile on any arch left out of it.
 
 const LANDLOCK_ABI_VERSION: u32 = 4;
 const LANDLOCK_CREATE_RULESET_VERSION: u32 = 1 << 0;
@@ -109,11 +100,6 @@ struct SockFprog {
 }
 
 // ── BPF constants ──────────────────────────────────────────────────────────
-#[cfg(target_arch = "x86_64")]
-const NR_BPF: libc::c_long = 321;
-#[cfg(target_arch = "aarch64")]
-const NR_BPF: libc::c_long = 280;
-
 const BPF_PROG_LOAD: libc::c_int = 5;
 const BPF_PROG_TYPE_SCHED_CLS: libc::c_int = 3;
 const BPF_MAP_TYPE_ARRAY: libc::c_int = 2;
@@ -193,7 +179,7 @@ struct InfoAttr {
 /// # Safety
 /// `attr` must point to a valid `LandlockRulesetAttr` of `size` bytes.
 unsafe fn landlock_create_ruleset(attr: &LandlockRulesetAttr, size: usize, flags: u32) -> libc::c_long {
-    libc::syscall(SYS_LANDLOCK_CREATE_RULESET, attr as *const _ as *const libc::c_void, size, flags)
+    libc::syscall(libc::SYS_landlock_create_ruleset, attr as *const _ as *const libc::c_void, size, flags)
 }
 
 /// `landlock_add_rule(2)`.
@@ -202,7 +188,7 @@ unsafe fn landlock_create_ruleset(attr: &LandlockRulesetAttr, size: usize, flags
 /// `rule` must be a valid `LandlockPathBeneathAttr`.
 unsafe fn landlock_add_rule(fd_ruleset: libc::c_int, rule: &LandlockPathBeneathAttr) -> libc::c_long {
     libc::syscall(
-        SYS_LANDLOCK_ADD_RULE,
+        libc::SYS_landlock_add_rule,
         fd_ruleset,
         LANDLOCK_RULE_PATH_BENEATH as libc::c_uint,
         rule as *const _ as *const libc::c_void,
@@ -215,7 +201,7 @@ unsafe fn landlock_add_rule(fd_ruleset: libc::c_int, rule: &LandlockPathBeneathA
 /// # Safety
 /// `fd_ruleset` must be a valid landlock ruleset fd.
 unsafe fn landlock_restrict_self(fd_ruleset: libc::c_int) -> libc::c_long {
-    libc::syscall(SYS_LANDLOCK_RESTRICT_SELF, fd_ruleset, 0u64)
+    libc::syscall(libc::SYS_landlock_restrict_self, fd_ruleset, 0u64)
 }
 
 /// `seccomp(2)` with `SECCOMP_SET_MODE_FILTER`.
@@ -224,12 +210,8 @@ unsafe fn landlock_restrict_self(fd_ruleset: libc::c_int) -> libc::c_long {
 /// `prog` must point to a valid `SockFprog` whose `filter` array contains
 /// exactly `len` `SockFilter` instructions.
 unsafe fn seccomp_set_mode_filter(prog: &SockFprog) -> libc::c_long {
-    #[cfg(target_arch = "x86_64")]
-    const NR_SECCOMP: libc::c_long = 317;
-    #[cfg(target_arch = "aarch64")]
-    const NR_SECCOMP: libc::c_long = 277;
     libc::syscall(
-        NR_SECCOMP,
+        libc::SYS_seccomp,
         SECCOMP_SET_MODE_FILTER,
         SECCOMP_FILTER_FLAG_TSYNC,
         prog as *const _ as *const libc::c_void,
@@ -241,7 +223,7 @@ unsafe fn seccomp_set_mode_filter(prog: &SockFprog) -> libc::c_long {
 /// # Safety
 /// `attr_ptr` must point to a valid BPF attribute struct matching `cmd`.
 unsafe fn bpf_syscall(cmd: libc::c_int, attr_ptr: *const u8, size: u32) -> libc::c_long {
-    libc::syscall(NR_BPF, cmd, attr_ptr, size as libc::c_ulong)
+    libc::syscall(libc::SYS_bpf, cmd, attr_ptr, size as libc::c_ulong)
 }
 
 fn last_os_error() -> SandboxError {
