@@ -105,23 +105,13 @@ sub end_element ($self, $el) {
             my $raw = $self->_bctool_get($hash_v);
             # Forward the <bc:object> as-is (keeps ref semantics upstream)
             $h && $self->_emit_object($h, $merged_attrs);
-            if (defined $raw && length($$raw) && $h) {
-                my $stream_attrs = {};
-                _set_attr_in_ns($stream_attrs, $AMIN_NS, 'channel', 'bc-object', 'amin');
-                $h->start_element({
-                    NamespaceURI => $AMIN_NS,
-                    LocalName    => 'stream',
-                    Name         => 'amin:stream',
-                    Prefix       => 'amin',
-                    Attributes   => $stream_attrs,
-                });
-                $h->characters({ Data => $$raw });
-                $h->end_element({
-                    NamespaceURI => $AMIN_NS,
-                    LocalName    => 'stream',
-                    Name         => 'amin:stream',
-                    Prefix       => 'amin',
-                });
+            if (defined $raw && length($$raw)) {
+                # bc:dest materialises the object into the build tree; when a
+                # destination is written the bytes are not also inlined.
+                my $dest = _find_attr_val($merged_attrs, 'dest', $BC_NS);
+                my $written = (defined $dest && length $dest)
+                    ? $self->_write_dest($dest, $$raw) : 0;
+                $h && !$written && $self->_emit_bc_stream($h, $$raw);
             } elsif (!defined $raw) {
                 $self->Log && $self->Log->error(
                     "[bc/object] bctool get failed for hash=" . $hash_v);
@@ -129,22 +119,8 @@ sub end_element ($self, $el) {
         } else {
             # Passthrough: either both or neither — emit the object unchanged.
             $h && $self->_emit_object($h, $merged_attrs);
-            if ($has_data && $has_hash && length($data) && $h) {
-                my $stream_attrs = {};
-                _set_attr_in_ns($stream_attrs, $AMIN_NS, 'channel', 'bc-object', 'amin');
-                $h->start_element({
-                    NamespaceURI => $AMIN_NS,
-                    LocalName    => 'stream', Name => 'amin:stream',
-                    Prefix       => 'amin',
-                    Attributes   => $stream_attrs,
-                });
-                $h->characters({ Data => $data });
-                $h->end_element({
-                    NamespaceURI => $AMIN_NS,
-                    LocalName    => 'stream', Name => 'amin:stream',
-                    Prefix       => 'amin',
-                });
-            }
+            $h && $has_data && $has_hash && length($data)
+                && $self->_emit_bc_stream($h, $data);
         }
         return;
     }
@@ -162,6 +138,43 @@ sub _emit_object ($self, $h, $attrs) {
     $h->end_element({
         NamespaceURI => $BC_NS, LocalName => 'object',
         Name         => 'bc:object', Prefix => 'bc' });
+}
+
+# The bytes of an object ride as characters on an <amin:stream channel="bc-object">
+# element so a downstream consumer picks them out of the stream by channel.
+sub _emit_bc_stream ($self, $h, $bytes) {
+    my $stream_attrs = {};
+    _set_attr_in_ns($stream_attrs, $AMIN_NS, 'channel', 'bc-object', 'amin');
+    $h->start_element({
+        NamespaceURI => $AMIN_NS,
+        LocalName    => 'stream', Name => 'amin:stream',
+        Prefix       => 'amin',
+        Attributes   => $stream_attrs });
+    $h->characters({ Data => $bytes });
+    $h->end_element({
+        NamespaceURI => $AMIN_NS,
+        LocalName    => 'stream', Name => 'amin:stream',
+        Prefix       => 'amin' });
+    return 1;
+}
+
+# bc:dest — materialise a retrieved object at a path (the build tree).  Only a
+# real run touches the filesystem; render/dryrun must stay side-effect free.
+sub _write_dest ($self, $dest, $bytes) {
+    return 0 unless ($self->Mode // 'render') eq 'run';
+    require File::Basename;
+    require File::Path;
+    my $dir = File::Basename::dirname($dest);
+    File::Path::make_path($dir) unless -d $dir;
+    open(my $fh, '>:raw', $dest) or do {
+        $self->Log && $self->Log->error("[bc/dest] cannot write $dest: $!");
+        return 0;
+    };
+    print {$fh} $bytes;
+    close $fh;
+    $self->Log && $self->Log->info(
+        "[bc/dest] $dest <- " . length($bytes) . " bytes");
+    return 1;
 }
 
 sub _bctool ($self) {

@@ -8,7 +8,7 @@ sub name { q{tar} }
 sub build_argv ($self) {
     my @t = _vals($self->params, "target");
     return () unless @t;
-    ($self->name, _flags([qw(x c v f z j J t p extract create verbose file gzip bzip2 xz preserve-permissions)], $self->flags), @t);
+    ($self->name, _flags([qw(x c v f z j J t p o extract create verbose file gzip bzip2 xz preserve-permissions)], $self->flags), @t);
 }
 
 1;

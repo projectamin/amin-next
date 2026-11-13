@@ -85,11 +85,20 @@ sub _instantiate_log ($l) {
     return $l->{class}->new($l->{attrs} ? $l->{attrs}->%* : ());
 }
 
+our @XML_DRIVER_ALIASES = qw(XML::LibXML::SAX XML::SAX::PurePerl);
+
 sub _generator_class ($g) {
     return undef unless $g && ref $g eq 'HASH' && $g->{class};
-    (my $file = "$g->{class}.pm") =~ s{::}{/}g;
+    my $class = $g->{class};
+    (my $file = "$class.pm") =~ s{::}{/}g;
     eval { require $file };
-    return $@ ? undef : $g->{class};
+    return $class unless $@;
+    # A spec may still name a concrete XML SAX driver this machine does not
+    # carry (a dev host has XML::LibXML::SAX, a cross-built node does not).
+    # Amin::Generator::XML is that driver's portable face — it resolves to the
+    # same event stream, so the spec keeps naming the driver it always did.
+    return 'Amin::Generator::XML' if grep { $_ eq $class } @XML_DRIVER_ALIASES;
+    return undef;
 }
 
 # ── Lazy chain composition ─────────────────────────────────────────────
@@ -242,7 +251,8 @@ sub start_element ($self, $el) {
             my $new = $c->{class}->new(
                 Handler => $rest, Log => $self->Log, Mode => $self->Mode,
                 Name    => $cn,   Element => $c->{meta}{element},
-                Render  => $self->render);
+                Render  => $self->render,
+                Amin::Machine::Dispatcher::_filter_cfg($c->{meta}));
             $new->can('name')    && $new->name($cn);
             $new->can('element') && $new->element($c->{meta}{element});
             $self->{Handler} = $new;          # splice BEFORE forwarding
@@ -304,7 +314,43 @@ for my $m (qw(start_document end_document
               start_element end_element characters
               processing_command comment ignorable_whitespace)) {
     no strict 'refs';
-    *$m = sub ($self, @args) { $self->{chain}->$m(@args) };
+    *$m = sub ($self, @args) {
+        # Fail-fast: once a command has failed, the run is over.  Every later
+        # event is forwarded straight to the output handler (the chain's base)
+        # instead of into the chain, so no further filter or command executes
+        # and nothing downstream is reported as having run.  This is the 3.0
+        # shape of amin-legacy, where the Dispatcher swapped to Handler::Empty
+        # when $spec->{amin_error} was set; here the latch is on the shared Log
+        # (see Amin::Log::Standard::halt / Amin::Elt::_halt).
+        my $log = $self->{Log};
+        if ($log && $log->can('halted') && $log->halted) {
+            unless ($self->{_drained}) {
+                $self->{_drained} = 1;
+                $log->error('[halt] run aborted at the first failed command; '
+                          . 'later elements are not processed');
+            }
+            my $h = $self->{Handler};
+            return $h ? $h->$m(@args) : undef;
+        }
+        return $self->{chain}->$m(@args);
+    };
+}
+
+# XML::SAX `processing_instruction` (`<?target data?>`), delivered by BOTH the
+# XML parser and the BSAX decoder.  It is deliberately NOT in the event set
+# above: Amin's contract names a command via `processing_command`, and a PI
+# carries arbitrary Target/Data outside the closed-world vocabulary — an escape
+# hatch.  So it is never forwarded into the chain; we only record the attempt on
+# the machine's loaded Log, so an operator can see that something tried one.
+# See bsax `lib.rs` "Escape hatches are not a trust boundary".
+sub processing_instruction ($self, $d) {
+    my $log = $self->{Log};
+    return undef unless $log && $log->can('warn');
+    my $tgt = $d->{Target} // '';
+    my $dat = $d->{Data}   // '';
+    $log->warn("ignored processing instruction (target '$tgt', "
+             . length($dat) . ' B of data): not part of the Amin contract');
+    return undef;
 }
 
 sub run ($pkg_or_self, %o) {
@@ -316,7 +362,7 @@ sub run ($pkg_or_self, %o) {
                     // do { require Amin::Handler::Writer; Amin::Handler::Writer->new(indent => 2) };
     my $Log       = $o{Log}     // _instantiate_log($spec->{log})
                     // do { require Amin::Log::Standard; Amin::Log::Standard->new(stderr => 0) };
-    my $gen_class = _generator_class($spec->{generator}) // 'XML::LibXML::SAX';
+    my $gen_class = _generator_class($spec->{generator}) // 'Amin::Generator::XML';
     my $ui_os     = $o{ui_os} // 'tty';
 
     my $self;
@@ -335,6 +381,19 @@ sub run ($pkg_or_self, %o) {
     $gen_class->new(Handler => $self)->parse_string($source);
     $self->Handler->can('output') && return $self->Handler->output;
     return;
+}
+
+# A spec filter's declared attributes ARE its configuration — the machine spec
+# is the contract.  The chain binds the structural keys itself (position picks
+# the region, element/name/target/namespace/priority/window drive matching), so
+# everything else declared on the <filter> is handed to the constructor: that is
+# how Storage::Bitcache gets its slab_path/bctool_path from the spec rather than
+# defaulting, so a profile's <bc:object> fetch reads the CAS the spec names.
+sub _filter_cfg ($meta) {
+    return () unless $meta && ref $meta eq 'HASH';
+    my %structural = map { $_ => 1 } qw(
+        position element target name namespace priority window);
+    return map { $_ => $meta->{$_} } grep { !$structural{$_} } keys %$meta;
 }
 
 sub _build_chain ($h, $l, $mode, $late_enable = {}, $allowed = undef, $spec_filters = undef, $realized = undef, $ui_os = 'tty', $ui_dialects = undef) {
@@ -457,7 +516,8 @@ sub _build_chain ($h, $l, $mode, $late_enable = {}, $allowed = undef, $spec_filt
                 Handler => $head, Log => $l, Mode => $mode,
                 Name    => $f->{meta}{name},
                 Element => $f->{meta}{element},
-                Render  => $render);
+                Render  => $render,
+                _filter_cfg($f->{meta}));
             $head->can('name')    && $head->name($f->{meta}{name});
             $head->can('element') && $head->element($f->{meta}{element});
         }

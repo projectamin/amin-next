@@ -42,12 +42,13 @@ sub run_storage_pass ($in_xml, %o) {
     my $slab  = $o{slab}  // die "need slab";
     my $log   = $o{log}   // Amin::Log::Standard->new(stderr => 0);
     my $indent = $o{indent} // 2;
+    my $mode   = $o{mode}   // 'render';
 
     my $writer = Amin::Handler::Writer->new(indent => $indent);
     my $storage = Amin::Filter::Storage::Bitcache->new(
         Handler     => $writer,
         Log         => $log,
-        Mode        => 'render',
+        Mode        => $mode,
         Element     => 'object',
         slab_path   => $slab,
         bctool_path => $BCTOOL,
@@ -216,6 +217,51 @@ subtest 'Acceptance B: bc:signer envelope → ML-DSA-87 signature + tamper fail-
         '--vk', $vk, '--sig', $kv{sig});
     isnt($rc, 0, 'B11: tampered hash → verify nonzero rc (fail-closed)');
     is($rc, 7, 'B12: tampered hash → verify exit 7 (FAIL-codes per bctool CLI spec)');
+};
+
+# ═══════════════════════════════════════════════════════════════════════
+# Acceptance C — bc:dest: a retrieved object materialises into the build
+# tree as a file (run mode), instead of inlining its bytes in the document.
+# ═══════════════════════════════════════════════════════════════════════
+subtest 'Acceptance C: bc:dest materialises retrieved object into a file' => sub {
+    my $tmp  = tempdir(CLEANUP => 1);
+    my $slab = "$tmp/c.slab";
+    my $log  = Amin::Log::Standard->new(stderr => 0);
+
+    # 1. PUT the payload so the slab holds it.
+    my $put_xml = '<?xml version="1.0" encoding="UTF-8"?>' .
+        '<amin:profile xmlns:amin="' . $AMIN_NS . '" xmlns:bc="' . $BC_NS .
+        '" id="tC1"><bc:object id="bsp">' . $TEST_BYTES . '</bc:object></amin:profile>';
+    my $out1 = run_storage_pass($put_xml, slab => $slab, log => $log);
+    my $hex1 = extract_attr($out1, 'bc:object', 'bc:hash');
+    ok(defined $hex1 && length($hex1) == 64, 'C1: object stored, got blake3');
+    is($log->error_count, 0, 'C2: put pass no errors');
+
+    # 2. retrieve WITH bc:dest in run mode → bytes land in the file
+    my $dest    = "$tmp/tree/kernel/bsp.tar.xz";
+    my $get_xml = '<?xml version="1.0" encoding="UTF-8"?>' .
+        '<amin:profile xmlns:amin="' . $AMIN_NS . '" xmlns:bc="' . $BC_NS . '">' .
+        '<bc:object bc:hash="' . $hex1 . '" bc:size="' . $TEST_LEN .
+        '" bc:dest="' . $dest . '"/></amin:profile>';
+    my $out2 = run_storage_pass($get_xml, slab => $slab, log => $log,
+        indent => 0, mode => 'run');
+    is($log->error_count, 0, 'C3: retrieve (dest) pass no errors');
+    ok(-f $dest, 'C4: bc:dest file created (parent dirs made)');
+    is(-s $dest, $TEST_LEN, "C5: dest file is exactly $TEST_LEN bytes");
+    open(my $fh, '<:raw', $dest) or die $!;
+    my $got = do { local $/; <$fh> };
+    close $fh;
+    is($got, $TEST_BYTES, 'C6: dest file byte-identical to original put input');
+    unlike($out2, qr/channel="bc-object"/,
+        'C7: bytes not ALSO inlined once materialised to a file');
+
+    # 3. render/dryrun must stay side-effect free: no file written
+    my $dest2 = "$tmp/never.bin";
+    my $get2  = $get_xml =~ s/\Q$dest\E/$dest2/r;
+    my $out3  = run_storage_pass($get2, slab => $slab, log => $log, indent => 0);
+    ok(!-e $dest2, 'C8: render mode does not write bc:dest (side-effect free)');
+    like($out3, qr/channel="bc-object"/,
+        'C9: render mode still streams the bytes downstream');
 };
 
 # ═══════════════════════════════════════════════════════════════════════

@@ -6,7 +6,8 @@ use Amin::Util::Fold qw(_vals _flags);
 sub name { q{hostname} }
 
 sub build_argv ($self) {
-    ($self->name, _flags([qw()], $self->flags));
+    my @t = _vals($self->params, 'name');
+    ($self->name, _flags([qw()], $self->flags), @t);
 }
 
 1;

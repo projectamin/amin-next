@@ -128,7 +128,8 @@ sub execute ($self) {
     if ($log) {
         my $ok = $kind eq 'success';
         my $msg = sprintf '[%s rc=%s] %s', ($ok ? 'ok' : 'fail'), $r->{rc}, _q(@cmd);
-        $ok ? $log->success($msg) : $log->error($msg);
+        if    ($ok) { $log->success($msg) }
+        else        { $self->_on_failure($log, $msg) }
     }
 
     $self->{_pid}       = $r->{pid};
@@ -140,6 +141,40 @@ sub execute ($self) {
 }
 
 sub build_argv ($self) { () }
+
+# A command that fails ends the run.  _on_failure latches the failure on the
+# shared Log so the Dispatcher can drain the rest of the document — the 3.0
+# port of amin-legacy, where a failing command set $spec->{amin_error} and the
+# Dispatcher swapped every remaining element to Handler::Empty (nothing after
+# the failure was executed or reported).  A step that is *expected* to miss —
+# a probe, e.g. `which <cross-gcc>` on a clean host before stage 4 builds it —
+# opts out with amin:allow-failure="true" on the command element: its failure
+# is logged as a warning and does not end the run (the <status> it emits still
+# reports the true exit, so the miss is not hidden).
+sub _on_failure ($self, $log, $msg) {
+    return unless $log;
+    if ($self->allow_failure) { $log->warn($msg); return }
+    $log->error($msg);
+    $log->can('halt') && $log->halt($msg);
+    return;
+}
+
+sub allow_failure ($self) {
+    return $self->{_allow_failure} //= ($self->_attr_flag('allow-failure') ? 1 : 0);
+}
+
+# Read a namespace-less/any-namespace boolean attribute off the captured
+# command element (e.g. amin:allow-failure="true").
+sub _attr_flag ($self, $local) {
+    my $a = $self->attrs or return 0;
+    for my $k (keys %$a) {
+        (my $base = $k) =~ s/^\{[^}]*\}//;
+        next unless $base eq $local;
+        my $v = $a->{$k}{Value};
+        return 1 if defined $v && $v =~ /\A(?:1|true|yes|on)\z/i;
+    }
+    return 0;
+}
 
 sub _mine ($e) { ($e->{NamespaceURI}//'') eq NS() }
 sub _named ($e,$n) {
