@@ -67,73 +67,36 @@ sub _parse ($self, $xml) {
         name      => undef,
         ui_dialects => {},
     };
-    if (!defined $xml || !length $xml) {
-        if ($self->{_from_bitcache}) {
-            $result->{allowed} = {};
-        } else {
-            $result->{allowed} = $self->_allow_all_registered;
-        }
+    my $degrade = sub {
+        $result->{allowed} = $self->{_from_bitcache} ? {} : $self->_allow_all_registered;
         return $result;
-    }
-    require XML::LibXML;
-    my $doc = eval { XML::LibXML->load_xml(string => $xml) };
-    if ($@ || !$doc) {
-        if ($self->{_from_bitcache}) {
-            $result->{allowed} = {};
-        } else {
-            $result->{allowed} = $self->_allow_all_registered;
-        }
-        return $result;
-    }
+    };
+    return $degrade->() if !defined $xml || !length $xml;
+
+    # The machine spec is XML too, so read it with the machine's SAX driver
+    # (LibXML when the host has it, pure Perl otherwise) instead of hard-
+    # requiring a C XML library a cross-built node does not carry.  The
+    # stream stays event-by-event — same collector, no DOM.
+    require Amin::Generator::XML;
+    my $c = Amin::Machine::MachineSpec::Collector->new;
+    my $ok = eval { Amin::Generator::XML->new(Handler => $c)->parse_string($xml); 1 };
+    return $degrade->() unless $ok;
+
     my %allowed;
-    my @filters;
-    for my $node ($doc->findnodes('//filter')) {
-        my $class = $node->getAttribute('class') // $node->getAttribute('name');
-        next unless defined $class && length $class;
-        $allowed{$class} = 1;
-        my %meta;
-        for my $a ($node->attributes) {
-            my $ln = $a->localName;
-            next if $ln eq 'class' || $ln eq 'name';
-            $meta{$ln} = $a->value;
-        }
-        push @filters, { class => $class, meta => \%meta };
-    }
-    $result->{filters} = \@filters;
+    $allowed{$_->{class}} = 1 for $c->{filters}->@*;
+    $result->{filters} = $c->{filters};
     $result->{allowed} = (scalar keys %allowed) ? \%allowed
         : ($self->{_from_bitcache} ? {} : $self->_allow_all_registered);
 
     # ui: render targets are contract facts too: which dialect class serves a
     # profile-declared target (ios/android).  The Dispatcher reads this to build
     # the shared render context the ui: element filters inject as `Render`.
-    my %ui_dialects;
-    for my $node ($doc->findnodes('//ui-dialect')) {
-        my $t = $node->getAttribute('target');
-        my $c = $node->getAttribute('class') // $node->getAttribute('name');
-        next unless defined $t && length $t && defined $c && length $c;
-        $ui_dialects{$t} = { class => $c };
-    }
-    $result->{ui_dialects} = \%ui_dialects;
+    $result->{ui_dialects} = $c->{ui_dialects};
 
     for my $tag (qw(handler log generator)) {
-        my ($node) = $doc->findnodes("//$tag");
-        next unless $node;
-        my $class = $node->getAttribute('class') // $node->getAttribute('name');
-        next unless defined $class && length $class;
-        my %attrs;
-        for my $a ($node->attributes) {
-            my $ln = $a->localName;
-            next if $ln eq 'class' || $ln eq 'name';
-            $attrs{$ln} = $a->value;
-        }
-        $result->{$tag} = { class => $class, attrs => \%attrs };
+        $result->{$tag} = $c->{$tag} if $c->{$tag};
     }
-    my ($name_node) = $doc->findnodes('//name');
-    if ($name_node) {
-        my $t = $name_node->textContent;
-        $t =~ s/^\s+|\s+$//g;
-        $result->{name} = $t if length $t;
-    }
+    $result->{name} = $c->{name} if defined $c->{name};
     return $result;
 }
 
@@ -250,5 +213,84 @@ sub _allow_all_registered ($self) {
     }
     return \%allowed;
 }
+
+# A SAX2 collector for the machine spec itself.  The spec is XML, so it is read
+# with the same generator a profile is — never a DOM.  It fills the
+# {filters, ui_dialects, handler, log, generator, name} slots the XPath pass
+# produced, keeping the `class`/`name` attribute out of each filter's meta
+# (the class is the source of truth for a filter's verb).
+package Amin::Machine::MachineSpec::Collector;
+use v5.38; use warnings;
+
+sub new ($class) {
+    bless {
+        filters => [], ui_dialects => {}, name => undef,
+        _in_name => 0, _name_text => '',
+    }, $class;
+}
+
+# SAX attribute surfaces vary in key shape ({Name} / {ns}Name); normalise to
+# LocalName => Value, which is all the spec ever reads.
+sub _surface ($el) {
+    my %a;
+    for my $k (keys %{ $el->{Attributes} // {} }) {
+        my $h = $el->{Attributes}{$k} // {};
+        my $n = $h->{LocalName} // $h->{Name} // $k;
+        $a{$n} = $h->{Value};
+    }
+    return %a;
+}
+
+sub start_document ($self, @) { return }
+sub end_document   ($self, @) { return }
+sub characters ($self, $ch) {
+    $self->{_name_text} .= $ch->{Data} if $self->{_in_name} && defined $ch->{Data};
+    return;
+}
+
+sub start_element ($self, $el) {
+    my $name = $el->{LocalName} // $el->{Name} // '';
+    return unless length $name;
+    my %a = _surface($el);
+    if ($name eq 'filter') {
+        my $class = $a{class} // $a{name};
+        return unless defined $class && length $class;
+        my %meta = %a;
+        delete @meta{qw(class name)};
+        push $self->{filters}->@*, { class => $class, meta => \%meta };
+    }
+    elsif ($name eq 'ui-dialect') {
+        my ($t, $c) = ($a{target}, $a{class} // $a{name});
+        if (defined $t && length $t && defined $c && length $c) {
+            $self->{ui_dialects}{$t} = { class => $c };
+        }
+    }
+    elsif (($name eq 'handler' || $name eq 'log' || $name eq 'generator')
+           && !defined $self->{$name}) {
+        my $class = $a{class} // $a{name};
+        if (defined $class && length $class) {
+            my %attrs = %a;
+            delete @attrs{qw(class name)};
+            $self->{$name} = { class => $class, attrs => \%attrs };
+        }
+    }
+    elsif ($name eq 'name' && !defined $self->{name}) {
+        $self->{_in_name} = 1;
+        $self->{_name_text} = '';
+    }
+    return;
+}
+
+sub end_element ($self, $el) {
+    my $name = $el->{LocalName} // $el->{Name} // '';
+    if ($name eq 'name' && $self->{_in_name}) {
+        $self->{_in_name} = 0;
+        (my $t = $self->{_name_text}) =~ s/^\s+|\s+$//g;
+        $self->{name} = $t if length $t;
+    }
+    return;
+}
+
+package Amin::Machine::MachineSpec;
 
 1;

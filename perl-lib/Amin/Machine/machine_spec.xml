@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <machine xmlns:amin="http://projectamin.org/ns/2026/">
   <name>Amin::Machine::Dispatcher</name>
-  <generator class="XML::LibXML::SAX" />
+  <generator class="Amin::Generator::XML" />
   <handler class="Amin::Handler::Writer" output="yes" />
   <log class="Amin::Log::Standard" />
   <filter class="Amin::Auth::ZCap" position="begin" namespace="http://projectamin.org/ns/2026/" />
@@ -67,6 +67,7 @@
   <filter class="Amin::Command::Dig" position="middle" element="command" name="dig" namespace="http://projectamin.org/ns/2026/" />
   <filter class="Amin::Command::Dirname" position="middle" element="command" name="dirname" namespace="http://projectamin.org/ns/2026/" />
   <filter class="Amin::Command::Dmesg" position="middle" element="command" name="dmesg" namespace="http://projectamin.org/ns/2026/" />
+  <filter class="Amin::Command::Download" position="middle" element="command" name="download" namespace="http://projectamin.org/ns/2026/" />
   <filter class="Amin::Command::Du" position="middle" element="command" name="du" namespace="http://projectamin.org/ns/2026/" />
   <filter class="Amin::Command::Dumpe2fs" position="middle" element="command" name="dumpe2fs" namespace="http://projectamin.org/ns/2026/" />
   <filter class="Amin::Command::Dwz" position="middle" element="command" name="dwz" namespace="http://projectamin.org/ns/2026/" />

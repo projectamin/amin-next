@@ -35,7 +35,7 @@
   <name>example-node</name>
 
   <!-- SAX event generator that parses the incoming profile. -->
-  <generator class="XML::LibXML::SAX" />
+  <generator class="Amin::Generator::XML" />
 
   <!-- Output handler that serializes the transformed SAX stream. -->
   <handler class="Amin::Handler::Writer" output="yes" />

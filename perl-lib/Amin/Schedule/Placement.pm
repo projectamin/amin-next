@@ -262,14 +262,14 @@ sub _first_winner_poll ($self, $handles) {
 sub _reinject_stream_bytes_as_sax ($self, $bytes) {
     return unless defined $bytes && length($bytes);
     $self->_ensure_defaults;
-    require XML::LibXML::SAX;
+    require Amin::Generator::XML;
     my $target = $self->{_chain_downstream} // $self->Handler // $self;
     my $inner = Amin::Schedule::Placement::_SAXReinject->new(
         forward       => $target,
         skip_outer    => 1,
     );
     eval {
-        XML::LibXML::SAX->new(Handler => $inner)->parse_string($bytes);
+        Amin::Generator::XML->new(Handler => $inner)->parse_string($bytes);
     };
     return;
 }

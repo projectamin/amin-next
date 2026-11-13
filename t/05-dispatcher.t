@@ -84,8 +84,8 @@ is($by_pos{middle}[$last-1]{class},  'Amin::Filter::Crypto::Prekey',
     'spec middle idx -2 = sec::Prekey (responder role; element=prekey)');
 is($by_pos{middle}[$last]{class},   'Amin::Filter::Storage::Bitcache',
     'spec middle idx -1 = Bitcache (innermost of middle array; spec-declared)');
-is(scalar($by_pos{middle}->@*), 281,
-    'spec middle position count = 281 (267 commands + UCC::Sales/UCC::Instruments + Exec/Spawn/Signal + Sandbox/Net + AI::Inference/Embed/Memory + sec::RatchetOpen/sec::Prekey×2 + Bitcache)');
+is(scalar($by_pos{middle}->@*), 282,
+    'spec middle position count = 282 (268 commands incl. Download + UCC::Sales/UCC::Instruments + Exec/Spawn/Signal + Sandbox/Net + AI::Inference/Embed/Memory + sec::RatchetOpen/sec::Prekey×2 + Bitcache)');
 
 is($by_pos{begin}[0]{class}, 'Amin::Auth::ZCap',
     'spec begin idx 0 = Auth::ZCap (outermost, fires first auth boundary)');
@@ -224,6 +224,26 @@ ok($d->{chain}, 'Dispatcher->new populates chain via constructor');
     # Corp filter report: main DI-2 guard.
     ok($corp_filter->report,
        'Amin::Test CorpExt subclass reports all assertions passing (DI-2 guard)');
+}
+
+# A processing instruction is NOT part of the Amin contract (the chain's command
+# event is processing_command) and its Target/Data sit outside the closed-world
+# vocabulary, so the Dispatcher never forwards it into the chain — it only
+# records the attempt on the machine's loaded Log.  `chain` is deliberately
+# absent below: had the PI been forwarded, the call would die on an undef chain.
+{
+    my $log = Amin::Log::Standard->new(stderr => 0);
+    my $d = bless { Log => $log }, 'Amin::Machine::Dispatcher';
+    ok(!defined $d->processing_instruction(
+           { Target => 'xml-stylesheet', Data => 'type="text/xsl"' }),
+       'processing_instruction returns undef — dropped, never enters the chain');
+    is($log->warn_count,  1, 'the PI attempt is recorded on the machine Log');
+    is($log->error_count, 0, 'a PI is a warning, not a hard error');
+
+    # No Log wired (bare node): still a silent no-op, not a die.
+    my $bare = bless {}, 'Amin::Machine::Dispatcher';
+    ok(!defined $bare->processing_instruction({ Target => 'x', Data => 'y' }),
+       'no Log ⇒ still a no-op');
 }
 
 done_testing;

@@ -190,7 +190,10 @@ if ($mode eq 'app') {
     $mode = 'render';
 }
 
-open(my $fh, "<:encoding(UTF-8)", $path) or die "Cannot read $path: $!";
+# Read BYTES: the document is either XML or BSAX, and BSAX's magic and length
+# fields are byte offsets — an encoding layer here would corrupt it before the
+# dialect is known.  Amin->parse sniffs the dialect and decodes XML itself.
+open(my $fh, '<:raw', $path) or die "Cannot read $path: $!";
 my $xml = do { local $/; <$fh> }; close $fh;
 
 use Amin;
@@ -229,4 +232,7 @@ if ($STREAM) {
     print $out if defined $out && length $out;
 }
 
-exit $log->error_count > 0 ? 1 : 0;
+# Parenthesise the whole ternary: `exit` is a named unary operator and binds
+# tighter than `>`, so `exit $n > 0 ? 1 : 0` is really `exit($n)` and the
+# process would exit with the raw error count instead of 1.
+exit($log->error_count > 0 ? 1 : 0);

@@ -92,7 +92,7 @@ subtest 'Happy path: bc_hash + valid signature → allow-list resolved' => sub {
         'handler resolved from Bitcache spec');
     is($spec->{log}{class}, 'Amin::Log::Standard',
         'log resolved from Bitcache spec');
-    is($spec->{generator}{class}, 'XML::LibXML::SAX',
+    is($spec->{generator}{class}, 'Amin::Generator::XML',
         'generator resolved from Bitcache spec');
 };
 

@@ -2,6 +2,12 @@ package Amin::Handler::Writer;
 use v5.38; use warnings; use utf8;
 use parent 'XML::SAX::Base';
 
+# _push calls $fh->flush in stream mode; `flush` is a method IO::Handle installs
+# on filehandles, so declare the dependency here rather than inheriting it from
+# whichever XML parser happens to be loaded (XML::LibXML::SAX used to pull it in
+# by accident, via IO::File).
+use IO::Handle ();
+
 use Amin qw(NS);
 use Class::Tiny qw(fh autoflush), {
     depth   => 0,
