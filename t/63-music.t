@@ -188,6 +188,10 @@ TEN
         'TR-MU.5: openrouter asks for the audio modality');
     like($ua->{last}{headers}{Accept}, qr{text/event-stream},
         'TR-MU.5: Accept is text/event-stream');
+    like($out, qr/<ai:update[^>]*ai:phase="stream"/,
+        'TR-MU.5: a streaming hop reports progress mid-submit');
+    like($out, qr/<ai:update[^>]*ai:bytes="\d+"/,
+        'TR-MU.5: stream update carries the received byte count');
     like($out, qr/<bc:object[^>]*bc:kind="audio"/,
         'TR-MU.5: reassembled audio becomes a bc:object');
     like($out, qr/<bc:object[^>]*bc:size="@{[length $audio]}"/,
