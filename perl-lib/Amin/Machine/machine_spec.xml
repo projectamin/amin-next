@@ -430,6 +430,14 @@
   <filter class="Amin::Filter::UI::Element::Cell" position="late" element="cell" namespace="http://projectamin.org/ns/ui/1" target="html" />
   <filter class="Amin::Filter::UI::Element::Style" position="late" element="style" namespace="http://projectamin.org/ns/ui/1" target="html" />
   <filter class="Amin::AI::Graph" position="late" namespace="http://projectamin.org/ns/ai/1" />
+  <!-- document generation.  Element-scoped `late` candidate: spliced only
+       while an amin:document flows.  The grammar is platform vocabulary, so it
+       lives in the core amin: namespace — application/Rust filters keep their
+       own URIs.  Late is downstream of the middle-region Bitcache filter, so
+       the bytes we build are not fetched back and re-inlined on their way to
+       the output handler.  Appended last so it never re-orders the earlier
+       late-region candidates. -->
+  <filter class="Amin::Content::Document" position="late" element="document" namespace="http://projectamin.org/ns/2026/" />
   <filter class="Amin::Filter::Billing::CgroupV2" position="end" namespace="http://projectamin.org/ns/2026/" />
   <filter class="Amin::UCC::Settlement" position="end" namespace="http://projectamin.org/ns/ucc/1" />
   <filter class="Amin::AI::Provenance" position="end" namespace="http://projectamin.org/ns/ai/1" />

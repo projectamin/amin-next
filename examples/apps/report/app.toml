@@ -1,0 +1,25 @@
+id = "io.projectamin.apps.report"
+version = "0.1.0-bootstrap+git-abc1234"
+authors = ["Alice Admin <alice@shop.example>"]
+description = """
+Quarterly revenue report generator.  An amin:document profile: the sheet
+grammar is streamed through the late-region content filter and published as
+a deterministic XLSX artifact (bc:object) with a zcap-gated file write.
+"""
+tier = "staging"
+
+[schedule]
+replicas.min = 1
+replicas.max = 1
+cpu = "25%"
+mem = "256M"
+
+[[storage]]
+name = "reports"
+size = "5G"
+class = "nvme"
+backup = "daily"
+
+[billing]
+owner = "team:finance"
+cost_center = "CC-1337-FIN"

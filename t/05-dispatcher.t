@@ -35,11 +35,14 @@ my $late = [ map { $_->{class} } $by_pos{late}->@* ];
 is($late->[0], 'Amin::Filter::Map::Topology', 'spec late idx 0 = Map::Topology');
 is($late->[1], 'Amin::Filter::UI::Guard',
     'spec late idx 1 = neutral ui: Guard (always on — fail-closed on every host)');
-is($late->[-1], 'Amin::AI::Graph', 'spec late idx -1 = AI::Graph');
-is(scalar($late->@*), 102,
-    'spec late = Map::Topology + UI::Guard + 33×3 ui: element filters + AI::Graph');
+is($late->[-2], 'Amin::AI::Graph', 'spec late idx -2 = AI::Graph');
+is($late->[-1], 'Amin::Content::Document',
+    'spec late idx -1 = Content::Document (appended after the ui: region)');
+is(scalar($late->@*), 103,
+    'spec late = Map::Topology + UI::Guard + 33×3 ui: element filters + AI::Graph'
+    . ' + Content::Document');
 {
-    my @el = @$late[2 .. $#$late - 1];
+    my @el = @$late[2 .. $#$late - 2];
     ok(!(grep { $_ !~ /^Amin::Filter::UI::Element::/ } @el),
         'every ui: element filter at late is Amin::Filter::UI::Element::*');
     my %target;
