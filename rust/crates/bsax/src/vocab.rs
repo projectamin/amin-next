@@ -5,7 +5,7 @@
 //! files (`perl-lib/Amin/Handler/BSAX.pm` and `perl-lib/Amin/Generator/BSAX.pm`)
 //! — the decoder/encoder only stay 1:1 if the byte-level vocab order matches.
 //!
-//! Escape marker is auto-derived as `BY_ID.len() as u32` (currently 137 → a
+//! Escape marker is auto-derived as `BY_ID.len() as u32` (currently 172 → a
 //! 2-byte LEB128 code point).  Crossing 128 was the deliberate
 //! "name-id-2-byte-mode" revision that let the ui: form vocabulary grow; the
 //! name ids themselves are unchanged in meaning, only their wire width.  Any
@@ -14,10 +14,15 @@
 
 /// 4-bit NS_ID inline constants.  MUST stay 1:1 with Perl Handler/Generator::BSAX
 /// `use constant { NS_NONE => 0, NS_AMIN => 1, NS_UI => 2, NS_MAP => 3, NS_BITCACHE => 4,
-/// NS_SEC => 5, NS_ESCAPE => 15 }` blocks.  Values 6..=14 remain reserved for future
-/// forward-compatible Amin-owned namespace slots; any third-party custom namespace uses
-/// NS_ESCAPE (15) with length-prefixed UTF-8 URI inline so CORP-style filter custom NSes
-/// work without Amin fork (see spec DI-2 / NS_ESCAPE=15 path).
+/// NS_SEC => 5, NS_ESCAPE => 15 }` blocks.  Values 6..=14 remain reserved for
+/// future forward-compatible Amin-owned namespace slots; any third-party custom
+/// namespace uses NS_ESCAPE (15) with length-prefixed UTF-8 URI inline so
+/// CORP-style filter custom NSes work without Amin fork (see spec DI-2 / NS_ESCAPE=15 path).
+///
+/// Platform-shipped document generation deliberately uses `AMIN` (no dedicated
+/// slot): every filter that ships with Amin owns its XML vocabulary in the
+/// Amin namespace, leaving application/Rust filters free to register their own
+/// URI without colliding with core semantics.
 #[allow(dead_code)]
 pub mod ns_id {
     /// Empty / no namespace (`xmlns=""`).
@@ -42,7 +47,7 @@ pub mod ns_id {
 }
 
 /// Closed-world vocabulary slice.  `BY_ID[id as usize]` returns the LocalName
-/// as UTF-8 bytes.  Sorted into seven contiguous regions for human reader
+/// as UTF-8 bytes.  Sorted into eight contiguous regions for human reader
 /// convenience only — encode/decode treat the whole list as flat, and new
 /// regions are always APPENDED so existing NAME_IDs keep their wired byte value.
 pub const BY_ID: &[&[u8]] = &[
@@ -87,6 +92,18 @@ pub const BY_ID: &[&[u8]] = &[
     b"ratchet", b"prev_count", b"msg_index",
     b"session", b"prekey", b"pqprekey", b"onetime", b"bundle",
     b"senderkey", b"identity", b"require",
+    // ── document generation grammar + attributes (amin:document/sheet/cell/…
+    //      — platform vocabulary in the core NS).  Names already in the table
+    //      (sheet/row/column/cell/style/title/id/name/type/ref/min/max/size/
+    //      hash/kind/rc/exit_kind) are not repeated.  Appended LAST so every
+    //      NAME_ID above keeps its wired byte value.
+    b"document", b"merge", b"freeze", b"autofilter",
+    b"index", b"width", b"hidden", b"height", b"ht", b"r", b"range",
+    b"bold", b"italic", b"underline", b"font", b"color", b"fill",
+    b"numfmt", b"format",
+    b"align", b"valign", b"wrap", b"tab-color",
+    b"author", b"subject", b"keywords", b"description", b"out", b"root",
+    b"mime", b"path", b"sheets", b"rows", b"cells", b"msg",
 ];
 
 /// NAME_ID escape marker: always the first ID past the last vocab slot.
@@ -118,11 +135,11 @@ mod tests {
 
     #[test]
     fn vocab_count_kept_in_sync_with_perl() {
-        // Perl's @VOCAB currently has 137 entries across
-        // amin/map/ui/bc/ainit/exec-net/sec.
+        // Perl's @VOCAB currently has 172 entries across
+        // amin/map/ui/bc/ainit/exec-net/sec/document-generation.
         // If this fails, update both sides together with the same reordering.
-        assert_eq!(BY_ID.len(), 137);
-        assert_eq!(escape_id(), 137);
+        assert_eq!(BY_ID.len(), 172);
+        assert_eq!(escape_id(), 172);
         // Architecture guard (AC-2): the vocabulary is in the 2-byte LEB128
         // "name-id-2-byte-mode" (>127) introduced for the ui: form surface, so
         // every NAME_ID now costs two LEB bytes.  That revision was a one-off:
@@ -196,9 +213,22 @@ mod tests {
         assert_eq!(by_name(b"ratchet"), Some(126));
         assert_eq!(by_name(b"prev_count"), Some(127));
         assert_eq!(by_name(b"msg_index"), Some(128));
-        // Final sec entry `require` sits at 122 + 14 = 136 (last index; escape = 137).
+        // Final sec entry `require` sits at 122 + 14 = 136 (escape was 137).
         assert_eq!(by_name(b"require"), Some(136));
         assert_eq!(BY_ID[136], b"require");
+    }
+    #[test]
+    fn content_region_starts_at_137() {
+        assert_eq!(by_name(b"document"), Some(137));
+        assert_eq!(BY_ID[137], b"document");
+        // Shared names keep their earlier ids; the Perl generator's
+        // document-element override re-homes them on amin:* grammar elements.
+        assert_eq!(by_name(b"sheet"),  Some(50));
+        assert_eq!(by_name(b"cell"),   Some(68));
+        assert_eq!(by_name(b"format"), Some(155));
+        // Final document-grammar entry `msg` sits at 137 + 34 = 171 (escape = 172).
+        assert_eq!(by_name(b"msg"), Some(171));
+        assert_eq!(BY_ID[171], b"msg");
     }
     #[test]
     fn ns_sec_constant_matches_perl_handler() {

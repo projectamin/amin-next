@@ -184,8 +184,9 @@ is scalar(@fb), scalar(@xml), "XML fallback produces same event count";
     $s .= "\x50" . "\x10" . $leb->($DICT_ID);
     $s .= "\x82" . "hi";               # Chars "hi"
     $s .= "\xA3" . "\n  ";             # IWS
-    # PI: target id == ESCAPE(137) ⇒ inline len-prefixed target, then data blob
-    $s .= "\xC0" . $leb->(137) . $lpfx->('xml-stylesheet') . $lpfx->('type="text/xsl"');
+    # PI: target id == ESCAPE ⇒ inline len-prefixed target, then data blob
+    $s .= "\xC0" . $leb->(Amin::Generator::BSAX::ESCAPE())
+        . $lpfx->('xml-stylesheet') . $lpfx->('type="text/xsl"');
     $s .= "\x60";                       # EndEl
     $s .= "\x20";                       # EndDoc
 

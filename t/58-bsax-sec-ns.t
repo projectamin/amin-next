@@ -3,7 +3,7 @@
 # payload-neutral post-quantum E2EE vocabulary (Double Ratchet + PQXDH).
 #
 # Proves the Perl Handler/Generator::BSAX mirrors are 1:1 with the Rust
-# bsax/src/vocab.rs BY_ID slice at the SAME indices (122..136, ESCAPE=137),
+# bsax/src/vocab.rs BY_ID slice at the SAME indices (122..136, ESCAPE=172),
 # that sec: rides the first-class NS_ID=5 slot rather than the NS_ESCAPE
 # length-prefixed path, and that a sec: event stream survives a full
 # BSAX encode → decode roundtrip identically to the XML path.
@@ -48,10 +48,10 @@ sub _el ($ns,$pfx,$ln,%a) {
 }
 
 # ── 1. Perl vocab is 1:1 with Rust bsax/src/vocab.rs BY_ID ───────────────────
-# Rust asserts BY_ID.len() == 137 and BY_ID[122] == b"seal" .. BY_ID[136] ==
+# Rust asserts BY_ID.len() == 172 and BY_ID[122] == b"seal" .. BY_ID[136] ==
 # b"require".  Assert the Perl mirrors land on exactly the same slots.
-is Amin::Handler::BSAX::ESCAPE(),        137, 'Handler::BSAX ESCAPE == 137 (= BY_ID.len)';
-is Amin::Generator::BSAX::ESCAPE(),      137, 'Generator::BSAX ESCAPE == 137';
+is Amin::Handler::BSAX::ESCAPE(),        172, 'Handler::BSAX ESCAPE == 172 (= BY_ID.len)';
+is Amin::Generator::BSAX::ESCAPE(),      172, 'Generator::BSAX ESCAPE == 172';
 is Amin::Handler::BSAX::NS_SEC(),          5, 'Handler::BSAX NS_SEC == 5';
 is Amin::Generator::BSAX::NS_SEC(),        5, 'Generator::BSAX NS_SEC == 5';
 

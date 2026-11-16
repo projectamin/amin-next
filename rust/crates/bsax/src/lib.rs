@@ -58,6 +58,7 @@
 //! 102..107 ainit:*   : init-profile.xml stage vocabulary (PID 1 handoff)
 //! 108..121 exec-net  : Sandbox + Net::Fabric + expanded Command surface names
 //! 122..136 sec:*     : payload-neutral PQ E2EE (Double Ratchet + PQXDH filter pair)
+//! 137..171 document  : amin:* document grammar (platform vocabulary, core NS)
 //!      ESCAPE        → NAME_ID:LEB = BY_ID.len() then LEN_PREFIXED(utf8 raw name) follows
 //! ```
 //!

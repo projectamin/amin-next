@@ -19,6 +19,9 @@ use constant {
     NS_MAP     => 3,
     NS_BITCACHE=> 4,   # http://projectamin.org/ns/bc/  (legacy Bitcache namespace URI)
     NS_SEC     => 5,   # http://projectamin.org/ns/sec/1 (post-quantum Double Ratchet / PQXDH)
+    # 6..=14 remain reserved for future Amin-owned namespace slots.  Platform-
+    # shipped document generation rides NS_AMIN (amin:document, amin:sheet, …)
+    # so application/Rust filters keep their own URIs and slots don't collide.
     NS_ESCAPE  => 15,
 };
 
@@ -84,11 +87,22 @@ BEGIN {
            ratchet prev_count msg_index
            session prekey pqprekey onetime bundle
            senderkey identity require),
+        # document generation grammar (amin:document/sheet/cell/… — platform
+        #             vocabulary in the core NS).  Names already in the table —
+        #             sheet/row/column/cell/style/title/id/name/type/ref/min/max/
+        #             size/hash/kind/rc/exit_kind — are NOT repeated.  Appended
+        #             LAST so every NAME_ID above keeps its wired value.)
+        qw(document merge freeze autofilter
+           index width hidden height ht r range
+           bold italic underline font color fill numfmt format
+           align valign wrap tab-color
+           author subject keywords description out root
+           mime path sheets rows cells msg),
     );
     # ESCAPE constant via direct symbol-table import so subsequent runtime
     # code (e.g. start_element L122) can say `ESCAPE` bareword.
     require constant;
-    constant->import(ESCAPE => scalar @VOCAB);  # 137 ⇒ 2-byte LEB128 (≥128)
+    constant->import(ESCAPE => scalar @VOCAB);  # 172 ⇒ 2-byte LEB128 (≥128)
     # Populate package %ID (declared `our` above) for runtime lookup.
     %ID = ();
     @ID{@VOCAB} = (0 .. $#VOCAB);

@@ -17,7 +17,8 @@ use Class::Tiny qw(Handler), {
 # Mirrors of Amin::Handler::BSAX constants — MUST stay 1:1 with Handler::BSAX
 # and rust/crates/bsax/src/vocab.rs BY_ID slice.
 use constant {
-    NS_NONE=>0, NS_AMIN=>1, NS_UI=>2, NS_MAP=>3, NS_BITCACHE=>4, NS_SEC=>5, NS_ESCAPE=>15
+    NS_NONE=>0, NS_AMIN=>1, NS_UI=>2, NS_MAP=>3, NS_BITCACHE=>4, NS_SEC=>5,
+    NS_ESCAPE=>15
 };
 my %NSBYID = (
     NS_NONE, '',
@@ -27,6 +28,11 @@ my %NSBYID = (
     NS_BITCACHE, 'http://projectamin.org/ns/bc/',
     NS_SEC,  'http://projectamin.org/ns/sec/1',
 );
+# Platform document-generation elements — the grammar lives in NS_AMIN, so
+# their attributes are amin:* even when the LocalName's NAME_ID sits in an
+# earlier vocabulary region (id/name/type/size/title/min/max are shared).
+my %AMIN_DOC_ELEM = map { $_ => 1 }
+    qw(document style sheet column row cell freeze autofilter merge);
 # See Handler::BSAX comment for BEGIN-ordering explanation: `use constant` runs
 # its RHS at BEGIN so we must populate VOCAB first inside the same explicit BEGIN.
 our @NAMEBYID_BY_POS;  # placeholder; real data is the hash below
@@ -60,9 +66,17 @@ BEGIN {
            ratchet prev_count msg_index
            session prekey pqprekey onetime bundle
            senderkey identity require),
+        # document generation grammar in the core amin: namespace
+        # (Handler::BSAX 1:1 copy; names already in the table are not repeated).
+        qw(document merge freeze autofilter
+           index width hidden height ht r range
+           bold italic underline font color fill numfmt format
+           align valign wrap tab-color
+           author subject keywords description out root
+           mime path sheets rows cells msg),
     );
     require constant;
-    constant->import(ESCAPE => scalar @VOCAB);  # 137 ⇒ 2-byte LEB128 (≥128)
+    constant->import(ESCAPE => scalar @VOCAB);  # 172 ⇒ 2-byte LEB128 (≥128)
     %NAMEBYID = ();
     @NAMEBYID{0 .. $#VOCAB} = @VOCAB;
 }
@@ -261,7 +275,9 @@ sub _one_event ($self, $br, $qr, $h, $tag, $kind, $flags, $tag_start) {
             #           elements so use NS_AMIN.
             # 108..121  exec-net/sandbox — likewise NS_AMIN.
             # 122..136  sec:* post-quantum E2EE surface (NS_SEC).
-            # Anything >= ESCAPE (137) falls back to the parent element's
+            # 137..171  document-generation grammar — platform vocabulary in
+            #           the core amin: namespace (NS_AMIN).
+            # Anything >= ESCAPE (172) falls back to the parent element's
             # NS (possibly a Corp custom escape URI).
             my $a_ns;
             if    ($aid < 23)      { $a_ns = NS_AMIN }
@@ -269,14 +285,25 @@ sub _one_event ($self, $br, $qr, $h, $tag, $kind, $flags, $tag_start) {
             elsif ($aid < 83)      { $a_ns = NS_UI }
             elsif ($aid < 102)     { $a_ns = NS_BITCACHE }
             elsif ($aid < 108)     { $a_ns = NS_AMIN }
-            elsif ($aid < ESCAPE)  { $a_ns = NS_SEC }
+            elsif ($aid < 137)     { $a_ns = NS_SEC }
+            elsif ($aid < ESCAPE)  { $a_ns = NS_AMIN }
             else                   { $a_ns = $ns_id }   # unknown: inherit elem NS
+            # An application/Rust element in a custom namespace has no low
+            # NS_ID slot, so every one of its attributes must inherit that
+            # element's URI.  The NAME_ID region is only a hint for core
+            # vocabulary; without this an app's sox:id would decode as amin:id.
+            $a_ns = NS_ESCAPE if $ns_id == NS_ESCAPE;
             # Element-aware override: `type`/`name`/`value` are ui: form
             # attributes but their LocalNames also occupy the amin/map NAME_ID
             # slots, so the region rule above would resolve a ui: form's
             # attribute to the wrong NS.  Every attribute of a ui: element
             # belongs to the ui: vocabulary regardless of its NAME_ID region.
             $a_ns = NS_UI if $ns_id == NS_UI && $aid < ESCAPE;
+            # Same for the amin: document grammar: id/name/type/size/title/
+            # min/max are shared LocalNames whose ids sit in earlier regions,
+            # but on amin:document/sheet/row/cell/… they are amin:* attributes.
+            $a_ns = NS_AMIN if $ns_id == NS_AMIN && $AMIN_DOC_ELEM{$ln}
+                && $aid < ESCAPE;
             # For custom escape NS, use the element's already-resolved
             # $ns_uri (possibly the inline Corp URI) not the (undefined)
             # $NSBYID{NS_ESCAPE} entry.

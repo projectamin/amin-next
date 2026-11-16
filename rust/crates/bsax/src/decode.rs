@@ -552,4 +552,132 @@ mod tests {
         // Stream stays aligned after the PI: EndDoc still decodes cleanly.
         assert!(matches!(d.poll_event(), Ok(Poll::Event(Event::EndDocument))));
     }
+
+    #[test]
+    fn document_grammar_rides_amin_ns() {
+        // Platform document grammar is an `amin:` vocabulary — it travels on
+        // NS_AMIN with plain vocab NAME_IDs and no escaped namespace URI.
+        // Mirrors t/64-content-xlsx.t § 5 (`amin:document/sheet/cell`).
+        let mut out = vec![];
+        encode::write_magic(&mut out);
+        encode::write_start_doc(&mut out);
+        let doc_attrs: [(u8, &[u8]); 4] = [
+            (vocab::by_name(b"format").unwrap(), b"xlsx"),
+            (vocab::by_name(b"title").unwrap(),  b"Q3"),
+            (vocab::by_name(b"out").unwrap(),    b"out/q3.xlsx"),
+            (vocab::by_name(b"sheets").unwrap(), b"1"),
+        ];
+        encode::write_start_elem(
+            &mut out, vocab::ns_id::AMIN, vocab::by_name(b"document").unwrap(), &doc_attrs,
+        );
+        encode::write_start_elem(
+            &mut out, vocab::ns_id::AMIN, vocab::by_name(b"sheet").unwrap(),
+            &[(vocab::by_name(b"name").unwrap(), b"Report")],
+        );
+        encode::write_start_elem(
+            &mut out, vocab::ns_id::AMIN, vocab::by_name(b"cell").unwrap(),
+            &[(vocab::by_name(b"type").unwrap(), b"number")],
+        );
+        encode::write_end_elem(&mut out);
+        encode::write_end_elem(&mut out);
+        encode::write_end_elem(&mut out);
+        encode::write_end_doc(&mut out);
+
+        let mut d = feed_all(&out);
+        assert!(matches!(d.poll_event(), Ok(Poll::Event(Event::StartDocument))));
+        match d.poll_event().unwrap() {
+            Poll::Event(Event::StartElement {
+                ns_id, name_id, ns_uri_override, local_name_override, attrs,
+            }) => {
+                // Core NS, plain vocab name — an app filter registered on its
+                // own URI cannot be mistaken for this element.
+                assert_eq!(ns_id, vocab::ns_id::AMIN);
+                assert_eq!(ns_uri_override, None);
+                assert_eq!(local_name_override, None);
+                assert_eq!(u32::from(name_id), 137);
+                assert_eq!(vocab::BY_ID[name_id as usize], b"document");
+                assert_eq!(attrs.len(), 4);
+                for a in &attrs {
+                    assert_eq!(a.name_override, None);
+                }
+                assert_eq!(attrs[0].name_id, vocab::by_name(b"format").unwrap());
+                assert_eq!(attrs[0].local_name(), Some(&b"format"[..]));
+                assert_eq!(attrs[0].value, b"xlsx");
+                assert_eq!(attrs[2].local_name(), Some(&b"out"[..]));
+                assert_eq!(attrs[3].local_name(), Some(&b"sheets"[..]));
+            },
+            other => panic!("not an amin:document start_element: {other:?}"),
+        }
+        match d.poll_event().unwrap() {
+            Poll::Event(Event::StartElement { ns_id, name_id, attrs, .. }) => {
+                assert_eq!(ns_id, vocab::ns_id::AMIN);
+                // Shared LocalName (`sheet`) still resolves to its existing
+                // slot; the NS nibble is what makes it an amin:sheet here.
+                assert_eq!(u32::from(name_id), 50);
+                assert_eq!(attrs[0].local_name(), Some(&b"name"[..]));
+            },
+            other => panic!("not an amin:sheet start_element: {other:?}"),
+        }
+        match d.poll_event().unwrap() {
+            Poll::Event(Event::StartElement { ns_id, name_id, attrs, .. }) => {
+                assert_eq!(ns_id, vocab::ns_id::AMIN);
+                assert_eq!(u32::from(name_id), 68);
+                assert_eq!(attrs[0].local_name(), Some(&b"type"[..]));
+            },
+            other => panic!("not an amin:cell start_element: {other:?}"),
+        }
+        assert!(matches!(d.poll_event(), Ok(Poll::Event(Event::EndElement))));
+        assert!(matches!(d.poll_event(), Ok(Poll::Event(Event::EndElement))));
+        assert!(matches!(d.poll_event(), Ok(Poll::Event(Event::EndElement))));
+        assert!(matches!(d.poll_event(), Ok(Poll::Event(Event::EndDocument))));
+    }
+
+    #[test]
+    fn app_namespace_document_keeps_its_own_uri() {
+        // An application filter may define its own `document` element.  It
+        // rides NS_ESCAPE with an inline URI while reusing vocab NAME_IDs —
+        // the decoder reports the raw id and the URI override so the consumer
+        // resolves `app:document` without ever seeing the core NS.
+        // Mirrors t/64-content-xlsx.t (`$APP_NS` + `app:document`).
+        let uri = b"https://apps.example.test/ns/doc/1";
+        let mut out = vec![];
+        out.extend_from_slice(&MAGIC);
+        out.push(0x00); // StartDoc
+        out.push(0x40 | 0x10 | 1); // StartEl, ns inline, 1 attr
+        out.push(0x0F << 4); // NS_ID = ESCAPE
+        encode::leb_u32(&mut out, uri.len() as u32);
+        out.extend_from_slice(uri);
+        encode::leb_u32(&mut out, u32::from(vocab::by_name(b"document").unwrap()));
+        encode::leb_u32(&mut out, u32::from(vocab::by_name(b"format").unwrap()));
+        encode::leb_u32(&mut out, 4);
+        out.extend_from_slice(b"acme");
+        out.push(0x60); // EndEl
+        out.push(0x20); // EndDoc
+
+        let bounds = Bounds { allow_vocab_only: false, ..Bounds::default() };
+        let mut d = StreamDecoder::new(bounds);
+        d.feed(&out);
+        assert!(matches!(d.poll_event(), Ok(Poll::Event(Event::StartDocument))));
+        match d.poll_event().unwrap() {
+            Poll::Event(Event::StartElement {
+                ns_id, name_id, ns_uri_override, local_name_override, attrs,
+            }) => {
+                assert_eq!(ns_id, vocab::ns_id::ESCAPE);
+                assert_eq!(ns_uri_override, Some(&uri[..]));
+                assert_eq!(local_name_override, None);
+                // Same LocalName slot as the platform grammar, but the URI is
+                // the app's — no collision at the SAX boundary.
+                assert_eq!(u32::from(name_id), 137);
+                assert_eq!(vocab::BY_ID[name_id as usize], b"document");
+                assert_eq!(attrs.len(), 1);
+                assert_eq!(attrs[0].name_id, vocab::by_name(b"format").unwrap());
+                assert_eq!(attrs[0].name_override, None);
+                assert_eq!(attrs[0].local_name(), Some(&b"format"[..]));
+                assert_eq!(attrs[0].value, b"acme");
+            },
+            other => panic!("not an app-namespaced start_element: {other:?}"),
+        }
+        assert!(matches!(d.poll_event(), Ok(Poll::Event(Event::EndElement))));
+        assert!(matches!(d.poll_event(), Ok(Poll::Event(Event::EndDocument))));
+    }
 }
