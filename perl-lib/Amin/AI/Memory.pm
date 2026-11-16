@@ -11,7 +11,11 @@ sub element  { 'query' }
 sub position { 'middle' }
 
 sub on_article_close ($self, $el) {
-    my $model = $self->_attr($el, 'model') // 'amin-embed-384';
+    # The binding is lexical: the model comes from the enclosing ai:model.
+    my $denied = eval { require Amin::AI::Model; Amin::AI::Model->current_denied } || 0;
+    return if $denied;
+    my $bind  = eval { require Amin::AI::Model; Amin::AI::Model->current_binding } // {};
+    my $model = $bind->{model} // 'amin-embed-384';
     return unless Amin::AI::ModelRegistry->is_allowed($model);
 
     my $queries = $self->_child_vals('prompt');

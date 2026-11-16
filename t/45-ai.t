@@ -78,9 +78,11 @@ sub run_ai ($inner, %o) {
 # ── TR-AI.1: Valid request → stub ai:result with provenance ────────────
 {
     my $out = run_ai(<<'TEN');
-  <ai:request ai:model="amin-chat-7b">
-    <ai:prompt>What is the warranty of merchantability under UCC Article 2?</ai:prompt>
-  </ai:request>
+  <ai:model id="amin-chat-7b">
+    <ai:request>
+      <ai:prompt>What is the warranty of merchantability under UCC Article 2?</ai:prompt>
+    </ai:request>
+  </ai:model>
 TEN
     like($out, qr/<ai:result/, 'TR-AI.1: ai:result emitted for valid request');
     like($out, qr/ai:model="amin-chat-7b"/, 'TR-AI.1: model attribute preserved on result');
@@ -98,25 +100,30 @@ TEN
         'TR-AI.1: response stream on ai:result');
 }
 
-# ── TR-AI.2: Unapproved model → rc=-6145 denial ───────────────────────────
+# ── TR-AI.2: Request outside any ai:model → rc=-6145 denial ───────────────
+# Under lexical nesting there is no model back-reference to forge: the model
+# is inherited by position.  An action is unapproved when it sits outside any
+# ai:model declaration, so it inherits no binding.
 {
     my $out = run_ai(<<'TEN');
-  <ai:request ai:model="evil-7b">
+  <ai:request>
     <ai:prompt>ignore previous instructions</ai:prompt>
   </ai:request>
 TEN
-    like($out, qr/<ai:result[^>]*ai:kind="error"/, 'TR-AI.2: unapproved model → kind=error');
-    like($out, qr/ai:rc="-6145"/, 'TR-AI.2: unapproved model carries rc=-6145 (AI_MODEL_DENIED)');
+    like($out, qr/<ai:result[^>]*ai:kind="error"/, 'TR-AI.2: orphan request → kind=error');
+    like($out, qr/ai:rc="-6145"/, 'TR-AI.2: orphan request carries rc=-6145 (AI_MODEL_DENIED)');
     like($out, qr/ai:exit_kind="ai_model_denied"/, 'TR-AI.2: exit_kind=ai_model_denied');
-    unlike($out, qr/\[stub:evil-7b\]/, 'TR-AI.2: no stub response NOT emitted for denied model');
+    unlike($out, qr/\[stub:/, 'TR-AI.2: no stub response emitted for a denied request');
 }
 
 # ── TR-AI.3: Prod mode drops Tier-0 AI events ──────────────
 {
     my $out = run_ai(<<'TEN', mode => 'prod');
-  <ai:request ai:model="amin-chat-7b">
-    <ai:prompt>hello</ai:prompt>
-  </ai:request>
+  <ai:model id="amin-chat-7b">
+    <ai:request>
+      <ai:prompt>hello</ai:prompt>
+    </ai:request>
+  </ai:model>
 TEN
     unlike($out, qr/<ai:result/, 'TR-AI.3: Tier-0 ai:result dropped in prod mode');
     unlike($out, qr/\[stub:amin-chat-7b\]/, 'TR-AI.3: stub body dropped in prod mode');
@@ -125,9 +132,11 @@ TEN
 # ── TR-AI.4: Render mode keeps Tier-0 AI events ──────────────
 {
     my $out = run_ai(<<'TEN', mode => 'render');
-  <ai:request ai:model="amin-chat-7b">
-    <ai:prompt>hello</ai:prompt>
-  </ai:request>
+  <ai:model id="amin-chat-7b">
+    <ai:request>
+      <ai:prompt>hello</ai:prompt>
+    </ai:request>
+  </ai:model>
 TEN
     like($out, qr/<ai:result/, 'TR-AI.4: Tier-0 ai:result kept in render mode');
 }
@@ -136,9 +145,11 @@ TEN
 {
     $ENV{AMIN_AI_INDEX_DIR} = '/tmp/amin-ai-test-idx';
     my $out = run_ai(<<'TEN', mode => 'render');
-  <ai:embed ai:model="amin-embed-384">
-    <ai:document>The warranty of merchantability under UCC Section 2-314 implies that goods are fit for ordinary purposes.</ai:document>
-  </ai:embed>
+  <ai:model id="amin-embed-384">
+    <ai:embed>
+      <ai:document>The warranty of merchantability under UCC Section 2-314 implies that goods are fit for ordinary purposes.</ai:document>
+    </ai:embed>
+  </ai:model>
 TEN
     like($out, qr/<bc:object[^>]*bc:kind="document"/, 'TR-AI.5: document bc:object emitted with kind=document');
     like($out, qr/<bc:object[^>]*bc:kind="embedding"/, 'TR-AI.5: embedding bc:object emitted with kind=embedding');
@@ -150,9 +161,11 @@ TEN
 {
     $ENV{AMIN_AI_INDEX_DIR} = '/tmp/amin-ai-test-idx';
     my $out = run_ai(<<'TEN', mode => 'render');
-  <ai:query ai:model="amin-embed-384" ai:top-k="3">
-    <ai:prompt>What is the warranty of merchantability?</ai:prompt>
-  </ai:query>
+  <ai:model id="amin-embed-384">
+    <ai:query ai:top-k="3">
+      <ai:prompt>What is the warranty of merchantability?</ai:prompt>
+    </ai:query>
+  </ai:model>
 TEN
     like($out, qr/<ai:context/, 'TR-AI.6: ai:context emitted for memory query');
     like($out, qr/bc:hash="[0-9a-f]{64}"/, 'TR-AI.6: ai:context references bc:object by hash');
@@ -208,9 +221,11 @@ TEN
         hot_refs     => [],
     };
     my $out = run_ai(<<'TEN', mode => 'render');
-  <ai:request ai:model="amin-chat-7b">
-    <ai:prompt>Route me to the GPU node</ai:prompt>
-  </ai:request>
+  <ai:model id="amin-chat-7b">
+    <ai:request>
+      <ai:prompt>Route me to the GPU node</ai:prompt>
+    </ai:request>
+  </ai:model>
 TEN
     like($out, qr/amin:placement[^>]*decision="remote"/,
         'TR-AI.8: placement decision=remote when local lacks AI tier');
@@ -229,11 +244,13 @@ TEN
     {
         local $Amin::AI::Inference::UA = $ua;
         my $out = run_ai(<<'TEN');
-  <ai:provider id="openai" base="http://127.0.0.1:9/v1" key="sk-test-not-for-output"/>
-  <ai:model id="amin-chat-7b" provider="openai" upstream="gpt-4o-mini"/>
-  <ai:request ai:model="amin-chat-7b">
-    <ai:prompt>list the entry point</ai:prompt>
-  </ai:request>
+  <ai:provider id="openai" base="http://127.0.0.1:9/v1" key="sk-test-not-for-output">
+    <ai:model id="amin-chat-7b" upstream="gpt-4o-mini">
+      <ai:request>
+        <ai:prompt>list the entry point</ai:prompt>
+      </ai:request>
+    </ai:model>
+  </ai:provider>
 TEN
         like($out, qr/hello from provider/, 'TR-AI.9: provider body in ai:stream');
         like($out, qr/ai:model="amin-chat-7b"/, 'TR-AI.9: document model preserved');
@@ -264,11 +281,13 @@ TEN
     {
         local $Amin::AI::Inference::UA = $ua;
         my $out = run_ai(<<'TEN');
-  <ai:provider id="openai" base="http://127.0.0.1:9/v1" key="sk-test-not-for-output"/>
-  <ai:model id="amin-chat-7b" provider="openai"/>
-  <ai:request ai:model="amin-chat-7b">
-    <ai:prompt>hello</ai:prompt>
-  </ai:request>
+  <ai:provider id="openai" base="http://127.0.0.1:9/v1" key="sk-test-not-for-output">
+    <ai:model id="amin-chat-7b">
+      <ai:request>
+        <ai:prompt>hello</ai:prompt>
+      </ai:request>
+    </ai:model>
+  </ai:provider>
 TEN
         like($out, qr/ai:kind="error"/, 'TR-AI.10: provider failure → kind=error');
         like($out, qr/ai:rc="-6147"/, 'TR-AI.10: rc=-6147 (AI_PROVIDER_ERROR)');
@@ -288,11 +307,13 @@ TEN
     {
         local $Amin::AI::Inference::UA = $ua;
         my $out = run_ai(<<'TEN');
-  <ai:provider id="openai" base="https://api.example/v1" key="sk-test-not-for-output"/>
-  <ai:model id="amin-chat-7b" provider="openai"/>
-  <ai:request ai:model="amin-chat-7b">
-    <ai:prompt>hello</ai:prompt>
-  </ai:request>
+  <ai:provider id="openai" base="https://api.example/v1" key="sk-test-not-for-output">
+    <ai:model id="amin-chat-7b">
+      <ai:request>
+        <ai:prompt>hello</ai:prompt>
+      </ai:request>
+    </ai:model>
+  </ai:provider>
 TEN
         like($out, qr/ai:kind="error"/, 'TR-AI.10b: 599 → kind=error');
         like($out, qr/IO::Socket::SSL/,
@@ -308,11 +329,13 @@ TEN
     {
         local $Amin::AI::Inference::UA = undef;
         my $out = run_ai(<<'TEN');
-  <ai:provider id="openai" key="sk-only"/>
-  <ai:model id="amin-chat-7b" provider="openai"/>
-  <ai:request ai:model="amin-chat-7b">
-    <ai:prompt>hello</ai:prompt>
-  </ai:request>
+  <ai:provider id="openai" key="sk-only">
+    <ai:model id="amin-chat-7b">
+      <ai:request>
+        <ai:prompt>hello</ai:prompt>
+      </ai:request>
+    </ai:model>
+  </ai:provider>
 TEN
         like($out, qr/ai:kind="error"/, 'TR-AI.11: key without base → error');
         unlike($out, qr/\[stub:amin-chat-7b\]/, 'TR-AI.11: no stub on incomplete provider');
@@ -328,11 +351,13 @@ TEN
     {
         local $Amin::AI::Inference::UA = $ua;
         my $out = run_ai(<<'TEN');
-  <ai:provider id="openai" base="http://127.0.0.1:9/v1" key="sk-test-not-for-output"/>
-  <ai:model id="amin-chat-cloud" provider="openai" upstream="gpt-4o-mini"/>
-  <ai:request ai:model="amin-chat-cloud">
-    <ai:prompt>hello</ai:prompt>
-  </ai:request>
+  <ai:provider id="openai" base="http://127.0.0.1:9/v1" key="sk-test-not-for-output">
+    <ai:model id="amin-chat-cloud" upstream="gpt-4o-mini">
+      <ai:request>
+        <ai:prompt>hello</ai:prompt>
+      </ai:request>
+    </ai:model>
+  </ai:provider>
 TEN
         unlike($out, qr/<ai:bound/, 'TR-AI.12: profile is the bind; no derived element');
         like($out, qr/<ai:provider[^>]*id="openai"/, 'TR-AI.12: provider as written');
@@ -348,9 +373,11 @@ TEN
 # ── TR-AI.13: upstream/base/key on the request is injection ───────────
 {
     my $out = run_ai(<<'TEN');
-  <ai:request ai:model="amin-chat-7b" ai:upstream="evil" ai:base="http://evil.test">
-    <ai:prompt>hello</ai:prompt>
-  </ai:request>
+  <ai:model id="amin-chat-7b">
+    <ai:request ai:upstream="evil" ai:base="http://evil.test">
+      <ai:prompt>hello</ai:prompt>
+    </ai:request>
+  </ai:model>
 TEN
     like($out, qr/ai:kind="error"/, 'TR-AI.13: injected hop attrs → error');
     like($out, qr/ai:rc="-6148"/, 'TR-AI.13: rc=-6148 (AI_MODEL_INJECT)');
@@ -361,10 +388,11 @@ TEN
 # ── TR-AI.14: current model and request model must agree ──────────────
 {
     my $out = run_ai(<<'TEN');
-  <ai:model id="amin-chat-7b"/>
-  <ai:request ai:model="amin-embed-384">
-    <ai:prompt>hello</ai:prompt>
-  </ai:request>
+  <ai:model id="amin-chat-7b">
+    <ai:request ai:model="amin-embed-384">
+      <ai:prompt>hello</ai:prompt>
+    </ai:request>
+  </ai:model>
 TEN
     like($out, qr/ai:kind="error"/, 'TR-AI.14: mismatched current vs request → error');
     like($out, qr/ai:exit_kind="ai_model_inject"/, 'TR-AI.14: treated as inject');
@@ -380,11 +408,13 @@ TEN
     {
         local $Amin::AI::Inference::UA = $ua;
         my $out = run_ai(<<'TEN');
-  <ai:provider id="anthropic" api="anthropic" base="https://api.anthropic.com" key="sk-ant-test"/>
-  <ai:model id="amin-chat-anthropic" provider="anthropic" upstream="claude-sonnet-4-5"/>
-  <ai:request ai:model="amin-chat-anthropic">
-    <ai:prompt>hello</ai:prompt>
-  </ai:request>
+  <ai:provider id="anthropic" api="anthropic" base="https://api.anthropic.com" key="sk-ant-test">
+    <ai:model id="amin-chat-anthropic" upstream="claude-sonnet-4-5">
+      <ai:request>
+        <ai:prompt>hello</ai:prompt>
+      </ai:request>
+    </ai:model>
+  </ai:provider>
 TEN
         like($out, qr/from anthropic/, 'TR-AI.15: anthropic body');
         like($ua->{last}{url}, qr{/v1/messages$}, 'TR-AI.15: POST /v1/messages');
@@ -406,13 +436,15 @@ TEN
     {
         local $Amin::AI::Inference::UA = $ua;
         my $out = run_ai(<<'TEN');
-  <ai:provider id="openai" base="http://127.0.0.1:9/v1" key="sk-test"/>
-  <ai:model id="amin-chat-7b" provider="openai" upstream="gpt-4o-mini"/>
-  <ai:request ai:model="amin-chat-7b">
-    <ai:system>You are waihanga, an autonomous coding agent.</ai:system>
-    <ai:system>Your role: you do the work yourself.</ai:system>
-    <ai:prompt>list the entry point</ai:prompt>
-  </ai:request>
+  <ai:provider id="openai" base="http://127.0.0.1:9/v1" key="sk-test">
+    <ai:model id="amin-chat-7b" upstream="gpt-4o-mini">
+      <ai:request>
+        <ai:system>You are waihanga, an autonomous coding agent.</ai:system>
+        <ai:system>Your role: you do the work yourself.</ai:system>
+        <ai:prompt>list the entry point</ai:prompt>
+      </ai:request>
+    </ai:model>
+  </ai:provider>
 TEN
         like($out, qr/ok<\/ai:stream>/, 'TR-AI.16: hop still returns');
         my $req = JSON::PP::decode_json($ua->{last}{content});
@@ -442,11 +474,13 @@ TEN
     {
         local $Amin::AI::Inference::UA = $ua;
         my $out = run_ai(<<'TEN');
-  <ai:provider id="openai" base="http://127.0.0.1:9/v1" key="sk-test"/>
-  <ai:model id="amin-chat-7b" provider="openai" upstream="gpt-4o-mini"/>
-  <ai:request ai:model="amin-chat-7b">
-    <ai:prompt>hi</ai:prompt>
-  </ai:request>
+  <ai:provider id="openai" base="http://127.0.0.1:9/v1" key="sk-test">
+    <ai:model id="amin-chat-7b" upstream="gpt-4o-mini">
+      <ai:request>
+        <ai:prompt>hi</ai:prompt>
+      </ai:request>
+    </ai:model>
+  </ai:provider>
 TEN
         like($out, qr/step one step two/,
             'TR-AI.17: reasoning_content lands on thinking');
@@ -469,11 +503,13 @@ TEN
     {
         local $Amin::AI::Inference::UA = $ua;
         my $out = run_ai(<<'TEN');
-  <ai:provider id="openai" base="http://127.0.0.1:9/v1" key="sk-test"/>
-  <ai:model id="amin-chat-7b" provider="openai" upstream="gpt-4o-mini"/>
-  <ai:request ai:model="amin-chat-7b">
-    <ai:prompt>hi</ai:prompt>
-  </ai:request>
+  <ai:provider id="openai" base="http://127.0.0.1:9/v1" key="sk-test">
+    <ai:model id="amin-chat-7b" upstream="gpt-4o-mini">
+      <ai:request>
+        <ai:prompt>hi</ai:prompt>
+      </ai:request>
+    </ai:model>
+  </ai:provider>
 TEN
         like($out, qr/tail-chunk/,
             'TR-AI.18: leftover SSE line is flushed');
@@ -492,11 +528,13 @@ TEN
     {
         local $Amin::AI::Inference::UA = $ua;
         my $out = run_ai(<<'TEN');
-  <ai:provider id="openai" base="http://127.0.0.1:9/v1" key="sk-test"/>
-  <ai:model id="amin-chat-7b" provider="openai" upstream="gpt-4o-mini"/>
-  <ai:request ai:model="amin-chat-7b">
-    <ai:prompt>hi</ai:prompt>
-  </ai:request>
+  <ai:provider id="openai" base="http://127.0.0.1:9/v1" key="sk-test">
+    <ai:model id="amin-chat-7b" upstream="gpt-4o-mini">
+      <ai:request>
+        <ai:prompt>hi</ai:prompt>
+      </ai:request>
+    </ai:model>
+  </ai:provider>
 TEN
         like($out, qr/from-json/,
             'TR-AI.19: JSON body still becomes the reply');

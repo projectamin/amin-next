@@ -71,12 +71,14 @@ sub run_ai ($inner, %o) {
 # ── TR-MU.1: stub provider drives submit → poll → updates → bc:object ──
 {
     my $out = run_ai(<<'TEN');
-  <ai:provider id="stub" api="stub"/>
-  <ai:model id="ace-step" provider="stub" upstream="acestep" kind="music"/>
-  <ai:music ai:model="ace-step">
-    <ai:style>lo-fi, warm tape hiss</ai:style>
-    <ai:prompt>rain on a tin roof</ai:prompt>
-  </ai:music>
+  <ai:provider id="stub" api="stub">
+    <ai:model id="ace-step" upstream="acestep" kind="music">
+      <ai:music>
+        <ai:style>lo-fi, warm tape hiss</ai:style>
+        <ai:prompt>rain on a tin roof</ai:prompt>
+      </ai:music>
+    </ai:model>
+  </ai:provider>
 TEN
     my @updates = ($out =~ /<ai:update\b/g);
     is(scalar @updates, 3, 'TR-MU.1: one ai:update per submit + poll step');
@@ -94,24 +96,30 @@ TEN
 # ── TR-MU.2: prod mode drops Tier-0 update events, keeps the bc:object ──
 {
     my $out = run_ai(<<'TEN', mode => 'prod');
-  <ai:provider id="stub" api="stub"/>
-  <ai:model id="ace-step" provider="stub" upstream="acestep" kind="music"/>
-  <ai:music ai:model="ace-step">
-    <ai:prompt>rain on a tin roof</ai:prompt>
-  </ai:music>
+  <ai:provider id="stub" api="stub">
+    <ai:model id="ace-step" upstream="acestep" kind="music">
+      <ai:music>
+        <ai:prompt>rain on a tin roof</ai:prompt>
+      </ai:music>
+    </ai:model>
+  </ai:provider>
 TEN
     unlike($out, qr/<ai:update/, 'TR-MU.2: Tier-0 updates dropped in prod');
     like($out, qr/<bc:object[^>]*bc:kind="audio"/, 'TR-MU.2: audio ref survives prod');
 }
 
-# ── TR-MU.3: unapproved model → rc=-6145 denial ─────────────────────────
+# ── TR-MU.3: ai:music under an unidentifiable ai:model → rc=-6145 ───────
+# Under lexical nesting the model is inherited from the enclosing ai:model;
+# a music action whose scope cannot name a model is refused, fail-closed.
 {
     my $out = run_ai(<<'TEN');
-  <ai:music ai:model="evil-music">
-    <ai:prompt>do bad things</ai:prompt>
-  </ai:music>
+  <ai:model>
+    <ai:music>
+      <ai:prompt>do bad things</ai:prompt>
+    </ai:music>
+  </ai:model>
 TEN
-    like($out, qr/<ai:result[^>]*ai:kind="error"/, 'TR-MU.3: unapproved model → error');
+    like($out, qr/<ai:result[^>]*ai:kind="error"/, 'TR-MU.3: undecidable model → error');
     like($out, qr/ai:rc="-6145"/, 'TR-MU.3: rc=-6145 (AI_MODEL_DENIED)');
     like($out, qr/ai:exit_kind="ai_model_denied"/, 'TR-MU.3: exit_kind=ai_model_denied');
     unlike($out, qr/<bc:object[^>]*bc:kind="audio"/, 'TR-MU.3: no artifact for a denied model');
@@ -126,11 +134,13 @@ TEN
     });
     local $Amin::AI::Provider::Base::UA = $ua;
     my $out = run_ai(<<'TEN');
-  <ai:provider id="deepinfra" api="deepinfra" base="http://127.0.0.1:9/v1" key="sk-test-not-for-output"/>
-  <ai:model id="ace-step" provider="deepinfra" upstream="acestep-v15-xl-sft" kind="music"/>
-  <ai:music ai:model="ace-step">
-    <ai:prompt>rain on a tin roof</ai:prompt>
-  </ai:music>
+  <ai:provider id="deepinfra" api="deepinfra" base="http://127.0.0.1:9/v1" key="sk-test-not-for-output">
+    <ai:model id="ace-step" upstream="acestep-v15-xl-sft" kind="music">
+      <ai:music>
+        <ai:prompt>rain on a tin roof</ai:prompt>
+      </ai:music>
+    </ai:model>
+  </ai:provider>
 TEN
     like($out, qr/<ai:result[^>]*ai:kind="error"/, 'TR-MU.4: provider failure → error');
     like($out, qr/ai:rc="-6147"/, 'TR-MU.4: rc=-6147 (AI_PROVIDER_ERROR)');
@@ -144,9 +154,11 @@ TEN
 # ── TR-MU.5: a profile with no ai:music element is untouched ────────────
 {
     my $out = run_ai(<<'TEN');
-  <ai:request ai:model="amin-chat-7b">
-    <ai:prompt>hello</ai:prompt>
-  </ai:request>
+  <ai:model id="amin-chat-7b">
+    <ai:request>
+      <ai:prompt>hello</ai:prompt>
+    </ai:request>
+  </ai:model>
 TEN
     unlike($out, qr/<ai:update/, 'TR-MU.5: no music filter work without ai:music');
     unlike($out, qr/<bc:object[^>]*bc:kind="audio"/, 'TR-MU.5: no audio object');

@@ -15,13 +15,19 @@ sub element { 'request' }
 sub position { 'begin' }
 
 sub on_article_close ($self, $el) {
-    my $model = $self->_attr($el, 'model') // '';
+    # The binding is lexical: the model comes from the enclosing ai:model.
+    # Model already flagged an inject/denial for this request — skip it.
+    my $denied = eval { require Amin::AI::Model; Amin::AI::Model->current_denied } || 0;
+    return if $denied;
+
+    my $bind  = eval { require Amin::AI::Model; Amin::AI::Model->current_binding } // {};
+    my $model = $bind->{model} // '';
     unless (length $model) {
         $self->_emit_ai('result',
             kind      => 'error',
             rc        => RC_AI_MODEL_DENIED,
             exit_kind => 'ai_model_denied',
-            msg       => 'ai:request missing model attribute',
+            msg       => 'ai:request has no enclosing ai:model',
         );
         return;
     }

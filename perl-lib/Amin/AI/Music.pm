@@ -15,13 +15,15 @@ use constant RC_AI_PROVIDER_ERROR => -6147;
 # it composes into any profile; the gate splices it in only while an ai:music
 # element flows, and no dispatcher change is needed to add it.
 #
-#   <ai:provider id="deepinfra" api="deepinfra" base="…" key="…"/>
-#   <ai:model id="ace-step" provider="deepinfra" upstream="acestep-v15-xl-sft" kind="music"/>
-#   <ai:music ai:model="ace-step" ai:out="/ws/.waihanga/music/take.bin">
-#     <ai:style>lo-fi, warm tape hiss</ai:style>
-#     <ai:prompt>rain on a tin roof</ai:prompt>
-#     <ai:lyrics>…</ai:lyrics>
-#   </ai:music>
+#   <ai:provider id="deepinfra" api="deepinfra" base="…" key="…">
+#     <ai:model id="ace-step" upstream="acestep-v15-xl-sft" kind="music">
+#       <ai:music ai:out="/ws/.waihanga/music/take.bin">
+#         <ai:style>lo-fi, warm tape hiss</ai:style>
+#         <ai:prompt>rain on a tin roof</ai:prompt>
+#         <ai:lyrics>…</ai:lyrics>
+#       </ai:music>
+#     </ai:model>
+#   </ai:provider>
 #
 # The filter never branches on provider shape: it calls submit() then poll()s
 # until terminal(), emitting one ai:update per step so a UI can render
@@ -39,7 +41,9 @@ sub element  { 'music' }
 sub position { 'middle' }
 
 sub on_article_close ($self, $el) {
-    my $model = $self->_attr($el, 'model') // '';
+    # The binding is lexical: the model comes from the enclosing ai:model.
+    my $bind  = eval { require Amin::AI::Model; Amin::AI::Model->current_binding } // {};
+    my $model = $bind->{model} // '';
     return unless length $model;
 
     # Model/Gate already flagged an injection or denial upstream.
@@ -57,7 +61,6 @@ sub on_article_close ($self, $el) {
         return;
     }
 
-    my $bind = eval { require Amin::AI::Model; Amin::AI::Model->current_binding } // {};
     my $provider = eval {
         Amin::AI::Provider::Registry->for_binding({
             id       => $bind->{provider} // '',

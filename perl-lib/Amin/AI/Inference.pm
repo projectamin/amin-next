@@ -18,7 +18,9 @@ sub element { 'request' }
 sub position { 'middle' }
 
 sub on_article_close ($self, $el) {
-    my $model  = $self->_attr($el, 'model') // '';
+    # The binding is lexical: the model comes from the enclosing ai:model.
+    my $bind  = _binding() // {};
+    my $model = $bind->{model} // '';
     return unless length $model;
     my $denied = eval { require Amin::AI::Model; Amin::AI::Model->current_denied } || 0;
     if ($denied) {
@@ -38,7 +40,6 @@ sub on_article_close ($self, $el) {
     my $prompt_parts = $self->_child_vals('prompt');
     my $prompt = join("\n", @$prompt_parts);
     my $systems = $self->_child_vals('system');
-    my $bind = _binding() // {};
     my $will_hop = (!$UA || ($UA && $UA->{force_stream}))
         && length($bind->{base} // '')
         && length($bind->{key} // '');
