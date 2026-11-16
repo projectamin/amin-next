@@ -182,4 +182,57 @@ sub end_element ($self, $el) {
 
 sub on_article_close ($self, $el) { return; }
 
+# ── content-addressed storage (bitcache) ────────────────────────────────
+# Shared by every AI filter that yields an artifact (Embed, Music, …): stream
+# bytes to bctool (slab-backed) and return (hash, size).  With no bctool we
+# still hash in-process with BLAKE3 so the pipeline stays auditable.
+sub _bc_put ($self, $dataref) {
+    require Amin::ToolPaths;
+    my $bctool = Amin::ToolPaths::tool_bctool();
+    return _bc_blake3($dataref)
+        unless defined $bctool && length $bctool && _bc_cmd_exists($bctool);
+    my $slab = _bc_slab();
+    my ($out, $err) = ('', '');
+    my $in = $$dataref;
+    require IPC::Run;
+    my $h = IPC::Run::harness([$bctool, 'put', '--slab', $slab],
+        \$in, \$out, \$err, debug => 0);
+    eval { IPC::Run::start($h); IPC::Run::finish($h) };
+    my $rc = $? >> 8;
+    return _bc_blake3($dataref) if $@ || $rc != 0;
+    my (%kv, $line);
+    for my $ln (split /\n/, $out) {
+        ($line = $ln) =~ s/\r?\n?$//;
+        my ($k, $v) = split /\t/, $line, 2;
+        $kv{$k} = $v if defined $v;
+    }
+    return unless exists $kv{hash} && length($kv{hash}) == 64;
+    return ($kv{hash}, $kv{size} // length($$dataref));
+}
+
+sub _bc_slab {
+    state $default = do {
+        require File::Temp;
+        File::Temp::tempdir(CLEANUP => 1) . '/default.slab';
+    };
+    return $default;
+}
+
+sub _bc_blake3 ($dataref) {
+    require Digest::BLAKE3;
+    my $hasher = Digest::BLAKE3::->new();
+    $hasher->add($$dataref);
+    return ($hasher->hexdigest(), length($$dataref));
+}
+
+sub _bc_cmd_exists ($cmd) {
+    return 0 unless defined $cmd && length $cmd;
+    return 1 if -x $cmd;
+    return 1 if $cmd =~ m{/};
+    for my $d (split /:/, $ENV{PATH} // '/usr/bin:/bin') {
+        return 1 if -x "$d/$cmd";
+    }
+    return 0;
+}
+
 1;
