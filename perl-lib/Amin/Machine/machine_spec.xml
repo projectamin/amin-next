@@ -292,6 +292,7 @@
   <filter class="Amin::Sandbox" position="middle" element="sandbox" namespace="http://projectamin.org/ns/2026/" />
   <filter class="Amin::Net::Fabric" position="middle" namespace="http://projectamin.org/ns/2026/" />
   <filter class="Amin::AI::Inference" position="middle" element="request" namespace="http://projectamin.org/ns/ai/1" />
+  <filter class="Amin::AI::Music" position="middle" element="music" namespace="http://projectamin.org/ns/ai/1" />
   <filter class="Amin::AI::Embed" position="middle" element="embed" namespace="http://projectamin.org/ns/ai/1" />
   <filter class="Amin::AI::Memory" position="middle" element="query" namespace="http://projectamin.org/ns/ai/1" />
   <!-- sec: post-quantum E2EE (payload-neutral Double Ratchet).  Element-scoped
