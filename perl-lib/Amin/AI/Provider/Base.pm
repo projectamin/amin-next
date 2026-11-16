@@ -104,6 +104,104 @@ sub get_json ($self, $url) {
     return $self->_decode_result($res);
 }
 
+# ── streaming SSE hop ───────────────────────────────────────────────────
+# Endpoints that carry audio require stream:true (the chat-completions
+# audio modality): the reply arrives as SSE frames with the artifact
+# base64-split across choices[].delta.audio.data chunks.  This posts with
+# Accept: text/event-stream, stitches the deltas back together and returns
+# the same { ok => 1, obj => … } shape as post_json — the object is
+# message-shaped so extract_audio() finds the artifact.  A body that is
+# not SSE (the server ignored stream=true) is decoded as plain JSON.
+sub post_sse ($self, $url, $body, $opts = {}) {
+    my $payload = eval { JSON::PP->new->utf8->encode($body) };
+    return { ok => 0, msg => 'failed to encode provider request' } unless defined $payload;
+
+    # audio lands base64-split across frames; hand a caller the decoded byte
+    # count as it grows so it can render live progress mid-submit.
+    my $on_progress = $opts->{on_progress};
+    my $st = { buf => '', raw => '', text => '', audio => '', format => '', err => '' };
+    my $res = eval {
+        $self->ua->post($url, {
+            headers       => $self->auth_headers({ 'Accept' => 'text/event-stream' }),
+            content       => $payload,
+            data_callback => sub ($chunk, $r) {
+                $st->{raw} .= $chunk // '';
+                $self->_sse_accum($st, $chunk);
+                $on_progress->(int(length($st->{audio}) * 3 / 4)) if $on_progress;
+            },
+        });
+    };
+    return { ok => 0, msg => _clean($@ // 'provider request failed', $self->{key}) } if !$res || $@;
+
+    $self->_sse_accum($st, "\n") if length $st->{buf};
+    my $raw = $res->{content} // '';
+    $raw = $st->{raw} if !length($raw) && length($st->{raw});
+
+    # a non-SSE body means the server ignored stream=true; fall back to
+    # the sync shape (and surface its error message).
+    if (!length $st->{text} && !length $st->{audio} && length $raw) {
+        my $obj = eval { JSON::PP->new->utf8->decode($raw) };
+        if (ref $obj eq 'HASH') {
+            return $self->_sse_error($obj, $res) if !$res->{success};
+            return { ok => 1, obj => $obj };
+        }
+    }
+    return $self->_sse_error(undef, $res) if !$res->{success};
+
+    my %msg = (content => $st->{text});
+    if (length $st->{audio}) {
+        $msg{audio} = { data => $st->{audio} };
+        $msg{audio}{mime} = _mime_for($st->{format}) if length $st->{format};
+    }
+    return { ok => 1, obj => { choices => [ { message => \%msg } ] } };
+}
+
+sub _sse_error ($self, $obj, $res) {
+    my $msg = $obj && ref $obj->{error} eq 'HASH' ? $obj->{error}{message} : undef;
+    $msg //= $res->{reason} // 'provider request failed';
+    $msg = "HTTP $res->{status}: $msg" if $res->{status};
+    return { ok => 0, msg => _clean($msg, $self->{key}), status => $res->{status} };
+}
+
+# pull text + audio deltas out of each data: frame; tolerant of unknown
+# frames.  audio arrives base64-split across frames — concatenate.
+sub _sse_accum ($self, $st, $chunk) {
+    $st->{buf} .= $chunk // '';
+    while ($st->{buf} =~ s/^([^\n]*)\n//) {
+        my $line = $1;
+        $line =~ s/\r$//;
+        next unless $line =~ s/^data:\s?//;
+        next if $line eq '[DONE]';
+        my $obj = eval { JSON::PP->new->utf8->decode($line) };
+        next unless ref $obj eq 'HASH';
+        if (ref $obj->{error} eq 'HASH') {
+            $st->{err} ||= $obj->{error}{message};
+            next;
+        }
+        my $ch = ref $obj->{choices} eq 'ARRAY' ? $obj->{choices}[0] : undef;
+        next unless ref $ch eq 'HASH';
+        my $d = ref $ch->{delta} eq 'HASH'   ? $ch->{delta}
+              : ref $ch->{message} eq 'HASH' ? $ch->{message} : {};
+        $st->{text} .= $d->{content} if defined $d->{content} && !ref $d->{content};
+        if (ref $d->{audio} eq 'HASH') {
+            my $a = $d->{audio};
+            $st->{audio} .= $a->{data} if defined $a->{data} && !ref $a->{data};
+            $st->{format} = $a->{format}
+                if defined $a->{format} && !ref $a->{format} && length $a->{format};
+        }
+    }
+}
+
+my %MIME = (
+    mp3   => 'audio/mpeg', wav => 'audio/wav', flac => 'audio/flac',
+    opus  => 'audio/ogg',  aac => 'audio/aac', pcm16 => 'audio/L16',
+);
+
+sub _mime_for ($fmt) {
+    $fmt = lc($fmt // '');
+    return length $fmt ? ($MIME{$fmt} // "audio/$fmt") : '';
+}
+
 sub _decode_result ($self, $res) {
     my $body = $res->{content} // '';
     my $obj  = eval { JSON::PP->new->utf8->decode($body) };

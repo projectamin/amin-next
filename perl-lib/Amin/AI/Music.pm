@@ -84,6 +84,17 @@ sub on_article_close ($self, $el) {
 
     my $req = $self->_request($el, $model, $bind);
 
+    # a streaming hop has no poll step: it hands us the received byte count as
+    # the audio lands.  Throttle to ~2/s (or every 32 KB) so the SAX stream and
+    # the UI strip stay readable while the track is still being made.
+    my ($last_t, $last_b) = (0, -1);
+    $req->{on_progress} = sub ($bytes) {
+        my $now = Time::HiRes::time();
+        return if $now - $last_t < 0.4 && $bytes - $last_b < 32768;
+        ($last_t, $last_b) = ($now, $bytes);
+        $self->_emit_stream_update($model, $bytes);
+    };
+
     my $job = eval { $provider->submit($req) };
     if (ref($job) ne 'HASH') {
         $self->_error($model, 'provider submit failed');
@@ -144,6 +155,20 @@ sub _emit_update ($self, $job, $model, $phase) {
         state    => $job->{state} // 'running',
         progress => $job->{progress} // 0,
         handle   => $job->{handle} // '',
+    );
+    return;
+}
+
+# A streaming hop reports received bytes mid-submit.  No total size exists, so
+# there is no percent — the UI renders the byte count as live progress.
+sub _emit_stream_update ($self, $model, $bytes) {
+    $self->_emit_ai('update',
+        kind     => 'progress',
+        phase    => 'stream',
+        model    => $model,
+        state    => 'running',
+        progress => 0,
+        bytes    => $bytes,
     );
     return;
 }

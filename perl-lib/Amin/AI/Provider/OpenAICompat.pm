@@ -2,10 +2,14 @@ package Amin::AI::Provider::OpenAICompat;
 use v5.38; use warnings; use utf8; use experimental 'signatures';
 use parent 'Amin::AI::Provider::Base';
 
+use JSON::PP;
+
 # ═══════════════════════════════════════════════════════════════════════════
-# Sync chat-completions hop that can return an artifact.  OpenRouter's music
+# Chat-completions hop that can return an artifact.  OpenRouter's music
 # models ride this shape: POST /chat/completions with modalities => [text,
-# audio], then the audio comes back base64 in the message.
+# audio].  Text-only replies come back as one JSON body; an audio reply
+# requires stream:true and arrives as SSE frames with the audio base64-split
+# across choices[].delta.audio.data, so the hop switches to post_sse().
 # ═══════════════════════════════════════════════════════════════════════════
 
 sub submit ($self, $req) {
@@ -21,10 +25,25 @@ sub submit ($self, $req) {
         messages => \@msgs,
     );
     my $mods = $req->{modalities};
-    $body{modalities} = $mods if ref $mods eq 'ARRAY' && @$mods;
-    $body{audio} = $req->{audio} if ref $req->{audio} eq 'HASH' && %{ $req->{audio} };
+    my $wants_audio = 0;
+    if (ref $mods eq 'ARRAY') {
+        $body{modalities} = $mods if @$mods;
+        $wants_audio = 1 if grep { $_ eq 'audio' } @$mods;
+    }
+    if (ref $req->{audio} eq 'HASH' && %{ $req->{audio} }) {
+        $body{audio} = $req->{audio};
+        $wants_audio = 1;
+    }
 
-    my $r = $self->post_json($url, \%body);
+    # audio output requires stream:true; the artifact rides the SSE frames.
+    my $r;
+    if ($wants_audio || $req->{stream}) {
+        $body{stream} = JSON::PP::true;
+        $r = $self->post_sse($url, \%body, { on_progress => $req->{on_progress} });
+    }
+    else {
+        $r = $self->post_json($url, \%body);
+    }
     return { state => 'error', msg => $r->{msg} // 'provider request failed' } unless $r->{ok};
 
     my ($bytes, $mime) = $self->extract_audio($r->{obj});

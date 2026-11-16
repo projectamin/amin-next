@@ -17,6 +17,12 @@ package FakeProviderUA {
     sub post ($self, $url, $opts = {}) {
         $self->{last} = { method => 'POST', url => $url, %$opts };
         return $self->{fail} if $self->{fail};
+        if (my $cb = $opts->{data_callback}) {
+            my @chunks = ref $self->{sse} eq 'ARRAY' ? @{ $self->{sse} }
+                                                   : ($self->{sse} // '');
+            $cb->($_, {}) for grep { length } @chunks;
+            return { success => 1, status => 200, reason => 'OK', content => '' };
+        }
         return { success => 1, status => 200, reason => 'OK',
                  content => $self->{payload} // '' };
     }
@@ -151,7 +157,47 @@ TEN
         'TR-MU.4: deepinfra POST v1/inference/<model>');
 }
 
-# ── TR-MU.5: a profile with no ai:music element is untouched ────────────
+# ── TR-MU.5: audio hops require stream:true and reassemble the base64
+#    audio deltas from the SSE frames (OpenRouter / compat shape) ───────
+{
+    require MIME::Base64;
+    my $audio = 'waihanga-audio-payload';
+    my $b64   = MIME::Base64::encode_base64($audio, '');   # no newline
+    my ($p1, $p2) = (substr($b64, 0, 6), substr($b64, 6)); # split mid-stream
+    my $ua = FakeProviderUA->new(sse => [
+        qq{data: {"choices":[{"delta":{"content":"ok"}}]}\n\n},
+        qq{data: {"choices":[{"delta":{"audio":{"data":"$p1","format":"mp3"}}}]}\n\n},
+        qq{data: {"choices":[{"delta":{"audio":{"data":"$p2"}}}]}\n\n},
+        qq{data: [DONE]\n\n},
+    ]);
+    local $Amin::AI::Provider::Base::UA = $ua;
+    my $out = run_ai(<<'TEN');
+  <ai:provider id="openrouter" api="openrouter" base="https://openrouter.ai/api/v1" key="sk-or-test">
+    <ai:model id="amin-music" upstream="google/lyria-3-pro-preview" kind="music">
+      <ai:music>
+        <ai:prompt>rain on a tin roof</ai:prompt>
+      </ai:music>
+    </ai:model>
+  </ai:provider>
+TEN
+    like($ua->{last}{url}, qr{/chat/completions$},
+        'TR-MU.5: compat hop POSTs /chat/completions');
+    like($ua->{last}{content}, qr/"stream":true/,
+        'TR-MU.5: audio hop sets stream:true');
+    like($ua->{last}{content}, qr/"modalities":\["text","audio"\]/,
+        'TR-MU.5: openrouter asks for the audio modality');
+    like($ua->{last}{headers}{Accept}, qr{text/event-stream},
+        'TR-MU.5: Accept is text/event-stream');
+    like($out, qr/<bc:object[^>]*bc:kind="audio"/,
+        'TR-MU.5: reassembled audio becomes a bc:object');
+    like($out, qr/<bc:object[^>]*bc:size="@{[length $audio]}"/,
+        'TR-MU.5: audio deltas concatenate back to the original bytes');
+    like($out, qr/<bc:object[^>]*bc:mime="audio\/mpeg"/,
+        'TR-MU.5: mp3 format maps to audio/mpeg');
+    unlike($out, qr/<ai:result[^>]*ai:kind="error"/, 'TR-MU.5: no error result');
+}
+
+# ── TR-MU.6: a profile with no ai:music element is untouched ────────────
 {
     my $out = run_ai(<<'TEN');
   <ai:model id="amin-chat-7b">
@@ -160,9 +206,9 @@ TEN
     </ai:request>
   </ai:model>
 TEN
-    unlike($out, qr/<ai:update/, 'TR-MU.5: no music filter work without ai:music');
-    unlike($out, qr/<bc:object[^>]*bc:kind="audio"/, 'TR-MU.5: no audio object');
-    like($out, qr/\[stub:amin-chat-7b\]/, 'TR-MU.5: unrelated chat path unchanged');
+    unlike($out, qr/<ai:update/, 'TR-MU.6: no music filter work without ai:music');
+    unlike($out, qr/<bc:object[^>]*bc:kind="audio"/, 'TR-MU.6: no audio object');
+    like($out, qr/\[stub:amin-chat-7b\]/, 'TR-MU.6: unrelated chat path unchanged');
 }
 
 done_testing();
