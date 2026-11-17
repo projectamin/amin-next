@@ -19,6 +19,18 @@ shims   = ["perl", "cpanm", "prove"]
 "apt:libxml2-dev"     = { version = "latest", os = "linux" }
 "apt:zlib1g-dev"      = { version = "latest", os = "linux" }
 "apt:liblzma-dev"     = { version = "latest", os = "linux" }
+# NOTE: OpenSSL is deliberately NOT declared here. mise's system-package
+# managers (apt/apk/dnf/pacman/zypper/brew/…) have no FreeBSD `pkg` backend, so
+# a per-OS list can never cover every host, and linking Net::SSLeay against a
+# system libssl puts the link outside the project. The bootstrap task builds
+# OpenSSL into ./local alongside libblake3/liboqs instead.
+#
+# macOS is the one place mise must still supply a base toolchain: it ships no
+# OpenSSL headers (LibreSSL's are not in the SDK), and libblake3/liboqs are
+# built with cmake + pkg-config. Homebrew's formula is `pkgconf` — `pkg-config`
+# is only a brew CLI alias, and is not in the API mise resolves against.
+"brew:cmake"          = { version = "latest", os = "macos" }
+"brew:pkgconf"        = { version = "latest", os = "macos" }
 
 [env]
 PATH    = "${PWD}/local/bin:${PWD}/bin:${PWD}/target/release:${PWD}/target/debug:${PATH}"
@@ -67,6 +79,38 @@ mkdir -p "$PREFIX" "${PERL_CPANM_HOME:-$(pwd)/.cache/cpanm}"
 if ! mise bootstrap packages status --missing; then
   echo "[+] Installing system build packages from [bootstrap.packages]..."
   mise bootstrap packages apply --yes --update
+fi
+
+# ── Preflight: host build tools mise cannot provision ─────────────────────
+# [bootstrap.packages] has Linux (apt/apk/…) and macOS (brew) backends but no
+# FreeBSD `pkg` backend, so on FreeBSD cmake/pkg-config/GNU make are host
+# prerequisites. Fail here with the exact install line instead of a confusing
+# mid-build error ("cmake: not found", or BSD make choking on the OpenSSL and
+# CMake-generated Makefiles, both of which require GNU make).
+missing=""
+for tool in cmake pkg-config curl tar; do
+  command -v "$tool" >/dev/null 2>&1 || missing="$missing $tool"
+done
+gnu_make=0
+make --version 2>/dev/null | grep -q 'GNU Make' && gnu_make=1
+if [ -n "$missing" ] || [ "$gnu_make" -eq 0 ]; then
+  echo "[!] bootstrap preflight: host build toolchain incomplete" >&2
+  if [ -n "$missing" ]; then
+    echo "    missing:$missing" >&2
+  fi
+  if [ "$gnu_make" -eq 0 ]; then
+    echo "    GNU make not found (the tasks call 'make' for the OpenSSL + CMake builds)" >&2
+  fi
+  case "$(uname -s)" in
+    FreeBSD)
+      echo "    fix: pkg install -y cmake pkgconf gmake" >&2
+      echo "    (and make 'make' resolve to GNU make, e.g. a PATH shim to gmake)" >&2
+      ;;
+    *)
+      echo "    fix: install these with your system package manager" >&2
+      ;;
+  esac
+  exit 1
 fi
 
 # ── Build & install libblake3 into $PREFIX so Digest::BLAKE3 XS can link ──
@@ -119,6 +163,39 @@ if [ ! -f "$PREFIX/lib/liboqs.a" ] && [ ! -f "$PREFIX/lib/liboqs.dylib" ]; then
   # the liboqs we just built (t/29 cross-verifies against the Rust signer).
   cpanm --notest --force --reinstall --local-lib-contained "$PREFIX" Crypt::Liboqs::Sign
 fi
+
+# ── Build & install OpenSSL (static) into $PREFIX so Net::SSLeay XS can link ──
+# Net::SSLeay is XS and compiles/links against OpenSSL (LibreSSL is not enough
+# on macOS: its headers are not in the SDK). This is built here rather than
+# declared in [bootstrap.packages] because mise has no FreeBSD `pkg` manager —
+# a per-OS list cannot cover every host — and linking a system libssl would put
+# the link outside the project. Same pattern as libblake3/liboqs above.
+#
+# Built static (no-shared) deliberately: a shared libssl.so.3 collides with the
+# distro soname, so Net::SSLeay.so would silently bind the host's OpenSSL at
+# runtime unless an rpath/LD_LIBRARY_PATH existed. Static keeps the link inside
+# the project with nothing for the loader (or mise) to resolve, and makes the
+# $PREFIX/bin/openssl we install self-contained too.
+# NOTE: liboqs above is built with -DOQS_USE_OPENSSL=OFF so it does not pick
+# this up; only Net::SSLeay / IO::Socket::SSL link against it.
+if [ ! -f "$PREFIX/lib/libssl.a" ]; then
+  echo "[+] Building OpenSSL from source into $PREFIX (no system package needed)..."
+  SSL_SRC="$(pwd)/.cache/openssl-src"
+  SSL_BUILD="$(pwd)/.cache/openssl-build"
+  mkdir -p "$SSL_SRC" "$SSL_BUILD" "$PREFIX"
+  # 3.5.x = current LTS line; Net::SSLeay 1.96 supports OpenSSL 3.x.
+  curl -sSL https://github.com/openssl/openssl/archive/refs/tags/openssl-3.5.9.tar.gz \
+    | tar -xz -C "$SSL_SRC" --strip-components=1
+  # --libdir=lib: OpenSSL defaults to lib64 on 64-bit Linux, but the project
+  # search paths (LDFLAGS/CPPFLAGS/PKG_CONFIG_PATH above) and cpanm expect lib.
+  # -fPIC: static objects get linked into Net::SSLeay.so, so they must be
+  # position-independent; install_sw skips the doc/man install.
+  (cd "$SSL_BUILD" && "$SSL_SRC/Configure" --prefix="$PREFIX" --libdir=lib no-shared no-tests -fPIC \
+    && make -j$(sysctl -n hw.ncpu 2>/dev/null || echo 4) && make install_sw)
+  echo "[+] OpenSSL installed into $PREFIX"
+fi
+# Net::SSLeay's Makefile.PL honours OPENSSL_PREFIX to find headers + libraries.
+export OPENSSL_PREFIX="$PREFIX"
 
 echo "[+] Installing runtime Perl deps (latest stable, --cpanfile no pins)..."
 cpanm --notest --local-lib-contained "$PREFIX"  \

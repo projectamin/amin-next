@@ -33,6 +33,8 @@ jobs:
             .cache/blake3-build
             .cache/liboqs-src
             .cache/liboqs-build
+            .cache/openssl-src
+            .cache/openssl-build
             .cache/cpanm
           key: bootstrap-${{ runner.os }}-${{ hashFiles('.mise.toml', 'cpanfile', 'perl-lib/Amin/MakeMakerLocalLib.pm') }}
           restore-keys: |
