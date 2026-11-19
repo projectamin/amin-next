@@ -153,7 +153,9 @@ sub post_sse ($self, $url, $body, $opts = {}) {
         $msg{audio} = { data => $st->{audio} };
         $msg{audio}{mime} = _mime_for($st->{format}) if length $st->{format};
     }
-    return { ok => 1, obj => { choices => [ { message => \%msg } ] } };
+    # A mid-stream provider error is worth surfacing even when the transport
+    # itself succeeded: the caller can then report "why", not just "no audio".
+    return { ok => 1, obj => { choices => [ { message => \%msg } ] }, err => $st->{err} };
 }
 
 sub _sse_error ($self, $obj, $res) {

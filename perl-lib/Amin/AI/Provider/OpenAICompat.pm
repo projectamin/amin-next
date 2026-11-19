@@ -47,7 +47,20 @@ sub submit ($self, $req) {
     return { state => 'error', msg => $r->{msg} // 'provider request failed' } unless $r->{ok};
 
     my ($bytes, $mime) = $self->extract_audio($r->{obj});
-    return { state => 'error', msg => 'provider returned no audio' } unless length($bytes // '');
+    unless (length($bytes // '')) {
+        # The hop succeeded but carried no artifact.  Say why when we can: a
+        # mid-stream error frame, or a text-only reply the model returned
+        # instead of audio (the distinct failure the old wording hid).
+        my $why = $r->{err} // '';
+        if (!length $why && $wants_audio) {
+            my $said = eval { $r->{obj}{choices}[0]{message}{content} } // '';
+            $said =~ s/\s+/ /g;
+            $why = 'provider returned no audio'
+                 . (length $said ? " (reply text only: " . substr($said, 0, 160) . ')' : '');
+        }
+        $why = 'provider returned no audio' unless length $why;
+        return { state => 'error', msg => $why };
+    }
     return {
         state    => 'done',
         audio    => $bytes,

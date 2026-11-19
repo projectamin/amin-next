@@ -95,28 +95,22 @@ sub on_article_close ($self, $el) {
         $self->_emit_stream_update($model, $bytes);
     };
 
-    my $job = eval { $provider->submit($req) };
+    my $job = $self->_turn($provider, $req, $model);
     if (ref($job) ne 'HASH') {
         $self->_error($model, 'provider submit failed');
         return;
     }
-    $self->_emit_update($job, $model, 'submit');
 
-    my $polls = 0;
-    while (!$provider->terminal($job)) {
-        if ($polls++ >= MAX_POLLS) {
-            $self->_error($model, 'provider did not finish (poll budget exhausted)');
+    # A music model sometimes answers with prose instead of the track
+    # (finish_reason stop, no audio frame).  The request itself was fine, so
+    # one more hop usually lands the artifact; a genuine failure still fails.
+    if (($job->{state} // '') eq 'error'
+        && ($job->{msg} // '') =~ /no audio \(reply text only/) {
+        $job = $self->_turn($provider, $req, $model);
+        if (ref($job) ne 'HASH') {
+            $self->_error($model, 'provider submit failed');
             return;
         }
-        my $delay = eval { $provider->poll_delay } // 0;
-        Time::HiRes::sleep($delay) if $delay && $delay > 0;
-        my $next = eval { $provider->poll($job) };
-        if (ref($next) ne 'HASH') {
-            $self->_error($model, 'provider poll failed');
-            return;
-        }
-        $job = $next;
-        $self->_emit_update($job, $model, 'poll');
     }
 
     if (($job->{state} // '') ne 'done') {
@@ -130,6 +124,29 @@ sub on_article_close ($self, $el) {
 
     $self->_emit_artifact($model, $job, $self->_attr($el, 'out'));
     return;
+}
+
+# One submit + poll cycle.  Returns the terminal job hash, or undef when the
+# provider answered with something that is not a job at all.
+sub _turn ($self, $provider, $req, $model) {
+    my $job = eval { $provider->submit($req) };
+    return undef if ref($job) ne 'HASH';
+    $self->_emit_update($job, $model, 'submit');
+
+    my $polls = 0;
+    while (!$provider->terminal($job)) {
+        if ($polls++ >= MAX_POLLS) {
+            return { state => 'error', msg => 'provider did not finish (poll budget exhausted)' };
+        }
+        my $delay = eval { $provider->poll_delay } // 0;
+        Time::HiRes::sleep($delay) if $delay && $delay > 0;
+        my $next = eval { $provider->poll($job) };
+        return { state => 'error', msg => 'provider poll failed' } if ref($next) ne 'HASH';
+        $job = $next;
+        $self->_emit_update($job, $model, 'poll');
+    }
+
+    return $job;
 }
 
 # Gather the request from the ai: children plus the resolved binding.
