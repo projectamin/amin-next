@@ -37,6 +37,8 @@ requires 'XML::LibXML::SAX';
 requires 'XML::Filter::XInclude';
 requires 'Safe';
 requires 'HTTP::Tiny';
+requires 'URI';                # amin:// content refs (Amin::Bitcache::Reference)
+requires 'String::ShellQuote'; # shell-safe arg rendering (Amin::Elt)
 requires 'Net::SSLeay';        # HTTPS for Inference hops
 requires 'IO::Socket::SSL';
 requires 'Mozilla::CA';

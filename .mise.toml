@@ -88,9 +88,21 @@ fi
 # mid-build error ("cmake: not found", or BSD make choking on the OpenSSL and
 # CMake-generated Makefiles, both of which require GNU make).
 missing=""
-for tool in cmake pkg-config curl tar; do
+for tool in cmake curl tar; do
   command -v "$tool" >/dev/null 2>&1 || missing="$missing $tool"
 done
+# pkg-config: Homebrew ships this as `pkgconf` (see [bootstrap.packages] above —
+# `pkg-config` is only a brew CLI alias, not an installed binary). Accept either
+# name, and expose it as `pkg-config` in $PREFIX/bin (already on PATH) so CMake's
+# FindPkgConfig and the liboqs / Crypt::Liboqs::Sign builds resolve it.
+if command -v pkg-config >/dev/null 2>&1; then
+  :
+elif command -v pkgconf >/dev/null 2>&1; then
+  mkdir -p "$PREFIX/bin"
+  ln -sf "$(command -v pkgconf)" "$PREFIX/bin/pkg-config"
+else
+  missing="$missing pkg-config"
+fi
 gnu_make=0
 make --version 2>/dev/null | grep -q 'GNU Make' && gnu_make=1
 if [ -n "$missing" ] || [ "$gnu_make" -eq 0 ]; then
