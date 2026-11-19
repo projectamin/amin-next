@@ -66,6 +66,9 @@ sub _cont ($self, $k, $pad, $pad1, $a) {
     return { head => "$pad" . "Column" }               if $k eq 'table';
     return { head => "$pad" . "Row" }                  if $k eq 'tr';
     return { head => "$pad" . "Box" }                  if $k eq 'cell';
+    # a streaming update fragment has no Compose identity of its own: its
+    # content is simply the view it was authored to look like
+    return { head => "$pad" . "Box" }                  if $k eq 'swap';
     return undef;
 }
 
@@ -77,6 +80,8 @@ sub _leaf ($self, $k, $pad, $a, $text) {
     my $points = $self->attr($a, 'points');
 
     return $pad . "Text(" . $self->lit($text) . ")"            if $k eq 'text';
+    return $pad . "Text(" . $self->lit($text) . ") // ui:markdown"
+                                                               if $k eq 'markdown';
     return $pad . "Text(" . $self->lit($title) . ") // ui:label" if $k eq 'label';
     return $pad . "Badge { Text(" . $self->lit($text) . ") }"  if $k eq 'badge';
     return $pad . "CircularProgressIndicator()"                if $k eq 'progress';

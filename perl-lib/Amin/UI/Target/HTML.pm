@@ -43,12 +43,185 @@ my %TAG = (
 # Leaf kinds → the tag whose content is the element's text.
 my %LEAF = (
     text      => ['p'],
+    markdown  => ['div', class => 'md', 'data-axa-md' => '1'],
     label     => ['span', class => 'label'],
     badge     => ['span', class => 'badge'],
     progress  => ['progress'],
     sparkline => ['canvas', class => 'sparkline'],
     style     => ['style'],
 );
+
+# Client half of ui:swap and ui:markdown.  A streamed document is parsed chunk
+# by chunk, and HTML can only append: an element that already left the socket
+# cannot be revised by markup alone.  The target therefore renders each ui:swap
+# as an inert <template data-axa-swap="ID" data-axa-mode="…">.  The parser can
+# pause inside that template, so a swap is applied only once the parser has
+# moved on (a sibling appeared): at that point its content is complete.  A sweep
+# on DOMContentLoaded/load covers the last one.  The same runtime renders
+# ui:markdown leaves (data-axa-md) and serves the md / md-append swap modes, so
+# a streaming source can be re-rendered in place as its blocks complete.
+my $SWAP_RUNTIME = <<'JS';
+(function(){
+function tx(c){
+var t;
+if(c.children.length===1){
+if(c.firstElementChild.children.length===0){t=c.firstElementChild.textContent}
+}
+if(t==null)t=c.textContent;
+if(t.charAt(0)==='\n')t=t.slice(1);
+return t
+}
+function mk(t,g){var e=document.createElement(t);if(g)e.className=g;return e}
+function fill(el,ns){for(var i=0;ns.length>i;i++)el.appendChild(ns[i]);return el}
+function inl(s){
+var out=[],i=0,n=s.length;
+while(n>i){
+var r=s.slice(i),m,el,run;
+m=/^`([^`]+)`/.exec(r);
+if(m){el=mk('code');el.textContent=m[1];out.push(el);i+=m[0].length;continue}
+m=/^\*\*([^*]+)\*\*/.exec(r);
+if(!m)m=/^__([^_]+)__/.exec(r);
+if(m){el=mk('strong');fill(el,inl(m[1]));out.push(el);i+=m[0].length;continue}
+m=/^\*([^*\s][^*]*)\*/.exec(r);
+if(!m)m=/^_([^_\s][^_]*)_/.exec(r);
+if(m){el=mk('em');fill(el,inl(m[1]));out.push(el);i+=m[0].length;continue}
+m=/^\[([^\]]+)\]\(([^)\s]+)\)/.exec(r);
+if(m){
+if(/^(https?:\/\/|mailto:|\/)/.test(m[2])){
+el=mk('a');el.setAttribute('href',m[2]);el.setAttribute('rel','noreferrer noopener');el.setAttribute('target','_blank');fill(el,inl(m[1]));out.push(el);i+=m[0].length;continue
+}
+}
+m=/^[^`*_\[]+/.exec(r);
+run=m?m[0]:'';
+if(run.length){
+var last=out.length?out[out.length-1]:null;
+if(!last){out.push(document.createTextNode(run))}
+else if(last.nodeType===3){last.nodeValue+=run}
+else{out.push(document.createTextNode(run))}
+i+=run.length;continue}
+out.push(document.createTextNode(r.charAt(0)));i++;
+}
+return out
+}
+function mdb(src){
+var f=document.createDocumentFragment(),ls=src.split(/\r?\n/),i=0,n=ls.length,m;
+function blank(s){return /^\s*$/.test(s)}
+function take(dst,g){while(g.firstChild)dst.appendChild(g.firstChild);return dst}
+while(n>i){
+var ln=ls[i];
+if(blank(ln)){i++;continue}
+m=/^\s{0,3}(```+|~~~+)\s*([\w+.-]*)\s*$/.exec(ln);
+if(m){
+var buf=[],j=i+1;
+while(n>j){if(/^\s{0,3}(```+|~~~+)\s*$/.test(ls[j]))break;buf.push(ls[j]);j++}
+if(n>j)j++;
+var pre=mk('pre'),co=mk('code');
+if(m[2])co.className='lang-'+m[2];
+co.textContent=buf.join('\n');pre.appendChild(co);f.appendChild(pre);i=j;continue}
+if(/^\s{0,3}(-{3,}|\*{3,}|_{3,})\s*$/.test(ln)){f.appendChild(mk('hr'));i++;continue}
+m=/^\s{0,3}(#{1,6})\s+(.*?)\s*#*\s*$/.exec(ln);
+if(m){f.appendChild(fill(mk('h'+m[1].length),inl(m[2])));i++;continue}
+if(/^\s{0,3}>/.test(ln)){
+var bq=mk('blockquote'),q=[];
+while(n>i){
+if(!/^\s{0,3}>/.test(ls[i]))break;
+q.push(ls[i].replace(/^\s{0,3}> ?/,''));i++
+}
+f.appendChild(take(bq,mdb(q.join('\n'))));continue}
+m=/^\s{0,3}[-*+]\s+(.*)$/.exec(ln);
+if(m){
+var ul=mk('ul');
+while(n>i){
+m=/^\s{0,3}[-*+]\s+(.*)$/.exec(ls[i]);
+if(!m)break;
+ul.appendChild(fill(mk('li'),inl(m[1])));i++
+}
+f.appendChild(ul);continue}
+m=/^\s{0,3}\d+[.)]\s+(.*)$/.exec(ln);
+if(m){
+var ol=mk('ol');
+while(n>i){
+m=/^\s{0,3}\d+[.)]\s+(.*)$/.exec(ls[i]);
+if(!m)break;
+ol.appendChild(fill(mk('li'),inl(m[1])));i++
+}
+f.appendChild(ol);continue}
+var parts=[];
+while(n>i){
+var lp=ls[i];
+if(blank(lp))break;
+if(/^\s{0,3}(#{1,6}\s|>|```|~~~|[-*+]\s|\d+[.)]\s)/.test(lp))break;
+if(/^\s{0,3}(-{3,}|\*{3,}|_{3,})\s*$/.test(lp))break;
+parts.push(lp.replace(/^\s+/,''));i++
+}
+if(parts.length){f.appendChild(fill(mk('p'),inl(parts.join(' '))))}
+else{f.appendChild(fill(mk('p'),inl(ln)));i++}
+}
+return f
+}
+function mdRun(el){
+var src=el._axaMd==null?'':el._axaMd;
+while(el.firstChild)el.removeChild(el.firstChild);
+el.appendChild(mdb(src))
+}
+function md1(el){
+if(el.getAttribute('data-axa-md')!=='1')return;
+el.setAttribute('data-axa-md','2');
+el._axaMd=el.textContent;
+mdRun(el)
+}
+function mdScan(n){
+if(!n)return;
+if(n.nodeType!==1)return;
+md1(n);
+if(n.querySelectorAll)Array.prototype.forEach.call(n.querySelectorAll('[data-axa-md="1"]'),md1)
+}
+function ap(t){
+if(t.getAttribute('data-axa-done'))return;
+var id=t.getAttribute('data-axa-swap'),el=id?document.getElementById(id):null;
+if(!el)return;
+t.setAttribute('data-axa-done','1');
+var m=t.getAttribute('data-axa-mode')||'replace',c=t.content;
+if(m==='text'){el.textContent=tx(c)}
+else if(m==='md'){el.setAttribute('data-axa-md','2');el._axaMd=tx(c);mdRun(el)}
+else if(m==='md-append'){el.setAttribute('data-axa-md','2');el._axaMd=(el._axaMd==null?'':el._axaMd)+tx(c);mdRun(el)}
+else if(m==='text-append'){el.appendChild(document.createTextNode(tx(c)))}
+else if(m==='append'){el.appendChild(c.cloneNode(true))}
+else if(m==='prepend'){el.insertBefore(c.cloneNode(true),el.firstChild)}
+else if(el.parentNode){el.parentNode.replaceChild(c.cloneNode(true),el)}
+if(t.parentNode)t.parentNode.removeChild(t);
+if(m==='append'||m==='prepend'||m==='text-append'||m==='md-append'){
+if(el.scrollIntoView)el.scrollIntoView({block:'nearest'})
+}
+}
+function sc(n){
+mdScan(n);
+var p=n.previousSibling;
+if(!p)return;
+if(p.nodeType!==1)return;
+if(p.tagName!=='TEMPLATE')return;
+if(p.getAttribute('data-axa-swap')!==null)ap(p)
+}
+function sw(){
+Array.prototype.forEach.call(document.querySelectorAll('template[data-axa-swap]'),ap);
+Array.prototype.forEach.call(document.querySelectorAll('[data-axa-md="1"]'),md1)
+}
+new MutationObserver(function(ms){
+Array.prototype.forEach.call(ms,function(m){
+Array.prototype.forEach.call(m.addedNodes,sc)
+})
+}).observe(document.documentElement,{childList:true,subtree:true});
+if(document.readyState==='loading'){
+document.addEventListener('DOMContentLoaded',sw)
+}else{sw()}
+window.addEventListener('load',sw);
+})();
+JS
+
+# The generic id attribute: any ui: element can be addressed by later
+# fragments (a swap target, an anchor), so its id rides through the same
+# escaping as every other attribute.
+sub _id ($self, $id) { length($id // '') ? (id => $id) : () }
 
 # open: push a frame carrying the tags to close, then emit the opening events.
 # A void element (img, input) closes itself and has no content.
@@ -59,8 +232,21 @@ sub open ($self, $k, $a, $h) {
     return $self unless $h;
 
     my $title = $self->attr($a, 'title');
+    my @id    = $self->_id($self->attr($a, 'id'));
 
-    if ($k eq 'app') {
+    if ($k eq 'swap') {
+        my $for  = $self->attr($a, 'for');
+        my $mode = $self->attr($a, 'mode');
+        $mode = 'replace' unless length $mode;
+        unless ($self->{_swap_runtime}) {
+            $self->{_swap_runtime} = 1;
+            $self->_inline($h, 'script', $SWAP_RUNTIME);
+        }
+        $self->_start($h, 'template',
+            'data-axa-swap' => $for, 'data-axa-mode' => $mode);
+        $f->{closes} = ['template'];
+    }
+    elsif ($k eq 'app') {
         $self->_start($h, 'html', lang => 'en');
         $self->_start($h, 'head');
         $self->_inline($h, 'title', $title);
@@ -69,41 +255,41 @@ sub open ($self, $k, $a, $h) {
         $f->{closes} = ['body', 'html'];
     }
     elsif ($k eq 'section') {
-        $self->_start($h, 'section');
+        $self->_start($h, 'section', @id);
         $self->_inline($h, 'h2', $title);
         $f->{closes} = ['section'];
     }
     elsif ($k eq 'navigate') {
-        $self->_start($h, 'a', href => $self->attr($a, 'to'));
+        $self->_start($h, 'a', href => $self->attr($a, 'to'), @id);
         $self->_text($h, $title);          # the link label
         $f->{closes} = ['a'];
     }
     elsif ($k eq 'button') {
-        $self->_start($h, 'button');
+        $self->_start($h, 'button', @id);
         $self->_text($h, $title);          # the button label
         $f->{closes} = ['button'];
     }
     elsif ($k eq 'image') {
-        $self->_start($h, 'img', src => $title, alt => $title);
+        $self->_start($h, 'img', src => $title, alt => $title, @id);
     }
     elsif ($k eq 'asyncimage') {
         my $url = $self->attr($a, 'url');
-        $self->_start($h, 'img', src => $url, alt => '');
+        $self->_start($h, 'img', src => $url, alt => '', @id);
     }
     elsif ($k eq 'searchable') {
-        $self->_start($h, 'input', type => 'search');
+        $self->_start($h, 'input', type => 'search', @id);
     }
     elsif ($k eq 'form') {
         my @at;
         push @at, method => $self->attr($a, 'method') if length $self->attr($a, 'method');
         push @at, action => $self->attr($a, 'action') if length $self->attr($a, 'action');
-        $self->_start($h, 'form', @at);
+        $self->_start($h, 'form', @at, @id);
         $f->{closes} = ['form'];
     }
     elsif ($k eq 'select') {
         my @at;
         push @at, name => $self->attr($a, 'name') if length $self->attr($a, 'name');
-        $self->_start($h, 'select', @at);
+        $self->_start($h, 'select', @at, @id);
         $f->{closes} = ['select'];
     }
     elsif ($k eq 'field') {
@@ -115,7 +301,7 @@ sub open ($self, $k, $a, $h) {
             my $v = $self->attr($a, $n);
             push @at, $n => $v if length $v;
         }
-        $self->_start($h, 'input', @at);
+        $self->_start($h, 'input', @at, @id);
     }
     elsif ($k eq 'option') {
         my @at;
@@ -127,15 +313,21 @@ sub open ($self, $k, $a, $h) {
     }
     elsif ($k eq 'cell') {
         my $tag = length $self->attr($a, 'header') ? 'th' : 'td';
-        $self->_start($h, $tag);
+        $self->_start($h, $tag, @id);
         $f->{closes} = [$tag];
     }
     elsif (my $t = $TAG{$k}) {
-        $self->_start($h, $t->[0], @$t[1 .. $#$t]);
+        $self->_start($h, $t->[0], @$t[1 .. $#$t], @id);
         $f->{closes} = [$t->[0]];
     }
     elsif (my $l = $LEAF{$k}) {
-        $self->_start($h, $l->[0], @$l[1 .. $#$l]);
+        # markdown is rendered by the same client runtime as ui:swap, so the
+        # page carries it even when no swap fragment is present.
+        if ($k eq 'markdown' && !$self->{_swap_runtime}) {
+            $self->{_swap_runtime} = 1;
+            $self->_inline($h, 'script', $SWAP_RUNTIME);
+        }
+        $self->_start($h, $l->[0], @$l[1 .. $#$l], @id);
         $f->{closes} = [$l->[0]];
         $f->{leaf}   = 1;
     }

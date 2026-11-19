@@ -41,8 +41,8 @@ unlike($html, qr/<ui:/, 'no ui: element reaches the page');
 is(scalar(() = $html =~ /\{\.\/\@flavor\}/g), 1,
     'the ui:text binding appears exactly once (the additive ui: copy is dropped)');
 
-like($html, qr{<main>.*?</main>}s,                     'ui:scene → <main>');
-like($html, qr{<ul>.*?<li>.*?</li>.*?</ul>}s,          'ui:list / ui:row → <ul> / <li>');
+like($html, qr{<main\b.*?</main>}s,                    'ui:scene → <main>');
+like($html, qr{<ul\b.*?<li\b.*?</li>.*?</ul>}s,        'ui:list / ui:row → <ul> / <li>');
 like($html, qr{<span class="badge">},                  'ui:badge → <span class="badge">');
 like($html, qr{<p>\s*\{\.\/\@flavor\}</p>},            'ui:text body reaches <p>, exactly once');
 like($html, qr{<canvas class="sparkline">},            'ui:sparkline → <canvas class="sparkline">');
@@ -90,5 +90,45 @@ is($rc3, 0, 'amin ui --os=tty exits 0');
 unlike($tty, qr/<!DOCTYPE/, 'tty output is the pass-through profile, not a page');
 like($tty, qr/<ui:app\b/, 'tty re-emits the whole ui: subtree (for a later render host)');
 is(length($tty), 5920, '--os=tty byte-stable baseline (5920 bytes)');
+
+# ═══════════════════════════════════════════════════════════════════════════
+# 4. ui:swap — a streamed update fragment becomes an inert <template> plus one
+#    target-owned runtime that applies it to its addressed element.
+# ═══════════════════════════════════════════════════════════════════════════
+my $sw = Path::Tiny->tempfile(SUFFIX => '.xml');
+$sw->spew_utf8(<<'XML');
+<?xml version="1.0" encoding="UTF-8"?>
+<amin:profile xmlns:amin="http://projectamin.org/ns/2026/"
+              xmlns:ui="http://projectamin.org/ns/ui/1"
+              amin:id="io.projectamin.test.swap" amin:version="0.1.0">
+  <ui:app title="Swap">
+    <ui:column id="log">
+      <ui:text>first</ui:text>
+    </ui:column>
+    <ui:swap for="log" mode="append">
+      <ui:card><ui:text>second</ui:text></ui:card>
+    </ui:swap>
+    <ui:swap for="log" mode="text">
+      <ui:text>replaced</ui:text>
+    </ui:swap>
+  </ui:app>
+</amin:profile>
+XML
+
+my ($swh, $rc4) = run_bin($amin, 'ui', "$sw", '--os=html');
+is($rc4, 0, 'swap fixture renders');
+is(scalar(() = $swh =~ /<script>/g), 1,
+    'the swap runtime is emitted once, before the first swap');
+like($swh, qr{<div class="column" id="log">.*?</div>}s,
+    'the addressed element carries its id');
+like($swh, qr{<template data-axa-mode="append" data-axa-swap="log">.*?</template>}s,
+    'ui:swap mode=append → an inert template addressed at its target');
+like($swh, qr{<template data-axa-mode="text" data-axa-swap="log">.*?</template>}s,
+    'ui:swap mode=text → a second template');
+like($swh, qr{<template data-axa-mode="append"[^>]*>\s*<article>},
+    'the swap subtree renders inside the template');
+unlike($swh, qr/<ui:/, 'no ui: element reaches the page');
+my $swdoc = eval { XML::LibXML->load_xml(string => $swh) };
+is($@, '', 'swap page is well-formed XML/XHTML');
 
 done_testing;

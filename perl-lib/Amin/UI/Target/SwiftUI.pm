@@ -55,6 +55,9 @@ sub _cont ($self, $k, $pad, $pad1, $a) {
     return { head => "$pad" . "VStack" }               if $k eq 'table';
     return { head => "$pad" . "HStack" }               if $k eq 'tr';
     return { head => "$pad" . "Group" }                if $k eq 'cell';
+    # a streaming update fragment has no SwiftUI identity of its own: its
+    # content is simply the view it was authored to look like
+    return { head => "$pad" . "Group" }                if $k eq 'swap';
     return undef;
 }
 
@@ -66,6 +69,8 @@ sub _leaf ($self, $k, $pad, $a, $text) {
     my $points = $self->attr($a, 'points');
 
     return $pad . "Text(" . $self->lit($text) . ")"            if $k eq 'text';
+    return $pad . "Text(" . $self->lit($text) . ") /* ui:markdown */"
+                                                               if $k eq 'markdown';
     return $pad . "Label(" . $self->lit($title) . ", systemImage: \"tag\")" if $k eq 'label';
     return $pad . "ProgressView()"                             if $k eq 'progress';
     return $pad . "Image(" . $self->lit($title) . ").resizable()" if $k eq 'image';

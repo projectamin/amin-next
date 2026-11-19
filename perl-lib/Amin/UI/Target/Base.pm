@@ -27,11 +27,11 @@ use Class::Tiny { sink => undef, buf => '' }, { stack => sub { [] } };
 # downstream target can pick its projection out of the stream by channel.
 use constant AMIN_NS => 'http://projectamin.org/ns/2026/';
 
-# The 22 container kinds.  Every other kind in the 33-element ui: vocabulary is
+# The 23 container kinds.  Every other kind in the 34-element ui: vocabulary is
 # a leaf whose whole expression is produced on close().
 our %CONTAINER = map {; $_ => 1 } qw(
     app scene list row column hstack vstack stack grid section card
-    button navigate toolbar sheet alert item
+    button navigate toolbar sheet alert item swap
     form select table tr cell
 );
 

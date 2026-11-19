@@ -18,13 +18,13 @@ use Class::Tiny qw(Handler Log Mode Name Element);
 
 our $UI_NS = 'http://projectamin.org/ns/ui/1';
 
-# Closed-world vocabulary — the 33 element LocalNames in the BSAX `ui:` region.
+# Closed-world vocabulary — the 35 element LocalNames in the ui: region.
 # Stated here (not read from the codec) because a filter is code and must state
 # the contract it enforces; the codec's table is the mirror, not the source.
 my %KIND = map {; $_ => 1 } qw(
     app scene list row column hstack vstack stack grid section card
-    progress alert sheet toolbar searchable item label text badge
-    sparkline button navigate image asyncimage
+    progress alert sheet toolbar searchable item label text markdown badge
+    sparkline button navigate image asyncimage swap
     form field select option table tr cell style
 );
 
