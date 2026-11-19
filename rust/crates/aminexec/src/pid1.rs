@@ -209,8 +209,17 @@ fn bringup_inner(root: &Path, sock_path: &str, real_mounts: bool) -> Result<Pid1
             .with_context(|| format!("mkdir mount target {}", abs_target.display()))?;
 
         if real_mounts {
-            do_real_mount(spec, &abs_target)
-                .with_context(|| format!("mount {} -> {} ({})", spec.source, abs_target.display(), spec.fstype))?;
+            // Phase 1 (frameboot in the initramfs) already moved /proc /sys
+            // /dev onto the new root before switch_root — it has to: ainit's
+            // PARTNAME scan needs /sys and the FAT hook needs /dev.  Re-mounting
+            // them here is not merely redundant: sysfs is a single-instance
+            // filesystem (`get_tree_single`), so a second `mount -t sysfs /sys`
+            // fails EBUSY while procfs (keyed by pid namespace) would succeed.
+            // Mount only what is not already there, so bringup is idempotent.
+            if !mounted_at(&abs_target) {
+                do_real_mount(spec, &abs_target)
+                    .with_context(|| format!("mount {} -> {} ({})", spec.source, abs_target.display(), spec.fstype))?;
+            }
         } else {
             // Sim: write sentinel.  Use a deterministic filename so tests
             // can glob or stat for it.
@@ -262,6 +271,21 @@ fn bringup_inner(root: &Path, sock_path: &str, real_mounts: bool) -> Result<Pid1
         applied_mounts,
         cgroup_amin_root: cg_root_abs,
     })
+}
+
+/// Is `target` already a mount point?
+///
+/// Phase 1's frameboot moves /proc, /sys and /dev onto the new root before
+/// `switch_root`, so phase 2 must not re-mount them (the phase-1 side has the
+/// same guard, `ainit`'s `bootstrap::mounted_at`).
+fn mounted_at(target: &Path) -> bool {
+    fs::read_to_string("/proc/self/mounts")
+        .map(|mounts| {
+            mounts
+                .lines()
+                .any(|l| l.split_whitespace().nth(1).is_some_and(|t| Path::new(t) == target))
+        })
+        .unwrap_or(false)
 }
 
 fn do_real_mount(spec: &MountSpec, abs_target: &Path) -> Result<()> {

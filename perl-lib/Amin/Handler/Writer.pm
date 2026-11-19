@@ -40,14 +40,23 @@ sub start_element ($self, $el) {
     push @{$self->stack}, [$name, $ns, $pfx];
 
     $self->_push(' ' x ($self->depth * $self->indent) . "<$name");
+    # Attributes arrive in a plain hash, so `values %*` iterates in Perl's
+    # randomised hash order — two runs of the same event stream would not
+    # agree byte for byte.  Sort by the rendered qualified name so the
+    # serialisation is canonical: identical events always give identical
+    # bytes (the determinism the Perl↔Rust decision-profile parity needs).
+    my @attrs;
     for my $a (values $el->{Attributes}->%*) {
         my $pf = $a->{Prefix} // '';
-        my $an = $a->{LocalName} // $a->{Name} // next;
+        my $an = $a->{LocalName} // $a->{Name} // '';
         next unless length $an;
         $an = "$pf:$an" if length $pf;
         my $av = $a->{Value} // '';
         next unless length $av || defined $a->{Value};
-        $self->_push(qq( $an=") . _e($av) . '"');
+        push @attrs, [ $an, $av ];
+    }
+    for my $a (sort { $a->[0] cmp $b->[0] } @attrs) {
+        $self->_push(qq( $a->[0]=") . _e($a->[1]) . '"');
     }
     $self->_push(">\n");
     $self->depth($self->depth + 1);

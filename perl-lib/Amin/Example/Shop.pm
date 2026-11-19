@@ -74,9 +74,9 @@ sub _route ($self, $a) {
 # Mutations go through Store->update, not get-then-set.  The in-memory
 # adapter used to hand out the live record, so an in-place edit stuck by
 # accident; a real store returns a fresh copy and needs an explicit write.
-# update() is also the critical section: under Starman, two workers can
-# POST the same session at once, and a get() outside the write lock lets
-# the later set() drop the earlier cart change.
+# update() is also the critical section: with the pre-forked worker pool, two
+# workers can POST the same session at once, and a get() outside the write
+# lock lets the later set() drop the earlier cart change.
 sub _action ($self, $a) {
     my $name = $a->{name} // '';
     my $sku  = $a->{sku}  // '';
