@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members  = ["crates/awp3", "crates/aminexec", "crates/bsax", "crates/bitcache", "crates/ainit", "crates/ratchet", "crates/amin-sax"]
+members  = ["crates/awp3", "crates/aminexec", "crates/bsax", "crates/bitcache", "crates/ainit", "crates/ratchet", "crates/amin-sax", "crates/amin-machine"]
 
 [workspace.package]
 version      = "3.0.0"
@@ -13,6 +13,7 @@ repository   = "https://github.com/projectamin/amin-3"
 [workspace.dependencies]
 # ── First-party crates ───────────────────────────────────────────────────
 amin-sax              = { path = "crates/amin-sax" }
+amin-machine          = { path = "crates/amin-machine" }
 
 blake3                = "1.5"
 cpufeatures           = "0.2"

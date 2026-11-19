@@ -1,0 +1,18 @@
+[package]
+name         = "amin-machine"
+version      = "0.1.0"
+description  = "The Amin 3 filter machine — the Rust peer of Amin::Machine::Dispatcher. Composes the filter chain from the shared machine_spec.xml and drives a SAX event stream through it, so the proxy is a filter in the machine, not a bespoke pipeline."
+edition.workspace      = true
+rust-version.workspace = true
+license.workspace      = true
+homepage.workspace     = true
+repository.workspace   = true
+
+[dependencies]
+amin-sax.workspace  = true
+bsax                = { path = "../bsax", default-features = false, features = ["std"] }
+thiserror.workspace = true
+
+[lib]
+name = "amin_machine"
+path = "src/lib.rs"
