@@ -1,6 +1,7 @@
 # PROXY — an L7 reverse proxy inside Amin
 
-Status: plan / not implemented.
+Status: **shipped** — P0–P5 are in the tree, in both languages (§8 is the
+as-built breakdown).
 Scope: an HTTP/1.1 front whose routing, authorization, header policy and
 **backend selection** are declared in the profile and executed as SAX filters,
 served by a non-blocking adapter (`amin proxy serve`) — plus a Rust peer
@@ -37,26 +38,21 @@ the backend to verify as if the connection were direct.
 
 ## 2. What exists today
 
-Three pieces are relevant, and one is missing.
+The whole arc is in the tree, in both languages.
 
 | Piece | File | What it does |
 |---|---|---|
 | L4 load balancer | [Net/Fabric.pm](../perl-lib/Amin/Net/Fabric.pm) | `<lb vip= backends= policy="p2c_ewma" hc= backend_drain=>` — eBPF clsact, longest-prefix, delta-before-syscall. **L4 only.** |
+| Non-blocking loop | [Net/Loop.pm](../perl-lib/Amin/Net/Loop.pm) | `IO::Poll` (epoll) event loop, non-blocking accept/read/write, bounded per-connection buffers, `SO_REUSEPORT` workers. Built for the AXA origin, reused by the proxy as-is. |
 | L7 origin adapter | [AXA/HTTP.pm](../perl-lib/Amin/AXA/HTTP.pm) + [AXA/Serve.pm](../perl-lib/Amin/AXA/Serve.pm) | read body → feed chain → status latch → stream response, over `Amin::Net::Loop`. |
-| HTTP serve | [bin/amin:128-167](../bin/amin#L128-L167) | `axa serve`, `Amin::Net::Loop` pre-forked by `--workers` (4), `read-timeout` (2 s), `keepalive_timeout` (5 s). |
+| L7 proxy front | [Proxy/HTTP.pm](../perl-lib/Amin/Proxy/HTTP.pm), [Proxy/Config.pm](../perl-lib/Amin/Proxy/Config.pm), [Proxy/Route.pm](../perl-lib/Amin/Proxy/Route.pm), [Proxy/Backend.pm](../perl-lib/Amin/Proxy/Backend.pm), [Proxy/RateLimit.pm](../perl-lib/Amin/Proxy/RateLimit.pm) | compile `<amin:proxy>` once, TLS accept, request → `<amin:request>`, the route filter emits `<proxy:backend>`, the balancer + backend pump, per-IP rate limit as a `begin` filter. |
+| HTTP serve | [bin/amin:169-202](../bin/amin#L169-L202) | `proxy serve <config> [--listen …] [--workers N]`. |
+| AWP/3 transport | [awp3 crate](../rust/crates/awp3/src/lib.rs) + [Net/AWP3.pm](../perl-lib/Amin/Net/AWP3.pm) | the PQ-framed mesh transport implemented in Rust, plus the `FFI::Platypus` binding Perl drives it through. |
+| Rust L7 peer | [amin-proxy crate](../rust/crates/amin-proxy/src/lib.rs) | the same vocabulary, listener and TLS in Rust (`amin-proxyd`), emitting byte-identical `<proxy:backend>` decisions. |
 | Orchestration | [machine_spec.xml:7](../perl-lib/Amin/Machine/machine_spec.xml#L7), [Auth/ZCap.pm](../perl-lib/Amin/Auth/ZCap.pm) | chain build; ZCap at `begin` today. |
 | Content-addressed config | [Bitcache/Reference.pm](../perl-lib/Amin/Bitcache/Reference.pm) | `bitcache://blake3/<hash>` ref: parse → `bctool get` → `bctool verify`, fail-closed. One resolver shared by `MachineSpec`, the proxy config and route specs (§5.13). |
 
-What is **absent**, and confirmed by search over `perl-lib/`:
-
-- **No TLS server.** `IO::Socket::SSL`/`Net::SSLeay` are dependencies
-  ([cpanfile:42-43](../cpanfile#L42-L43)) but only as an HTTPS *client* for
-  inference hops; nothing terminates.
-- **No Perl AWP/3 client.** [Mesh/Transport/InProcess.pm](../perl-lib/Amin/Mesh/Transport/InProcess.pm)
-  is a fork-based test double. The Rust [`awp3` crate](../rust/crates/awp3/src/lib.rs)
-  is a 28-line skeleton — `VERSION`, `DEFAULT_PORT`, and a doc comment naming
-  `frame` / `handshake_initiator` / `handshake_responder` that are **not
-  implemented**. There is no binary and no binding.
+TLS termination is in-process over `IO::Socket::SSL` ([Proxy/HTTP.pm](../perl-lib/Amin/Proxy/HTTP.pm), §5.5). AWP/3 is a real crate: `VERSION = 0x03`, `DEFAULT_PORT = 4514`, composite ML-DSA-65 + Ed25519 signatures, ASCON-128a per-frame AEAD and a BLAKE3 rolling frame chain, exposing a fixed-size C ABI ([awp3/src/ffi.rs](../rust/crates/awp3/src/ffi.rs)) over a `cdylib` that Perl binds via [Amin::Net::AWP3](../perl-lib/Amin/Net/AWP3.pm) (new `FFI::Platypus` dependency, [cpanfile:48](../cpanfile#L48)). ACME stays an app-level machine filter ([Filter/Acme.pm](../perl-lib/Amin/Filter/Acme.pm)), not a proxy concern — the proxy only ever sees an already-provisioned cert/key (§5.5).
 
 ---
 
@@ -385,9 +381,8 @@ place, as §7 requires).
 
 ## 6. AWP/3 — the transport to Amin backends
 
-The contract is already written down in [awp3/src/lib.rs](../rust/crates/awp3/src/lib.rs);
-it is not yet implemented. This section is that contract, restated as the build
-target so the Perl bridge and the Rust core agree.
+The contract is implemented in [awp3/src/lib.rs](../rust/crates/awp3/src/lib.rs);
+this section restates it so the Perl bridge and the Rust core agree.
 
 - **Key exchange**: hybrid post-quantum every handshake — Noise_XKems with
   ML-KEM-768 + X25519.
@@ -409,8 +404,10 @@ caller authority material (§5.12) as frames; the backend runs its own chain and
 returns a response profile/bytes. AWP/3 authenticates the front as a peer; it
 does not authorize the request.
 
-**Perl bridge.** The crate builds a `cdylib` exposing a C ABI over those three
-entry points; Perl binds it with `FFI::Platypus` (new dependency). Rejected: a
+**Perl bridge.** The crate builds a `cdylib` ([awp3/Cargo.toml](../rust/crates/awp3/Cargo.toml),
+`crate-type = ["cdylib", "rlib"]`) exposing a C ABI over those three entry
+points; Perl binds it with `FFI::Platypus` in
+[Amin::Net::AWP3](../perl-lib/Amin/Net/AWP3.pm). Rejected: a
 per-connection subprocess bridge (the `InProcess` shape) — too heavy per backend
 connection — and a hand-written AWP/3 in Perl (PQ crypto belongs in one
 implementation). The cdylib is built static, matching the project's static-link
@@ -438,6 +435,9 @@ Same discipline that keeps BSAX and ZCap consistent across languages:
 
 ## 8. Work breakdown
 
+All five stages shipped. The file lists below are the as-built trees; where the
+plan named a file that moved or was renamed, the shipped name is given.
+
 ### P0 — Vocabulary + routing (no sockets, both languages)
 
 Files:
@@ -451,7 +451,9 @@ Files:
 - `perl-lib/Amin/Proxy/Route.pm` — the `begin`, `element="request"` filter;
   matches `<amin:request>`, emits one `<proxy:backend>` per candidate backend.
 - `perl-lib/Amin/Machine/machine_spec.xml` — register `Proxy::Route`.
-- `rust/crates/amin-proxy` — serde types for §4 (no sockets yet).
+- `rust/crates/amin-proxy` — the vocabulary crate: `<amin:proxy>` parse → frozen
+  matcher → `<proxy:backend>` decisions, driven by `amin-sax` (sockets land in
+  P3).
 - `t/65-proxy-vocabulary.t`, `t/72-bitcache-reference.t`.
 
 Acceptance:
@@ -516,27 +518,40 @@ Acceptance:
 
 ### P3 — Rust proxy (parity peer)
 
-Files:
-- `rust/crates/amin-proxy/src/{main,listener,http,route,backend}.rs` — tokio
-  listener, `rustls` termination, hyper-class HTTP/1.1, the same routing filter
-  logic reused from P0.
-- `t/70-proxy-parity.t` — one profile through the Perl listener and the Rust
-  listener → byte-identical decision profiles.
+Files (as built):
+- `rust/crates/amin-proxy/src/{lib,main,listener,http,backend,filters,tls,fingerprint}.rs`
+  — the `tokio` listener (`amin-proxyd`), `rustls` termination, HTTP/1.1, the
+  same routing filter logic reused from P0; `h2/` adds the inbound HTTP/2 stack,
+  `bin/proxydump.rs` dumps decisions.
+- `t/70-proxy-parity.t` and `t/73-proxy-parity.t` — one profile through the Perl
+  listener and the Rust listener → byte-identical decision profiles.
 
 ### P4 — Rust AXA parity (the "pure Rust alongside Perl" end goal)
 
-Files:
-- `rust/crates/amin-axa` — the AXA adapter + element filters in Rust,
-  reusing `crates/bsax`.
-- `bin/amin-axa` or an `amin axa serve --impl=rust` flag.
+Files (as built):
+- `rust/crates/amin-axa/src/{lib,adaptor,render,app,formcodec,serializer,session,store,shop,ui_target,acme}.rs`
+  — the AXA adapter + element filters in Rust, driven by `amin-sax` (it shares
+  the SAX reader with `amin-proxy`, not the `bsax` codec crate).
+- `rust/crates/amin-axa/src/bin/amin-axa.rs` — the `amin-axa` binary.
 - `t/71-axa-parity.t` — the same `axa.xml` app renders byte-identically under
   both implementations.
 
 ### P5 — Hardening
 
-- ACME / cert rotation; per-IP rate limit; connection pooling + keepalive to
-  backends; HTTP/2 inbound; `X-Amin-Profile-SHA3` on proxied responses;
-  `docs/proxy.md` user guide.
+Shipped:
+- Per-IP rate limit as a `begin` filter ([Proxy/RateLimit.pm](../perl-lib/Amin/Proxy/RateLimit.pm),
+  [`rps=`/`burst=` bucket](../perl-lib/Amin/Proxy/Config.pm)), shedding over-budget
+  requests with a `-7100` → HTTP 429 before any route is chosen
+  (`t/75-proxy-ratelimit.t`).
+- HTTP/2 inbound in the Rust peer ([amin-proxy/src/h2/](../rust/crates/amin-proxy/src/h2),
+  `t/74-proxy-h2.t`).
+- `X-Amin-Profile-SHA3` on proxied responses ([amin-proxy/src/fingerprint.rs](../rust/crates/amin-proxy/src/fingerprint.rs)).
+- ACME readiness shipped as an app-level machine filter, not in the proxy
+  ([Filter/Acme.pm](../perl-lib/Amin/Filter/Acme.pm), [Acme/Key.pm](../perl-lib/Amin/Acme/Key.pm),
+  `t/76-acme.t`) — the proxy only consumes the provisioned cert/key (§5.5).
+
+Still open: connection pooling + keepalive to backends; a `docs/proxy.md` user
+guide.
 
 Ordering note: P0→P1→P2 is the Perl spine. P3/P4 are the Rust track and can
 start as soon as P0's contract is frozen, because they consume the same
@@ -573,6 +588,11 @@ vocabulary.
 ---
 
 ## 10. Open questions
+
+These were open when the plan was written; each now has an as-built answer —
+the recommendation below is what shipped (routes/specs resolved at boot,
+`Proxy` injected the way `Render` is, ZCap left at `begin`), except #7
+(connection pooling), which is still open (§8 P5).
 
 1. **Naming.** `Amin::Proxy::*` vs `Amin::Net::Proxy::*`? Recommendation:
    `Amin::Proxy::*` for the L7 layer, `Amin::Net::Loop` for the substrate (which

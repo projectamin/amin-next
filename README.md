@@ -24,7 +24,7 @@ cd amin
 mise install
 ```
 
-`mise install` installs the pinned toolchain (Perl 5.38, Rust 1.80, Cargo-binstall, jq) and, on first entry to the directory, the `hooks.enter` handler triggers `mise run bootstrap` — which:
+`mise install` installs the pinned toolchain (Perl 5.38, Rust 1.86, Cargo-binstall, jq) and, on first entry to the directory, the `hooks.enter` handler triggers `mise run bootstrap` — which:
 
 1. Pulls the latest stable CPAN deps listed in [`cpanfile`](./cpanfile) into `./local/` using the mise-managed `cpanm` shim;
 2. Installs develop/test Perl dists (Test2, Carton, Perl::Tidy, …);
@@ -86,22 +86,31 @@ Contracts, signatures, and trust boundaries are enforced on *every* pass, not ju
 
 | Path | What it is |
 |---|---|
-| [`bin/amin`](./bin/amin) | CLI entry point.  Auto-rexecs into the mise-managed Perl and stitches `./perl-lib` + `./local/lib/perl5` onto `@INC`. |
+| [`bin/amin`](./bin/amin) | CLI entry point.  Auto-rexecs into the mise-managed Perl and stitches `./perl-lib` + `./local/lib/perl5` onto `@INC`.  Also serves the AXA origin (`axa serve`) and the L7 proxy (`proxy serve`). |
 | [`perl-lib/Amin.pm`](./perl-lib/Amin.pm) | Public façade: `Amin->new(Mode => …, Handler => …, Log => …)->parse($xml)`. |
 | [`perl-lib/Amin/Machine/`](./perl-lib/Amin/Machine/) | SAX filter chain and dispatch — the *machine*. |
 | [`perl-lib/Amin/Command/`](./perl-lib/Amin/Command/) | Command handlers: `Build`, `Exec`, `Mkdir`, `Echo`, `Remove`, …  Each subclasses [`Amin::Elt`](./perl-lib/Amin/Elt.pm), which drives the `IPC::Run` harness. |
 | [`perl-lib/Amin/Cond/`](./perl-lib/Amin/Cond/) | Condition rewrites.  `OS` today; network topology, tier, region, and feature-gate conditionals next. |
 | [`perl-lib/Amin/Filter/Map/`](./perl-lib/Amin/Filter/Map/) | Late filter for network-topology and adminlist map rendering. |
 | [`perl-lib/Amin/Filter/UI/`](./perl-lib/Amin/Filter/UI/) | Late filter for mobile / desktop UI view-tree rendering (SwiftUI today; Jetpack Compose next). |
+| [`perl-lib/Amin/AXA/`](./perl-lib/Amin/AXA/) | AXA web layer: `HTTP` (transport-neutral core) + `Serve`, driven over `Amin::Net::Loop`. |
+| [`perl-lib/Amin/Proxy/`](./perl-lib/Amin/Proxy/) | L7 reverse proxy: `Config`, `Route`, `Backend`, `HTTP`, `RateLimit` — the `amin proxy serve` front. |
+| [`perl-lib/Amin/Net/`](./perl-lib/Amin/Net/) | Substrate: `Loop` (`IO::Poll` event loop), `HTTP`, `AWP3` (the `FFI::Platypus` bridge to the `awp3` crate), `Fabric` (L4 eBPF load balancer). |
 | [`perl-lib/Amin/Generator/BSAX.pm`](./perl-lib/Amin/Generator/BSAX.pm) + [`perl-lib/Amin/Handler/BSAX.pm`](./perl-lib/Amin/Handler/BSAX.pm) | Binary SAX codec; 1:1 vocab parity with `rust/crates/bsax/src/vocab.rs`. |
 | [`perl-lib/Amin/Util/`](./perl-lib/Amin/Util/) | Shared helpers (Fold/allow-lists, provenance tags, …). |
-| [`rust/crates/awp3/`](./rust/crates/awp3/) | **A**min **W**ire **P**rotocol v3 — PQ-safe framed transport. |
+| [`rust/crates/awp3/`](./rust/crates/awp3/) | **A**min **W**ire **P**rotocol v3 — PQ-safe framed transport (ML-KEM-768 + X25519, ASCON-128a, BLAKE3 frame chain); `cdylib` bounded by Perl via `FFI::Platypus`. |
 | [`rust/crates/ainit/`](./rust/crates/ainit/) | Netboot initrd PID 1: mesh BOOT_OFFER verify, Bitcache CAS profile fetch, stages 1..=4, descriptor hand-off. |
 | [`rust/crates/aminexec/`](./rust/crates/aminexec/) | Per-process sandbox, cgroup v2 metrics, platform impls for Linux / FreeBSD / iOS / Android. |
 | [`rust/crates/bsax/`](./rust/crates/bsax/) | Rust Binary SAX codec; `no_std` compatible; `std` feature adds `bytes`. |
+| [`rust/crates/amin-sax/`](./rust/crates/amin-sax/) | Push-based SAX reader for the Rust side — the SAX event model, no DOM. |
+| [`rust/crates/amin-machine/`](./rust/crates/amin-machine/) | Spec-driven filter chain with a BSAX front — the Rust peer of the Perl dispatcher. |
+| [`rust/crates/amin-proxy/`](./rust/crates/amin-proxy/) | Rust L7 reverse proxy (`amin-proxyd`); byte-identical `<proxy:backend>` decisions to the Perl front. |
+| [`rust/crates/amin-axa/`](./rust/crates/amin-axa/) | Rust AXA render path (`amin-axa`); byte-identical pages to the Perl origin. |
 | [`examples/apps/shop-ui/`](./examples/apps/shop-ui/) | Reference app bundle. |
 | [`docs/app-bundle-contract.md`](./docs/app-bundle-contract.md) | Full `.amina` bundle spec, including AI-assisted authoring tiers. |
 | [`docs/pid1-split.md`](./docs/pid1-split.md) | Why `ainit` and `aminexec` are two phases of one PID 1, and where the boundary between them is defined. |
+| [`docs/proxy-plan.md`](./docs/proxy-plan.md) | The L7 reverse-proxy arc (shipped): vocabulary, routing, AWP/3, Perl↔Rust parity. |
+| [`docs/axa-plan.md`](./docs/axa-plan.md) | The AXA HTML-UI layer (shipped): profile-in / profile-out over `Amin::Net::Loop`. |
 | [`t/`](./t/) | Perl integration tests.  Run with `prove -r t/` or `mise run test`. |
 | [`.mise.toml`](./.mise.toml) | Toolchain, env vars, tasks, auto-bootstrap hooks. |
 | [`cpanfile`](./cpanfile) | Runtime CPAN requirements — intentionally **unpinned** (latest stable); `cpanfile.snapshot` is the reproducibility lock. |
@@ -154,14 +163,17 @@ Every `.amina` bundle is composite-signed with ML-DSA.  Every cross-control-plan
 **Short-term:**
 - ✅ SAX dispatcher + filter chain + OS conditionals
 - ✅ Built-in command handlers: `build`, `exec`, `mkdir`, `echo`, `remove`
-- ✅ Perl integration test suite, 11 tests under `t/`
+- ✅ Perl integration test suite (75+ tests under `t/`) plus `cargo test --workspace`
 - ✅ BSAX codec (Perl + Rust reference implementations)
+- ✅ AWP/3 PQ transport — `rust/crates/awp3` (`cdylib`) bound from Perl via `Amin::Net::AWP3`
 - 🔲 *Wire `aminexec` in as the exec backend* — command handlers currently use `IPC::Run` from `Amin::Elt`; swapping to `aminexec` brings cgroup metrics + Landlock enforcement into every command result block.
 - 🔲 *ML-DSA composite signing + `aminsig` CLI* — prototype in sibling repo; integrate into `bin/amin sign|verify`.
 - 🔲 *`amin app scaffold --from-prompt`* — Tier 0 LLM skeleton generator; output must be human-signed before deploy.
 - 🔲 *Asymmetric cost attribution* — cgroup v2 CPU/memory × negotiated unit prices → `billing.owner` invoice lines.
 
 **Medium-term:**
+- ✅ AXA origin: `amin axa serve` on our own `Amin::Net::Loop` event loop (retires PSGI/Starman), with Rust parity in `rust/crates/amin-axa`.
+- ✅ L7 reverse proxy: `amin proxy serve` (Perl) and `amin-proxyd` (Rust) emitting byte-identical `<proxy:backend>` decisions — see [`docs/proxy-plan.md`](./docs/proxy-plan.md).
 - Network-management filter family: switch config, vlan plans, sflow/mirror, rack-topology output with verification contracts.
 - Custom Linux image build pipeline as a first-class filter pack (`amin build image …`).
 - ✅ Android Jetpack Compose late `ui:` filter, parallel to the SwiftUI projection (a fleet of per-kind `Amin::Filter::UI::Element::*` filters projecting through `Amin::UI::Target::{SwiftUI,Compose}`, selected by `--os`).

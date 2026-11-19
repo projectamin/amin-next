@@ -1,6 +1,6 @@
 # AXA — HTML UI layer for Amin
 
-Status: plan / not implemented.
+Status: **shipped** — the Perl origin (`Amin::AXA::HTTP`/`Serve` on `Amin::Net::Loop`) and the Rust peer (`rust/crates/amin-axa`) are in the tree; §2 is the pre-implementation snapshot and §4.8/§4.9 the as-built server contract.
 Scope: make `examples/apps/shop-ui` a real web application whose every
 interaction is a genuine Amin profile round-trip.
 
@@ -44,7 +44,7 @@ markup in and emitted SAX; AXA takes SAX out and emits markup.
 
 ## 2. What exists in Amin 3.0 today
 
-The seams AXA needs are already there, but the render side is stubbed:
+The seams AXA needs were already there, but the render side was stubbed when this plan was written (both are now built — see the status note above and §4.8/§4.9):
 
 - `bin/amin` accepts `--os=ios|android|html|tty` and validates it, and
   `ui_os` now reaches the Dispatcher (`Amin->parse` → `Dispatcher->new` →
