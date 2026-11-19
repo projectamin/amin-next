@@ -78,7 +78,7 @@ ok(!exists $sql->get('b')->{cart}{'sku-1'}, '  (sku-1 is absent from session b)'
 my $pid = fork();
 die "fork failed: $!" unless defined $pid;
 if ($pid == 0) {
-    # a worker: its OWN handle, exactly as Starman's workers get
+    # a worker: its OWN handle, exactly as a forked origin worker gets
     my $w = Amin::AXA::Store::SQLite->new(path => $db);
     my $r = $w->get('a');
     $r->{cart}{'sku-77'} = 3;

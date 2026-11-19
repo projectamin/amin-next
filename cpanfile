@@ -22,13 +22,11 @@ sub requires; sub on; sub recommends; sub suggests; sub conflicts; sub feature;
 # ═════ runtime (hard required for bin/amin + perl-lib/ Amin:: namespace) ══
 requires 'Class::Tiny';
 requires 'IPC::Run';
-requires 'Plack';
-# AXA HTTP server: prefork worker pool.  Requires an off-heap session store
-# (see DBD::SQLite) — a forked worker gets its own copy of any in-process
-# hash, so an in-memory cart would diverge between requests.
-requires 'Starman';
-# Off-heap session/cart store behind Amin::AXA::Store's get/set/delete.
-# XS (bundles its own SQLite); open one connection per worker, after fork.
+# AXA HTTP origin.  No PSGI/Plack: the origin is Amin::AXA::Serve over
+# Amin::Net::Loop (a single-process event loop, pre-forked across --workers).
+# An off-heap session store (see DBD::SQLite) is still required — a forked
+# worker gets its own copy of any in-process hash, so an in-memory cart would
+# diverge between requests.
 requires 'DBI';
 requires 'DBD::SQLite';
 requires 'XML::SAX';
@@ -44,11 +42,13 @@ requires 'IO::Socket::SSL';
 requires 'Mozilla::CA';
 requires 'MIME::Base64';
 requires 'Digest::BLAKE3';  # needs libblake3 (built by bootstrap task)
+requires 'Digest::SHA3';    # X-Amin-Profile-SHA3: compiled-profile fingerprint
 requires 'Crypt::Liboqs::Sign';  # backs Amin::Crypto::ML_DSA shim (perl-lib/)
+# Binds the AWP/3 cdylib (rust/crates/awp3) that Amin::Net::AWP3 drives.
+requires 'FFI::Platypus';
 
 # ═════ develop/test only (needed for `mise run test` / prove) ═════════════
 on 'develop' => sub {
-    requires 'HTTP::Request::Common';  # t/51-axa-http.t (libwww-perl; not pulled by Plack)
     requires 'Test2::Suite';
     requires 'Test2::V0';
     requires 'Perl::Tidy';

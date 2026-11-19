@@ -47,10 +47,16 @@ my ($MACHINE_SPEC);
 # Default to `localhost` (both loopback families), not a bare IPv4 literal:
 # localhost resolves ::1 first, so a v4-only listener stalls browsers.
 my $LISTEN = 'localhost:8787';
-# Starman worker pool size and per-connection read timeout.
-# read-timeout is the window a SILENT connection holds a worker, so it bounds
-# how long a preconnect can delay other clients once the pool is busy.
+# Pre-forked worker pool size (SO_REUSEPORT, each worker its own
+# Amin::Net::Loop) and the per-connection read timeout.
+# read-timeout is the window a SILENT connection may idle before it is reaped;
+# under the event loop an idle client costs nothing, so this only bounds how
+# long a stalled request lingers before it is dropped.
 my ($WORKERS, $READ_TIMEOUT) = (4, 2);
+# Whether --listen/--workers were actually supplied.  `proxy serve` reads its
+# bind address from the compiled config (the contract), so it must be able to
+# tell an operator's override from these AXA-shaped defaults.
+my ($LISTEN_GIVEN, $WORKERS_GIVEN) = (0, 0);
 my (@INC_EXTRA, @W_PERM, @W_BEG, @W_MID, @W_LATE, @W_END);
 GetOptions(
     'legacy-processing!' => \$LEGACY,
@@ -58,8 +64,8 @@ GetOptions(
     'out=s'              => \$MAP_OUT,
     'os=s'               => \$UI_OS,
     'machine-spec=s'     => \$MACHINE_SPEC,
-    'listen=s'           => \$LISTEN,
-    'workers=i'          => \$WORKERS,
+    'listen=s'           => sub { $LISTEN = $_[1]; $LISTEN_GIVEN = 1 },
+    'workers=i'          => sub { $WORKERS = $_[1]; $WORKERS_GIVEN = 1 },
     'read-timeout=i'     => \$READ_TIMEOUT,
     'inc=s@'             => \@INC_EXTRA,
     'with-permanent=s'   => sub { push @W_PERM, split /,/, $_[1] },
@@ -99,6 +105,7 @@ my $MODE = { render => 1, dryrun => 1, run => 1, app => 1, map => 1, ui => 1, mo
 sub usage ($exit = 2) {
     say STDERR "Usage: $0 [--legacy-processing|--no-stream] <render|dryrun|run|app|map|ui|motd> [<path>] [--out=svg|dot|xml] [--os=ios|android|html|tty]";
     say STDERR "       $0 axa serve <app-dir> [--listen host:port] [--workers N]   persistent HTTP server (AXA)";
+    say STDERR "       $0 proxy serve <config> [--listen host:port] [--workers N]  persistent L7 reverse proxy";
     say STDERR "    --legacy-processing   (alias for --no-stream) buffer and emit the full XML";
     say STDERR "                          after parsing (traditional Amin behaviour) instead of";
     say STDERR "                          streaming SAX events live to stdout (the default)";
@@ -124,46 +131,73 @@ if (($ARGV[0] // '') eq 'axa') {
     $subcmd eq 'serve' or die "Unknown axa subcommand '$subcmd' (available: serve)\n";
     my $dir = shift(@ARGV) // usage(2);
     -d $dir or die "App path must be a directory: $dir\n";
-    my ($host, $port) = $LISTEN =~ /^(.+):(\d+)$/
-        or die "--listen must be host:port (got '$LISTEN')\n";
-    require Amin::AXA::PSGI;
+    require Amin::AXA::HTTP;
+    require Amin::AXA::Serve;
     require Amin::AXA::Store::SQLite;
+    require Amin::Log::Standard;
 
-    # Sessions live off the heap.  Starman preforks, and a forked worker gets
-    # its own copy of any in-process hash — so an in-memory cart would diverge
-    # between requests (request A lands on worker 1, request B on worker 2 and
-    # B has never seen A's write).  The SQLite adapter closes per worker and
-    # reconnects on first use, after the fork.
+    # Sessions live off the heap.  The server preforks (SO_REUSEPORT), and a
+    # forked worker gets its own copy of any in-process hash — so an in-memory
+    # cart would diverge between requests (request A lands on worker 1, request
+    # B on worker 2 and B has never seen A's write).  The SQLite adapter closes
+    # per worker and reconnects on first use, after the fork.
     my $db = $ENV{AXA_STORE} // "$dir/axa-store.sqlite";
     my $store = Amin::AXA::Store::SQLite->new(path => $db);
 
-    # stream => 1: the response goes to the socket as elements are generated
-    # (plan §4.8), rather than buffering the whole document first.
-    my $app = Amin::AXA::PSGI->app(app_dir => $dir, store => $store, stream => 1);
+    # Boot once (plan §4.8): spec parse, bundle load, warm-up chain build.
+    # stream => 1: the response goes to the socket as elements are generated.
+    my $ctx = Amin::AXA::HTTP->boot(app_dir => $dir, store => $store, stream => 1);
+    my $serve = Amin::AXA::Serve->new(
+        ctx   => $ctx,
+        log   => Amin::Log::Standard->new(stderr => 1),
+        stream => 1,
+        # A silent connection (a browser preconnect) is dropped after this;
+        # the loop multiplexes many partially-idle connections, so it costs
+        # nothing while a client sits silent.
+        read_timeout => $READ_TIMEOUT,
+    );
 
-    # Starman parses --listen by splitting on ':', so an IPv6 *literal* like
-    # [::1]:8787 breaks (starman issue #149).  Passing the symbolic hostname
-    # is what works: Net::Server resolves it to both ::1 and 127.0.0.1 and
-    # binds each, which preserves the dual-loopback behaviour browsers need —
-    # localhost resolves ::1 first, so v4-only stalls them.
-    require Plack::Handler::Starman;
-    say STDERR "[axa] serving $dir — Starman, $WORKERS workers, store=$db, streaming";
+    # $LISTEN may be a symbolic host ('localhost') or an IPv6 literal
+    # ('[::1]:8787'); Amin::Net::Loop->bind resolves either and binds one
+    # socket per address family, so a browser that tries ::1 first is served.
+    say STDERR "[axa] serving $dir — Amin::Net::Loop, $WORKERS worker(s), store=$db, streaming";
     say STDERR "[axa] listening on http://$LISTEN (Ctrl-C to stop)";
-    Plack::Handler::Starman->new(
-        listen           => [$LISTEN],
-        workers          => $WORKERS,
-        # Starman's stock read-timeout is 5s, and every SILENT connection pins
-        # one worker for that whole window (measured: 4 idle conns on 4
-        # workers = a 5s stall, 8 = 10s).  A browser preconnect is exactly
-        # such a silent connection, so keep the window short: the pool should
-        # only be pinned for a moment by a client that never sends a request.
-        timeout          => $READ_TIMEOUT,
-        # Starman's default is 1s, which drops a real browser's second request
-        # if it takes longer than that to follow a link.  5s matches what the
-        # previous single-process server allowed and does not pin a NEW
-        # connection — only an idle established one.
-        keepalive_timeout => 5,
-    )->run($app);
+    $serve->serve(listen => $LISTEN, workers => $WORKERS);
+    exit 0;
+}
+
+# ── Proxy: L7 front — persistent reverse proxy over a compiled proxy config ─
+# The front is authority-free (proxy-plan §5.12): it parses, routes and pumps,
+# and never mints or widens authority — backends re-authorize.  The config is
+# the contract and is read ONCE (§5.13): a request may never redefine a route,
+# a backend, or the listen address.  Parallels `axa serve`: boot is paid once,
+# the compiled config is injected into every request's chain.
+if (($ARGV[0] // '') eq 'proxy') {
+    shift @ARGV;
+    my $subcmd = shift(@ARGV) // usage(2);
+    $subcmd eq 'serve' or die "Unknown proxy subcommand '$subcmd' (available: serve)\n";
+    my $ref = shift(@ARGV) // usage(2);
+
+    require Amin::Proxy::Config;
+    require Amin::Proxy::HTTP;
+    require Amin::Log::Standard;
+
+    my $cfg = Amin::Proxy::Config->load(ref => $ref);
+    # The config names the bind address; --listen only overrides it when the
+    # operator actually asked (LISTEN_GIVEN), never by falling through to the
+    # AXA default.  Workers default to 1: the unit of parallelism is the loop.
+    my $listen  = $LISTEN_GIVEN  ? $LISTEN  : ($cfg->listen // $LISTEN);
+    my $workers = $WORKERS_GIVEN ? $WORKERS : 1;
+
+    my $log = Amin::Log::Standard->new(stderr => 1);
+    my $proxy = Amin::Proxy::HTTP->new(config => $cfg, log => $log);
+
+    my $scheme = (defined $cfg->tls && length $cfg->tls && $cfg->tls ne 'off')
+        ? 'https' : 'http';
+    my $nbe = scalar keys %{ $cfg->backends };
+    say STDERR "[proxy] serving $ref — $scheme, $workers worker(s), $nbe backend(s)";
+    say STDERR "[proxy] listening on $listen (Ctrl-C to stop)";
+    $proxy->serve(listen => $listen, workers => $workers);
     exit 0;
 }
 

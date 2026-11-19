@@ -7,14 +7,13 @@
 # five minutes.  Browsers open speculative preconnects and hold them, which
 # turned that from an edge case into the common path.
 #
-# The server is now Starman, a prefork pool, so the guarantee is bounded by
-# pool size rather than absolute: a silent connection pins ONE worker for
-# read-timeout, so with spare workers idle clients cost nothing (asserted
-# below), and beyond the pool the stall is read-timeout — not 300 seconds.
-# That residual is inherent to prefork; Starman's own README recommends a
-# fronting proxy for it.  This test therefore keeps idle connections below
-# the worker count and pins both explicitly, so the assertions are about the
-# design rather than about whatever the defaults happen to be.
+# A Starman-style prefork pool only bounded that: a silent connection pins one
+# worker for read-timeout, so idle clients were survivable only while spare
+# workers existed.  The origin is now Amin::AXA::Serve over Amin::Net::Loop —
+# one event loop multiplexes many partially-idle connections, so a silent
+# client costs nothing at all and is simply reaped once its idle window
+# expires.  The assertions below therefore hold absolutely: idle clients are
+# free, and they are dropped rather than tolerated.
 use v5.38; use warnings; use utf8;
 use Test2::V0;
 use File::Basename qw(dirname);
@@ -54,8 +53,8 @@ if ($pid == 0) {
     open STDERR, '>&', \*STDOUT or exit 127;
     exec $^X, '-I', "$ROOT/perl-lib", "$ROOT/bin/amin",
         'axa', 'serve', $APP, '--listen', "127.0.0.1:$port",
-        # Be explicit: this test asserts behaviour relative to the pool size,
-        # and a silent connection pins one worker for read-timeout.
+        # A pool of 4 (SO_REUSEPORT) and a 2 s pre-request idle window: the
+        # pool is real, but the loop means idle connections are never pinned.
         '--workers', 4, '--read-timeout', 2;
     exit 127;
 }
@@ -109,11 +108,10 @@ my ($baseline, $base_dt) = timed_get();
 ok($baseline && $baseline =~ m{^HTTP/1\.1 200}, sprintf('baseline request works (%.2fs)', $base_dt));
 
 my @idle;
-# Stay BELOW the worker count (4).  The invariant is that idle clients cost
-# nothing while spare workers exist — a preconnect must not delay anyone.
-# Once idle connections >= workers the pool is genuinely pinned for
-# read-timeout, which is inherent to prefork (Starman's README recommends a
-# fronting proxy for exactly this), not a bug this suite can assert away.
+# Hold open more idle connections than there are workers.  With the loop this
+# is still free: a connection that sends nothing just sits in the poll set and
+# is never serviced, so a preconnect cannot delay a real client no matter how
+# many are held.
 for my $n (1 .. 3) {
     $idle[$n] = IO::Socket::IP->new(
         PeerHost => '127.0.0.1', PeerPort => $port, Proto => 'tcp',
@@ -126,7 +124,7 @@ my ($during, $during_dt) = timed_get();
 ok($during && $during =~ m{^HTTP/1\.1 200},
    'server still answers while idle connections are held open');
 cmp_ok($during_dt, '<', 2,
-   sprintf('and answers promptly (%.2fs) — idle clients cost nothing while spare workers exist', $during_dt))
+   sprintf('and answers promptly (%.2fs) — idle clients cost nothing across the loop', $during_dt))
    or diag("idle clients stalled the server: took ${during_dt}s");
 
 $_->close for grep { defined } @idle;

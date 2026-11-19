@@ -1,0 +1,168 @@
+#!/usr/bin/env perl
+# axa-bench — A/B the loop origin against the origin it replaced.
+#
+# Runs the SAME app bundle, through the SAME `Amin::AXA::HTTP` core, against
+# the SAME off-heap SQLite store, from the SAME generator, on the same box —
+# twice: once behind `Amin::AXA::Serve` over `Amin::Net::Loop` (today's
+# origin), once behind Starman over a bench-only PSGI shim
+# (bench/axa-starman.psgi).  The only variable is the server.
+#
+# Starman is optional: if it is not installed the loop result still prints and
+# the comparison is skipped with a note.  Nothing here is part of the build or
+# the test suite — it is a measurement, kept beside the code it measures
+# (axa-plan §4.8).
+#
+# Usage: mise run bench      (or: bench/axa-bench --conns 64 --duration 10)
+use v5.38; use warnings; use utf8; use experimental 'signatures';
+
+use Getopt::Long qw(:config no_ignore_case);
+use File::Basename qw(dirname);
+use File::Temp qw(tempdir);
+use Cwd qw(abs_path);
+use IO::Socket::IP;
+use Time::HiRes qw(time sleep);
+
+my $root = dirname(dirname(abs_path(__FILE__)));
+
+my ($app, $path, $conns, $duration, $warmup, $workers);
+$app      = "$root/examples/apps/shop-ui";
+$path     = '/';
+$conns    = 32;
+$duration = 5;
+$warmup   = 1;
+$workers  = 4;
+GetOptions(
+    'app=s'      => \$app,
+    'path=s'     => \$path,
+    'conns=i'    => \$conns,
+    'duration=f' => \$duration,
+    'warmup=f'   => \$warmup,
+    'workers=i'  => \$workers,
+) or die "axa-bench: bad options\n";
+
+my $tmp   = tempdir(CLEANUP => 1);
+my $perl  = $^X;
+my $load  = "$root/bench/axa-load";
+
+sub free_port () {
+    my $s = IO::Socket::IP->new(
+        LocalAddr => '127.0.0.1', LocalPort => 0, Listen => 5, ReuseAddr => 1,
+        Proto => 'tcp',
+    ) or die "axa-bench: cannot pick a port: $!\n";
+    my $p = $s->sockport;
+    close $s;
+    return $p;
+}
+
+sub wait_listen ($port, $tries = 100) {
+    for (1 .. $tries) {
+        my $s = IO::Socket::IP->new(
+            PeerHost => '127.0.0.1', PeerPort => $port, Proto => 'tcp', Timeout => 1,
+        );
+        return 1 if $s;
+        sleep 0.1;
+    }
+    return 0;
+}
+
+# fork + exec with a private env and its output captured to a log.
+sub spawn ($log, %env) {
+    my @cmd = @{ delete $env{_cmd} };
+    my $pid = fork // die "axa-bench: fork: $!\n";
+    if ($pid == 0) {
+        open STDOUT, '>', $log or exit 127;
+        open STDERR, '>&', \*STDOUT or exit 127;
+        %ENV = (%ENV, %env);
+        exec { $cmd[0] } @cmd;
+        exit 127;
+    }
+    return $pid;
+}
+
+sub stop ($pid) {
+    return unless $pid;
+    kill 'TERM', $pid;
+    for (1 .. 40) {                        # up to ~2 s to exit on TERM
+        return if waitpid($pid, 1) == $pid;
+        sleep 0.05;
+    }
+    kill 'KILL', $pid;
+    waitpid $pid, 0;
+}
+
+sub run_load ($port) {
+    open my $fh, '-|', $perl, $load,
+        '--host', '127.0.0.1', '--port', $port, '--path', $path,
+        '--conns', $conns, '--duration', $duration, '--warmup', $warmup
+        or die "axa-bench: cannot run $load: $!\n";
+    my $line = <$fh> // '';
+    close $fh;
+    chomp $line;
+    return $line;
+}
+
+# ── A: the loop origin ──────────────────────────────────────────────────────
+sub bench_loop ($port) {
+    my $pid = spawn("$tmp/loop.log",
+        _cmd => [$perl, "$root/bin/amin",
+                 'axa', 'serve', $app, '--listen', "127.0.0.1:$port",
+                 '--workers', $workers],
+        AXA_STORE => "$tmp/loop.sqlite",
+    );
+    wait_listen($port) or do {
+        stop($pid);
+        return ('loop (Amin::AXA::Serve)', undef, "$tmp/loop.log");
+    };
+    my $out = run_load($port);
+    stop($pid);
+    return ('loop (Amin::AXA::Serve)', $out, "$tmp/loop.log");
+}
+
+# ── B: Starman over the bench-only PSGI shim ────────────────────────────────
+sub starman_path () {
+    my $bin = "$root/local/bin/starman";
+    return $bin if -x $bin;
+    # fall back to whatever `starman` resolves to on PATH
+    for my $dir (split /:/, $ENV{PATH} // '') {
+        my $p = "$dir/starman";
+        return $p if -x $p;
+    }
+    return undef;
+}
+
+sub bench_starman ($port) {
+    my $bin = starman_path()
+        or return ('starman (PSGI shim)', undef, undef);
+    my $pid = spawn("$tmp/starman.log",
+        _cmd => [$perl, $bin,
+                 '--listen', "127.0.0.1:$port",
+                 '--workers', $workers,
+                 "$root/bench/axa-starman.psgi"],
+        PERL5LIB  => "$root/perl-lib:$root/local/lib/perl5",
+        AMIN_ROOT => $root,
+        AXA_APP_DIR => $app,
+        AXA_STORE => "$tmp/starman.sqlite",
+    );
+    wait_listen($port) or do {
+        stop($pid);
+        return ('starman (PSGI shim)', undef, "$tmp/starman.log");
+    };
+    my $out = run_load($port);
+    stop($pid);
+    return ('starman (PSGI shim)', $out, "$tmp/starman.log");
+}
+
+# ── run both, print one line each ───────────────────────────────────────────
+my ($lname, $lout, $llog) = bench_loop(free_port());
+printf "%-24s %s\n", $lname, $lout // "(no result — see $llog)";
+
+my ($sname, $sout, $slog) = bench_starman(free_port());
+if (!defined $slog) {
+    print "$sname (not installed — skipping A/B; `mise run bootstrap` installs Plack/Starman for the bench)\n";
+}
+elsif (!defined $sout) {
+    printf "%-24s (no result — see %s)\n", $sname, $slog;
+}
+else {
+    printf "%-24s %s\n", $sname, $sout;
+}

@@ -37,4 +37,10 @@
     <shop:action name="cart.remove" sku="{sku}" sid="{sid}" csrf="{csrf}"/>
   </axa:action>
 
+  <!-- A byte-exact plain-text route with a path template.  `type=` picks the
+       serializer (the route's media type, independent of the filter set) and
+       the `:who` segment is captured from the path and substituted like any
+       other value — the same mechanism an ACME HTTP-01 challenge uses. -->
+  <axa:route path="/hello/:who" method="GET" type="text/plain">Hello, {who}!</axa:route>
+
 </axa:app>

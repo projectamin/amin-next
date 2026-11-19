@@ -1,10 +1,11 @@
 #!/usr/bin/env perl
 # Cross-worker session/cart persistence against the REAL server.
 #
-# This is the test that fails without the SQLite store.  Starman preforks, and
-# a forked worker gets its own copy of any in-process hash — so with the old
-# in-memory adapter, three adds issued over separate connections would land on
-# different workers and the cart would silently lose most of them.
+# This is the test that fails without the SQLite store.  The origin preforks
+# (SO_REUSEPORT workers, each with its own Amin::Net::Loop), and a forked
+# worker gets its own copy of any in-process hash — so with the old in-memory
+# adapter, three adds issued over separate connections would land on different
+# workers and the cart would silently lose most of them.
 #
 # It forks `bin/amin axa serve` (multiple workers), drives it over TCP with
 # fresh connections so the kernel spreads load across the pool, and asserts the

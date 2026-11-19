@@ -121,8 +121,9 @@ filters stay gated.
 
 ### 4.1 Filters do the work; the server is dumb plumbing
 
-`Amin::AXA::PSGI` should be < 150 lines: read body → feed dispatcher →
-write status/headers/body. It does not know what a shop is, what an
+`Amin::AXA::HTTP` (the transport-neutral core) plus `Amin::AXA::Serve`
+(the loop origin) should be < 150 lines each: read body → feed dispatcher →
+write status/headers/body. Neither knows what a shop is, what an
 action is, or who may do what. Routing, cart logic, and rendering are
 filters at declared positions, registered through `machine_spec.xml` like
 every other filter — and the [app bundle contract](app-bundle-contract.md)
@@ -259,9 +260,11 @@ Two facts follow, and both dwarf the transport question. The
 per-invocation CLI model costs ~16× a warm request, so a persistent worker
 is the entire win. And **45% of a warm request is spec resolution + chain
 construction, not rendering.** At 9.33 ms of application work per request,
-the gap between the fastest and slowest PSGI server — Gazelle vs Starman on
-a *hello-world* is 0.009 ms vs 0.03 ms of request handling — is ~0.2% of a
-request. No server choice pays for itself before those two rows do.
+the transport is a rounding error: a hello-world HTTP server spends
+0.009–0.03 ms of request handling, ~0.2% of this page. No server choice
+pays for itself before those two rows do — which is why the origin is
+*ours*, not a borrowed PSGI stack: `Amin::AXA::Serve` over
+`Amin::Net::Loop`, the project's own single-process event loop.
 
 So the server is fixed by design, not by benchmark: **read the spec once at
 startup and keep it for the lifetime of the process**, stream the response
@@ -286,20 +289,21 @@ it (a further ~24%).
 
 **Streaming is the default, not an option.** `Amin::Handler::Writer`
 already has an `fh` + `autoflush` path (`_push` prints and flushes when
-`fh` is set), so incremental output exists; what does not exist yet is an
-adapter writer that skips the `buf` accumulation. The streaming design has
-one sharp edge, and it is the same one PSGI already encodes:
+`fh` is set), so incremental output exists. `Amin::AXA::Serve` drives that
+path: on a streaming dispatch it emits the body as `Transfer-Encoding:
+chunked` — one small chunk per emitted element, no `Content-Length` — so
+the first byte reaches the client while the chain is still walking. The
+streaming design has one sharp edge:
 
-- PSGI's `psgi.streaming` is a SHOULD, not a MUST, and the spec fixes status
-  and headers at the moment the responder is called. There is no revising
-  them after the first body byte.
+- The HTTP status and headers are fixed at the moment the first body byte
+  is written. There is no revising them afterwards.
 - `Writer` pushes the XML declaration at `start_document` — *before* any
-  filter has authenticated anything. So the adapter cannot simply forward
+  filter has authenticated anything. So the origin cannot simply forward
   bytes from the first event.
 
-The resolution is a **status latch**: the adapter holds the first bytes (the
-XML declaration and root open tag — a few dozen) and does not call the
-responder until it can name a status. The decision arrives early, because
+The resolution is a **status latch**: `Serve` holds the first bytes (the
+XML declaration and root open tag — a few dozen) and does not commit the
+response until it can name a status. The decision arrives early, because
 ZCap checks the token at the first child of `root` and suppresses the rest of
 the document on failure. So: on an `amin:status` with a negative rc before
 any body content → that rc maps to the HTTP status and the body is the error
@@ -311,24 +315,45 @@ specifies. A full-page GET can render it as an error page; a fragment swap
 can swap the fragment. That is what the streaming contract costs, and it is
 paid in the body, not in the status line.
 
-The adapter must check `$env->{'psgi.streaming'}` and fall back to buffering
-when the server does not advertise it — the same code path, with the latch
-released at `end_document`.
+With `stream => 0` the same code path buffers instead: the latch is released
+at `end_document`, the body is sent with a `Content-Length`, and no chunk
+framing appears. Tests take that path; production takes the streaming one.
 
-`plackup`/Starman behind nginx, one worker per core. Never a `bin/amin`
-subprocess or fork-per-request: that is the 29.5 ms load, every page. For the
-alternatives and why they do not win: Mojolicious/Hypnotoad buys a different
-framework rather than a faster SAX pipeline (`Mojo::Server::PSGI` consumes a
-PSGI app, so it stays inside this design); nginx + FastCGI removes a socket
-hop but adds `FCGI`, whose 0.44–0.82 series is reported to carry
-CVE-2025-40907, and still needs `fastcgi_buffering off` to pass streams;
-mod_perl2's current release is 2.0.13 from October 2023 and HTTP/2 under its
-prefork MPM is poor; Twiggy and Feersum become the interesting choice only
-when the event loop itself is the point (backpressure across many idle
-streams), not because streaming alone requires them.
+**The origin is `Amin::Net::Loop`, pre-forked.** `bin/amin axa serve` runs
+one event loop per `--workers` process (default 4), each binding the same
+address with `SO_REUSEPORT` so the kernel spreads accepts. Never a
+`bin/amin` subprocess or fork-per-request: that is the 29.5 ms load, every
+page. Starman (the previous origin) was correct but pins one worker per
+connection for the whole round-trip, so a browser's speculative preconnect
+holds a worker until `read-timeout` — the regression `t/54` guards. The
+loop multiplexes many partially-idle connections, so an idle client costs
+nothing and is simply reaped. The one trade is the off-heap store: a forked
+worker gets its own copy of any in-process hash, so the session cart lives
+in SQLite (see `Amin::AXA::Store::SQLite`), not in memory.
 
-`Plack::Runner` for `amin axa serve`. Tests use `Plack::Test` (no sockets,
-deterministic) plus one loopback smoke test. Add `Plack` to `cpanfile`.
+Owning the loop also retires the whole "which PSGI server?" question —
+Mojolicious/Hypnotoad, `plackup`, nginx + FastCGI (`FCGI`'s 0.44–0.82
+series is reported to carry CVE-2025-40907), mod_perl2, Twiggy and Feersum
+are all moot when the transport is ours.
+
+**Measured, not asserted.** `mise run bench` (`bench/axa-bench`) drives the
+same bundle, the same `Amin::AXA::HTTP` core and the same SQLite store
+through both origins from one closed-loop generator (`bench/axa-load` — no
+`ab`/`wrk`/`hey` on the box), keep-alive for 5 s after a 1 s warm-up on a
+12-core host:
+
+| conns / procs | loop rps | Starman rps | loop p99 | Starman p99 | note |
+| --- | --- | --- | --- | --- | --- |
+| 4 / 4 | 427 | 535 | 20 ms | 12 ms | matched; comparable |
+| 16 / 16 | 404–904 | 296–352 | 52–140 ms | 111–141 ms | noisy — generator-bound |
+| 64 / 8 | 623 · 0 errs | 163 · 56 errs | 349 ms | 11.1 s | Starman starves |
+
+The generator is a single process, so at 16 procs it — not the servers —
+caps throughput and the run is noisy. The signal is the last row: past
+`procs` connections Starman's PreFork pins one worker per connection and the
+surplus stalls (11 s p99, 56 connections dropped), while the loop multiplexes
+every connection and drops none. That is the property the port buys, and
+`bench/axa-bench` reproduces it on demand.
 
 ### 4.9 Request isolation in a long-lived process
 
@@ -627,9 +652,10 @@ each one denies a *browser* attack rather than granting a permission:
 | Replay window (`ts`, idempotency key) | codec + `Amin::AXA::Store` | one rule for every transport |
 | **Which elements this principal may cause to run** | **`Auth::ZCap` + `Auth::Policy`, both `permanent`** | transport-independent by construction |
 
-`Amin::AXA::PSGI` must contain no `if $element eq …`, no role table, no
-allow-list. An authorization decision appearing in the adapter is a bug by
-definition: the identical profile over stdin would bypass it.
+`Amin::AXA::HTTP` and `Amin::AXA::Serve` must contain no `if $element eq …`,
+no role table, no allow-list. An authorization decision appearing in the
+adapter is a bug by definition: the identical profile over stdin would
+bypass it.
 
 ### 5.7 Rendering is scoped identically
 
@@ -744,12 +770,15 @@ Acceptance:
 ### M2 — HTTP
 
 Files:
-- `perl-lib/Amin/AXA/PSGI.pm` — the adapter.
+- `perl-lib/Amin/AXA/HTTP.pm` — the transport-neutral adapter core
+  (`boot`/`handle`/`render`), and `perl-lib/Amin/AXA/Serve.pm` — the
+  `Amin::Net::Loop` origin that frames requests and streams responses.
 - `perl-lib/Amin/AXA/Session.pm` — cookie → session record, adapter-side;
   carries the CSRF token as transport hygiene, not as authorization (§5.6).
 - `bin/amin` — `amin axa serve <app> --listen 127.0.0.1:8787`.
-- `cpanfile` — `Plack`.
-- `t/51-axa-http.t` (Plack::Test), `t/52-axa-http-smoke.t` (loopback).
+- `cpanfile` — no Plack/Starman; the origin is our own loop.
+- `t/51-axa-http.t` (core + one loopback origin), `t/52-axa-http-smoke.t`
+  (loopback).
 
 Acceptance:
 - `GET /` → 200 `text/html`, correct body, no `ui:` leakage.
@@ -770,8 +799,8 @@ Acceptance:
   document ends — asserted against a deliberately slow generator, not by
   inspecting the code — and the response is byte-identical to the buffered
   rendering.
-- **`psgi.streaming` fallback (§4.8):** with the key absent from `$env`, the
-  adapter buffers and returns the same status and body.
+- **`stream => 0` fallback (§4.8):** with streaming disabled, the adapter
+  buffers, sets a `Content-Length`, and returns the same status and body.
 - **Status latch (§4.8):** an invalid token yields its mapped HTTP status
   (not 200-then-error), and the latch holds back no more than the XML
   declaration plus the root open tag before committing.

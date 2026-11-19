@@ -1,10 +1,10 @@
 #!/usr/bin/env perl
 # Streaming responses (plan §4.8).
 #
-# render_stream returns a PSGI streaming coderef: the server calls it with a
-# responder, calling that responder commits the status line, and every chunk
-# after goes straight to the socket.  Three properties matter and are easy to
-# get wrong:
+# render_stream returns a coderef the server drives: the server calls it with a
+# responder, calling that responder commits the status line at the latch, and
+# every chunk after goes straight to the socket.  Three properties matter and
+# are easy to get wrong:
 #
 #   1. The status latch fires EXACTLY ONCE.  Committing twice means a second
 #      status line on an already-open response.
@@ -14,14 +14,14 @@
 #      buffered path produces.
 #
 # A fake responder/writer stands in for the server so this runs without a
-# socket; t/57 exercises the real Starman path over TCP.
+# socket; t/57 exercises the real Amin::Net::Loop origin over TCP.
 use v5.38; use warnings; use utf8;
 use Test2::V0;
 use File::Basename qw(dirname);
 use Path::Tiny qw(path);
 use lib dirname(__FILE__) . '/../perl-lib';
 
-use Amin::AXA::PSGI;
+use Amin::AXA::HTTP;
 use Amin::AXA::App;
 use Amin::AXA::Store;
 use Amin::AXA::Store::SQLite;
@@ -62,7 +62,7 @@ push $spec->{filters}->@*, (
 sub stream_of {
     my ($path, $extra) = @_;
     my $r = $app->get_route($path) or die "no route for $path";
-    return Amin::AXA::PSGI->render_stream(
+    return Amin::AXA::HTTP->render_stream(
         $spec, $r->{fragment},
         { sid => 's1', csrf => 'tok' }, $extra // []);
 }
@@ -77,7 +77,7 @@ my $responder = sub {
 };
 
 my $stream = stream_of('/');
-is(ref $stream, 'CODE', 'render_stream returns a PSGI streaming coderef');
+is(ref $stream, 'CODE', 'render_stream returns a streaming coderef');
 
 $stream->($responder);
 is(scalar @committed, 1, 'status latch fired exactly once (not per chunk)');
@@ -93,9 +93,10 @@ ok($W->closed, 'writer was closed at the end of the stream');
 
 # ── 3. reassembly matches the buffered path ─────────────────────────────
 my $streamed = $W->joined;
-my $buffered = Amin::AXA::PSGI->render(
+my $buffered = Amin::AXA::HTTP->render(
     $spec, $app->get_route('/')->{fragment}, { sid => 's1', csrf => 'tok' });
-my $buffered_html = ref $buffered->[2] eq 'ARRAY' ? $buffered->[2][0] : '';
+# render returns `[status, \@headers, $body_bytes]` — the body is a scalar.
+my $buffered_html = ref $buffered->[2] eq 'ARRAY' ? $buffered->[2][0] : $buffered->[2];
 
 like($streamed, qr{^<!DOCTYPE html>}, 'streamed body starts with the doctype');
 like($streamed, qr{</html>\s*\z},    'streamed body ends with </html>');
@@ -106,7 +107,7 @@ is(length($streamed), length($buffered_html), '  same length — nothing dropped
 my @with_cookie;
 my $resp2 = sub { push @with_cookie, shift; return Axat::FakeWriter->new };
 stream_of('/', ['Set-Cookie' => 'axa_sid=test; Path=/'])->($resp2);
-# PSGI headers are a FLAT key/value list, so scan every other element.
+# Response headers are a FLAT key/value list, so scan every other element.
 my @hdrs = @{ $with_cookie[0][1] };
 my $found_cookie = 0;
 for (my $i = 0; $i < @hdrs; $i += 2) {
@@ -120,7 +121,7 @@ ok($found_cookie, 'Set-Cookie is present on the latched headers (too late to add
 # silent socket is far worse than an empty page if a future handler regresses.
 my (@empty_committed, $EW);
 my $resp3 = sub { push @empty_committed, shift; $EW = Axat::FakeWriter->new; return $EW };
-my $empty = Amin::AXA::PSGI->render_stream(
+my $empty = Amin::AXA::HTTP->render_stream(
     $spec, '<shop:request xmlns:shop="urn:projectamin:example:shop"/>',
     { sid => 's', csrf => 't' }, []);
 $empty->($resp3);
@@ -135,7 +136,7 @@ is($empty_committed[0][0], 200, '  and it is a 200, not a silent socket');
 # that protects the client is "exactly one status line, then close".
 my (@err_committed, $ErrW);
 my $resp4 = sub { push @err_committed, shift; $ErrW = Axat::FakeWriter->new; return $ErrW };
-my $bad = Amin::AXA::PSGI->render_stream(
+my $bad = Amin::AXA::HTTP->render_stream(
     $spec, '<shop:request xmlns:shop="urn:projectamin:example:shop"><unclosed>',
     { sid => 's', csrf => 't' }, []);
 $bad->($resp4);

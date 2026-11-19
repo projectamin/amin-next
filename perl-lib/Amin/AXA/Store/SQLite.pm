@@ -16,8 +16,8 @@ use JSON::PP ();
 # Fork safety is the whole design point.  A DBD::SQLite handle opened in the
 # parent must not be reused after fork — its docs warn it can corrupt the
 # database — so the connection is opened lazily and re-opened whenever the
-# process id changes.  Starman's master loads the app before forking; each
-# worker then gets its own handle on first use.
+# process id changes.  The origin pre-forks (SO_REUSEPORT workers) after
+# loading the app; each worker then gets its own handle on first use.
 #
 # SQLite is a single-writer database even in WAL mode, so: WAL for readers
 # alongside the one writer, a busy_timeout so a contending worker waits

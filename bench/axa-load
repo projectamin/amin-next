@@ -1,0 +1,236 @@
+#!/usr/bin/env perl
+# axa-load — a closed-loop HTTP/1.1 load generator for the AXA origin.
+#
+# There is no `ab`, `wrk` or `hey` on this box, so the harness ships its own:
+# one process, IO::Poll, `--conns` non-blocking sockets each running a
+# send → read → send loop against a keep-alive origin.  That is the shape the
+# comparison needs — a persistent origin is only measurable with persistent
+# clients, and the loop's whole claim (axa-plan §4.8) is that a connection
+# costs nothing while it is idle, which a connect-per-request generator hides.
+#
+# It is deliberately transport-only: it understands HTTP/1.1 framing
+# (Content-Length or chunked) so it can time a full response for a streaming
+# origin, and it reuses the session cookie the origin mints so repeat requests
+# take the warm path rather than paying a store write every time.
+#
+# Output is one line (t/README-style, easy to diff between runs):
+#
+#   conns=32 path=/ reqs=48211 errs=0 elapsed=5.00s rps=9642 p50=3.11ms p90=4.02ms p99=5.88ms max=18.4ms
+#
+# Usage:
+#   bench/axa-load --host 127.0.0.1 --port 8787 [--path /] [--conns 32]
+#                  [--duration 5] [--warmup 1] [--header 'K: V']
+use v5.38; use warnings; use utf8; use experimental 'signatures';
+
+use Getopt::Long qw(:config no_ignore_case);
+use IO::Poll qw(POLLIN POLLOUT POLLHUP POLLERR POLLNVAL);
+use IO::Socket::IP;
+use Time::HiRes qw(time);
+
+my ($host, $port, $path, $conns, $duration, $warmup, @hdrs);
+$host     = '127.0.0.1';
+$port     = 8787;
+$path     = '/';
+$conns    = 32;
+$duration = 5;
+$warmup   = 1;
+GetOptions(
+    'host=s'      => \$host,
+    'port=i'      => \$port,
+    'path=s'      => \$path,
+    'conns=i'     => \$conns,
+    'duration=f'  => \$duration,
+    'warmup=f'    => \$warmup,
+    'header=s@'   => \@hdrs,
+) or die "axa-load: bad options (see --host --port --path --conns --duration)\n";
+$port > 0 && $port < 65536 or die "axa-load: --port out of range\n";
+$conns >= 1 or die "axa-load: --conns must be >= 1\n";
+
+my @extra = map { /^([^:]+):\s*(.*)$/ ? [$1, $2] : () } @hdrs;
+
+# ── one connection: send a request, frame the response, repeat ──────────────
+# phase: 'idle' (nothing outstanding) → 'write' (request bytes queued) →
+# 'head' (awaiting status line + headers) → 'body' → back to 'idle'.
+sub connect_sock () {
+    IO::Socket::IP->new(
+        PeerHost => $host, PeerPort => $port, Proto => 'tcp', Timeout => 5,
+    ) or die "axa-load: cannot connect to $host:$port: $!\n";
+}
+
+sub req_bytes ($c) {
+    my $r = "GET $path HTTP/1.1\r\n"
+          . "Host: $host:$port\r\n"
+          . "Connection: keep-alive\r\n";
+    $r .= "Cookie: $c->{cookie}\r\n" if $c->{cookie};
+    $r .= "$_->[0]: $_->[1]\r\n" for @extra;
+    return "$r\r\n";
+}
+
+sub start_req ($c) {
+    $c->{out}    = req_bytes($c);
+    $c->{phase}  = 'write';
+    $c->{started} = time;
+    ++$c->{sent};
+}
+
+sub flush_out ($c) {
+    while (length $c->{out}) {
+        my $n = syswrite $c->{sock}, $c->{out};
+        if (!defined $n) {
+            last if $!{EAGAIN} || $!{EWOULDBLOCK};
+            $c->{err} = $c->{dead} = 1; $c->{phase} = 'idle'; return 0;
+        }
+        substr($c->{out}, 0, $n, '');
+    }
+    $c->{phase} = 'head' if $c->{phase} eq 'write' && !length $c->{out};
+    return 1;
+}
+
+# Parse whatever is in $c->{buf}; returns 1 when a full response was consumed.
+sub try_parse ($c) {
+    if ($c->{phase} eq 'head') {
+        my $i = index($c->{buf}, "\r\n\r\n");
+        return 0 if $i < 0;
+        my $head = substr($c->{buf}, 0, $i + 4, '');
+        my @lines = split /\r\n/, $head;
+        shift @lines;                              # status line
+        my %h;
+        for my $l (@lines) {
+            my ($k, $v) = split /:\s*/, $l, 2;
+            $h{ lc $k } = $v if defined $v;
+        }
+        if (defined $h{'set-cookie'} && $h{'set-cookie'} =~ /(axa_sid=[0-9a-f]+)/) {
+            $c->{cookie} = $1;
+        }
+        if (($h{'transfer-encoding'} // '') =~ /chunked/i) {
+            $c->{body} = 'chunked';
+            $c->{cstate} = 'size';
+        }
+        else {
+            $c->{body}  = 'length';
+            $c->{left}  = $h{'content-length'} // 0;
+        }
+        $c->{phase} = 'body';
+    }
+
+    if ($c->{phase} eq 'body') {
+        if ($c->{body} eq 'length') {
+            return 0 unless length($c->{buf}) >= $c->{left};
+            substr($c->{buf}, 0, $c->{left}, '');
+        }
+        else {                                     # chunked
+            while (1) {
+                if ($c->{cstate} eq 'size') {
+                    my $i = index($c->{buf}, "\r\n");
+                    return 0 if $i < 0;
+                    my $line = substr($c->{buf}, 0, $i + 2, '');
+                    my ($hex) = $line =~ /^([0-9a-fA-F]+)/;
+                    return 0 unless defined $hex;
+                    my $n = hex $hex;
+                    if ($n == 0) { $c->{cstate} = 'trailer'; next }
+                    $c->{left} = $n; $c->{cstate} = 'data';
+                }
+                elsif ($c->{cstate} eq 'data') {
+                    return 0 unless length($c->{buf}) >= $c->{left};
+                    substr($c->{buf}, 0, $c->{left}, '');
+                    $c->{cstate} = 'crlf';
+                }
+                elsif ($c->{cstate} eq 'crlf') {
+                    return 0 unless length($c->{buf}) >= 2;
+                    substr($c->{buf}, 0, 2, '');
+                    $c->{cstate} = 'size';
+                }
+                else {                             # trailer → blank line ends it
+                    my $i = index($c->{buf}, "\r\n");
+                    return 0 if $i < 0;
+                    substr($c->{buf}, 0, $i + 2, '');
+                    last if $i == 0;
+                }
+            }
+        }
+        # full response consumed
+        push $c->{lat}->@*, (time - $c->{started}) * 1000;
+        ++$c->{done};
+        $c->{phase} = 'idle';
+        return 1;
+    }
+    return 0;
+}
+
+sub read_into ($c) {
+    my $n = sysread $c->{sock}, my $chunk, 65536;
+    if (!defined $n) {
+        return if $!{EAGAIN} || $!{EWOULDBLOCK};
+        $c->{err} = $c->{dead} = 1; $c->{phase} = 'idle'; return;
+    }
+    if ($n == 0) { $c->{err} = $c->{dead} = 1; $c->{phase} = 'idle'; return }
+    $c->{buf} .= $chunk;
+    while ($c->{phase} ne 'idle' && try_parse($c)) { }
+}
+
+# ── drive ───────────────────────────────────────────────────────────────────
+my $poll = IO::Poll->new;
+my (@conns, %byfd);
+for my $i (1 .. $conns) {
+    my $sock = connect_sock();
+    $sock->blocking(0);
+    my $c = { sock => $sock, phase => 'idle', buf => '', out => '',
+              lat => [], done => 0, sent => 0, err => 0, dead => 0 };
+    push @conns, $c;
+    $byfd{ fileno $sock } = $c;
+    $poll->mask($sock, POLLIN);
+}
+
+my $t_start = time;
+my $deadline = $t_start + $warmup + $duration;
+my $warm_end = $t_start + $warmup;
+my $hard_end = $deadline + 10;                 # wall-clock guard: never wedge
+
+# Reset the latency sample set at the warm/duration boundary so warm-up never
+# pollutes the percentiles.
+while (1) {
+    my $now = time;
+    last if $now >= $hard_end;
+    last if $now >= $deadline
+        && !grep { $_->{phase} ne 'idle' && !$_->{dead} } @conns;
+
+    for my $c (@conns) {
+        next if $c->{phase} ne 'idle' || $c->{dead};
+        next if $now >= $deadline;
+        start_req($c);
+        flush_out($c);
+        $poll->mask($c->{sock}, POLLIN | (length $c->{out} ? POLLOUT : 0));
+    }
+
+    # IO::Poll::poll returns a *count*; the ready handles come from ->handles.
+    $poll->poll(0.02);
+    for my $h ($poll->handles) {
+        my $c = $byfd{ fileno $h } or next;
+        my $m = $poll->events($h);
+        if ($m & (POLLERR | POLLHUP | POLLNVAL)) {
+            $c->{err} = $c->{dead} = 1; $c->{phase} = 'idle';
+        }
+        read_into($c) if ($m & POLLIN) && !$c->{dead};
+        if ($m & POLLOUT && !$c->{dead} && !flush_out($c)) {
+            $c->{err} = $c->{dead} = 1; $c->{phase} = 'idle';
+        }
+        $poll->mask($c->{sock}, POLLIN | (length $c->{out} ? POLLOUT : 0))
+            unless $c->{dead};
+    }
+
+    if ($now < $warm_end && time >= $warm_end) {
+        $_->{lat} = [] for @conns;                 # start measuring cleanly
+    }
+}
+
+my $elapsed = time - $warm_end;
+$elapsed = $duration if $elapsed <= 0;
+
+my @lat = sort { $a <=> $b } map { $_->{lat}->@* } @conns;
+my $reqs = scalar @lat;
+my $errs = grep { $_->{err} } @conns;
+my $pct  = sub ($p) { @lat ? $lat[ int($p * ($#lat)) ] : 0 };
+
+printf "conns=%d path=%s reqs=%d errs=%d elapsed=%.2fs rps=%d p50=%.2fms p90=%.2fms p99=%.2fms max=%.2fms\n",
+    $conns, $path, $reqs, $errs, $elapsed, int($reqs / $elapsed),
+    $pct->(0.50), $pct->(0.90), $pct->(0.99), (@lat ? $lat[-1] : 0);
