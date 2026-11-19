@@ -276,6 +276,16 @@ sub open ($self, $k, $a, $h) {
         my $url = $self->attr($a, 'url');
         $self->_start($h, 'img', src => $url, alt => '', @id);
     }
+    elsif ($k eq 'audio') {
+        # A transport element, not a leaf: the browser owns play transport,
+        # so the element carries its source and stays open for fallback text.
+        my $src = $self->attr($a, 'src');
+        $src = $title unless length $src;
+        my @at = (src => $src, controls => 'controls', preload => 'metadata');
+        push @at, loop => 'loop' if length $self->attr($a, 'loop');
+        $self->_start($h, 'audio', @at, @id);
+        $f->{closes} = ['audio'];
+    }
     elsif ($k eq 'searchable') {
         $self->_start($h, 'input', type => 'search', @id);
     }

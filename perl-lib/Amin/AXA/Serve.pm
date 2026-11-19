@@ -432,11 +432,13 @@ sub _want_keepalive ($version, $folded) {
 
 sub _reason ($code) {
     return {
-        200 => 'OK', 204 => 'No Content', 301 => 'Moved Permanently',
+        200 => 'OK', 204 => 'No Content', 206 => 'Partial Content',
+        301 => 'Moved Permanently',
         302 => 'Found', 304 => 'Not Modified', 400 => 'Bad Request',
         403 => 'Forbidden', 404 => 'Not Found', 405 => 'Method Not Allowed',
         408 => 'Request Timeout', 413 => 'Payload Too Large',
-        415 => 'Unsupported Media Type', 422 => 'Unprocessable Content',
+        415 => 'Unsupported Media Type', 416 => 'Range Not Satisfiable',
+        422 => 'Unprocessable Content',
         429 => 'Too Many Requests', 431 => 'Request Header Fields Too Large',
         500 => 'Internal Server Error', 502 => 'Bad Gateway',
         503 => 'Service Unavailable', 504 => 'Gateway Timeout',

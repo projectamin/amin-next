@@ -132,14 +132,19 @@ sub handle ($class, $ctx, $req, %o) {
 
     if ($method eq 'GET' || $method eq 'HEAD') {
         if (my ($r, $rparams) = $app->get_route($path)) {
-            my %values = (%{ $class->_params($req) }, %$rparams);
-            my $vals = { %values, sid => $sid, csrf => $rec->{csrf} };  # reserved, applied last
-            my $type = $r->{type} // 'text/html';
-            # Only GET streams: a HEAD response must carry headers but no body,
-            # and the streaming latch cannot know to suppress it.
-            $res = ($stream && $method eq 'GET')
-                ? $class->render_stream($spec, $r->{fragment}, $vals, $cookie_headers, $type)
-                : $class->render($spec, $r->{fragment}, $vals, $type);
+            if (defined $r->{file}) {
+                $res = $class->serve_file($r, $rparams, $req);
+            }
+            else {
+                my %values = (%{ $class->_params($req) }, %$rparams);
+                my $vals = { %values, sid => $sid, csrf => $rec->{csrf} };  # reserved, applied last
+                my $type = $r->{type} // 'text/html';
+                # Only GET streams: a HEAD response must carry headers but no body,
+                # and the streaming latch cannot know to suppress it.
+                $res = ($stream && $method eq 'GET')
+                    ? $class->render_stream($spec, $r->{fragment}, $vals, $cookie_headers, $type)
+                    : $class->render($spec, $r->{fragment}, $vals, $type);
+            }
         }
         elsif ($app->routes_at($path) || $app->actions_at($path)) {
             $res = $class->err(405 => 'method not allowed');
@@ -233,6 +238,96 @@ sub _handler ($class, $type, %o) {
 sub _content_type ($class, $type) {
     return ($type // '') =~ m{^text/plain\b}i
         ? 'text/plain; charset=utf-8' : 'text/html; charset=utf-8';
+}
+
+# ── file routes ─────────────────────────────────────────────────────────────
+# A route that declares `file=` answers with bytes, not a rendered profile.
+# The template expands from the environment, then each captured segment fills
+# its `:name` placeholder.  A capture is confined to one name-safe segment
+# (letters, digits, dot, dash, underscore; no leading dot) and the resolved
+# path must stay inside the template's directory, so `..` and symlink escapes
+# cannot leave it.  The response carries byte-range support, which is what a
+# browser needs to stream and seek an audio or video artifact.
+my %FILE_MIME = (
+    mp3  => 'audio/mpeg', m4a => 'audio/mp4',  mp4  => 'audio/mp4',
+    wav  => 'audio/wav',  flac => 'audio/flac', ogg => 'audio/ogg',
+    opus => 'audio/ogg',  aac  => 'audio/aac',
+    png  => 'image/png',  jpg  => 'image/jpeg', jpeg => 'image/jpeg',
+    gif  => 'image/gif',  webp => 'image/webp', svg  => 'image/svg+xml',
+);
+
+sub serve_file ($class, $route, $params, $req) {
+    my $path = $route->{file} // '';
+    $path =~ s/\$\{(\w+)\}|\$(\w+)/
+        defined $ENV{ $1 || $2 } && length $ENV{ $1 || $2 } ? $ENV{ $1 || $2 } : "\0" /ge;
+    return $class->err(404 => 'not found') if index($path, "\0") >= 0;
+    for my $k (keys %{ $params // {} }) {
+        my $v = $params->{$k} // '';
+        return $class->err(404 => 'not found')
+            unless $v =~ m{\A[A-Za-z0-9][A-Za-z0-9._-]{0,127}\z};
+        my $q = quotemeta $k;
+        $path =~ s/:$q\b/$v/g;
+    }
+    # an unexpanded placeholder means the template did not resolve
+    return $class->err(404 => 'not found')
+        unless $path =~ m{\A/} && $path !~ /:\w/ && $path !~ /\$|\0/;
+
+    my ($dir) = $path =~ m{\A(.*)/[^/]+\z};
+    return $class->err(404 => 'not found') unless defined $dir && length $dir;
+    require Cwd;
+    my $rdir  = Cwd::realpath($dir)  // return $class->err(404 => 'not found');
+    my $rfile = Cwd::realpath($path) // return $class->err(404 => 'not found');
+    return $class->err(404 => 'not found')
+        unless index($rfile, "$rdir/") == 0 && -f $rfile;
+    my $size = -s $rfile;
+    $size = 0 unless defined $size && $size > 0;
+
+    my ($status, $start, $end) = (200, 0, $size - 1);
+    my @extra;
+    my $range = $req->{header}{range} // '';
+    if (length $range && $range =~ m{\Abytes=(\d*)-(\d*)\z} && ($1 ne '' || $2 ne '')) {
+        my ($a, $b) = ($1, $2);
+        if (length $a) {
+            $start = 0 + $a;
+            $end   = length $b ? 0 + $b : $size - 1;
+        }
+        else {
+            $start = $size - (0 + $b);
+            $start = 0 if $start < 0;
+        }
+        $end = $size - 1 if $end > $size - 1;
+        if ($start > $end || $start >= $size) {
+            return [416, ['Content-Type' => 'text/plain; charset=utf-8',
+                          'Content-Range' => "bytes */$size"], "416 range not satisfiable\n"];
+        }
+        $status = 206;
+        push @extra, 'Content-Range' => "bytes $start-$end/$size";
+    }
+
+    # The extension is the file's own type; the route's `type=` is the
+    # fallback for an unmapped one (a `.bin` take whose format the app knows).
+    my ($ext)   = $rfile =~ m{\.([A-Za-z0-9]+)\z};
+    my $ctype   = $FILE_MIME{ lc($ext // '') } // $route->{type} // 'application/octet-stream';
+    $ctype = 'application/octet-stream' unless length $ctype;
+
+    open my $fh, '<:raw', $rfile or return $class->err(404 => 'not found');
+    my $want = $end - $start + 1;
+    my $body = '';
+    if ($want > 0) {
+        seek $fh, $start, 0;
+        while (length($body) < $want) {
+            my $n = read($fh, $body, $want - length($body), length $body);
+            last unless $n;
+        }
+    }
+    close $fh;
+
+    return [ $status, [
+        'Content-Type'  => $ctype,
+        'Accept-Ranges' => 'bytes',
+        'Cache-Control' => 'private, max-age=300',
+        @extra,
+    ], $body ];
 }
 
 sub render ($class, $spec, $fragment, $values, $type = 'text/html') {

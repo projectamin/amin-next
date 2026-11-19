@@ -76,6 +76,8 @@ sub _leaf ($self, $k, $pad, $a, $text) {
     return $pad . "Image(" . $self->lit($title) . ").resizable()" if $k eq 'image';
     return $pad . "AsyncImage(url: URL(string: " . $self->lit($url) . ")!)"
                                                                if $k eq 'asyncimage';
+    return $pad . "Text(" . $self->lit(length $self->attr($a, 'src') ? $self->attr($a, 'src') : $title)
+                 . ") // ui:audio"                              if $k eq 'audio';
     return $pad . "SparklineView(values: $points)"             if $k eq 'sparkline';
     return $pad . ".searchable(text: \$query)"                 if $k eq 'searchable';
     return $pad . "Text(" . $self->lit($text) . ").badge(" . (length $points ? $points : 1) . ")"

@@ -131,4 +131,29 @@ unlike($swh, qr/<ui:/, 'no ui: element reaches the page');
 my $swdoc = eval { XML::LibXML->load_xml(string => $swh) };
 is($@, '', 'swap page is well-formed XML/XHTML');
 
+# ═══════════════════════════════════════════════════════════════════════════
+# 5. ui:audio — a transport element with its own source; the browser owns the
+#    transport, so it opens with controls and stays open for fallback text.
+# ═══════════════════════════════════════════════════════════════════════════
+my $au = Path::Tiny->tempfile(SUFFIX => '.xml');
+$au->spew_utf8(<<'XML');
+<?xml version="1.0" encoding="UTF-8"?>
+<amin:profile xmlns:amin="http://projectamin.org/ns/2026/"
+              xmlns:ui="http://projectamin.org/ns/ui/1"
+              amin:id="io.projectamin.test.audio" amin:version="0.1.0">
+  <ui:app title="Audio">
+    <ui:audio src="/audio/take.mp3" title="take"/>
+  </ui:app>
+</amin:profile>
+XML
+
+my ($auh, $rc5) = run_bin($amin, 'ui', "$au", '--os=html');
+is($rc5, 0, 'audio fixture renders');
+like($auh, qr{<audio\b[^>]*\bsrc="/audio/take\.mp3"}, 'ui:audio src → <audio src=…>');
+like($auh, qr{<audio\b[^>]*\bcontrols="controls"}, 'the player carries controls');
+like($auh, qr{</audio>}, 'ui:audio stays open (it is not a void element)');
+unlike($auh, qr/<ui:/, 'no ui: element reaches the page');
+is(eval { XML::LibXML->load_xml(string => $auh) ? 1 : 0 }, 1,
+    'audio page is well-formed XML/XHTML');
+
 done_testing;

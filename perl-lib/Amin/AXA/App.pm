@@ -44,6 +44,7 @@ sub load ($class, $dir) {
                 path     => $path,
                 method   => uc($node->getAttribute('method') // 'GET'),
                 type     => $type,
+                file     => _file_attr($node),
                 fragment => $frag,
             };
         }
@@ -73,6 +74,17 @@ sub load ($class, $dir) {
         actions => \@actions,
         catalog => _load_catalog("$dir/data/catalog.xml"),
     }, $class;
+}
+
+# `file=` turns a GET route into a byte route: the value is a path template
+# (`$VAR` / `${VAR}` expand from the environment at request time; a `:name`
+# segment captures one request segment under Amin::AXA::HTTP's confinement
+# rules).  Such a route never renders a profile — it answers with the file's
+# bytes — so any app can hand a browser an artifact without a second server.
+sub _file_attr ($node) {
+    my $f = $node->getAttribute('file');
+    return undef unless defined $f && length $f;
+    return $f;
 }
 
 sub _load_catalog ($file) {

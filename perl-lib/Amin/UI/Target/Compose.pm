@@ -89,6 +89,8 @@ sub _leaf ($self, $k, $pad, $a, $text) {
                                                                if $k eq 'image';
     return $pad . "AsyncImage(model = " . $self->lit($url) . ", contentDescription = null)"
                                                                if $k eq 'asyncimage';
+    return $pad . "Text(" . $self->lit(length $self->attr($a, 'src') ? $self->attr($a, 'src') : $title)
+                 . ") // ui:audio"                              if $k eq 'audio';
     return $pad . "Sparkline(points = $points)"                if $k eq 'sparkline';
     return $pad . "/* ui:searchable */"                        if $k eq 'searchable';
     return $pad . "TextField(value = " . $self->lit($self->attr($a, 'value'))

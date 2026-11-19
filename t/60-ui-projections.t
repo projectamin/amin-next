@@ -33,7 +33,7 @@ my $UI_NS   = 'http://projectamin.org/ns/ui/1';
 my @KINDS = qw(
     app scene list row column hstack vstack stack grid section card
     progress alert sheet toolbar searchable item label text markdown badge
-    sparkline button navigate image asyncimage swap
+    sparkline button navigate image asyncimage swap audio
     form field select option table tr cell style
 );
 
@@ -225,14 +225,14 @@ subtest 'E: machine_spec declares the ui: filter family' => sub {
         'E2: the retired SwiftUIView stub is gone');
 
     my @el = grep { $_->{class} =~ /^Amin::Filter::UI::Element::/ } @all;
-    is(scalar @el, 105, 'E3: one element filter per kind per target (35 × 3)');
-    is([sort map { $_->{meta}{position} // '' } @el], [('late') x 105],
+    is(scalar @el, 108, 'E3: one element filter per kind per target (36 × 3)');
+    is([sort map { $_->{meta}{position} // '' } @el], [('late') x 108],
         'E4: every element filter sits at the late position');
     is([sort keys %{ { map { ($_->{meta}{target} // '') => 1 } @el } }], ['android', 'html', 'ios'],
         'E5: every element filter is target-scoped (ios / android / html only)');
 
     my @ios_kinds = sort map { $_->{meta}{element} } grep { ($_->{meta}{target} // '') eq 'ios' } @el;
-    is(scalar @ios_kinds, 35, 'E6: 35 ios candidates');
+    is(scalar @ios_kinds, 36, 'E6: 36 ios candidates');
     is(\@ios_kinds, [sort @KINDS], 'E7: the candidates cover the closed-world ui: vocabulary');
 
     my @guard = grep { $_->{class} eq 'Amin::Filter::UI::Guard' } @all;

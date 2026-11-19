@@ -343,7 +343,9 @@
   <filter class="Amin::Filter::UI::Element::App" position="late" element="app" namespace="http://projectamin.org/ns/ui/1" target="ios" />
   <filter class="Amin::Filter::UI::Element::App" position="late" element="app" namespace="http://projectamin.org/ns/ui/1" target="android" />
   <filter class="Amin::Filter::UI::Element::AsyncImage" position="late" element="asyncimage" namespace="http://projectamin.org/ns/ui/1" target="ios" />
+  <filter class="Amin::Filter::UI::Element::Audio" position="late" element="audio" namespace="http://projectamin.org/ns/ui/1" target="ios" />
   <filter class="Amin::Filter::UI::Element::AsyncImage" position="late" element="asyncimage" namespace="http://projectamin.org/ns/ui/1" target="android" />
+  <filter class="Amin::Filter::UI::Element::Audio" position="late" element="audio" namespace="http://projectamin.org/ns/ui/1" target="android" />
   <filter class="Amin::Filter::UI::Element::Badge" position="late" element="badge" namespace="http://projectamin.org/ns/ui/1" target="ios" />
   <filter class="Amin::Filter::UI::Element::Badge" position="late" element="badge" namespace="http://projectamin.org/ns/ui/1" target="android" />
   <filter class="Amin::Filter::UI::Element::Button" position="late" element="button" namespace="http://projectamin.org/ns/ui/1" target="ios" />
@@ -419,6 +421,7 @@
   <filter class="Amin::Filter::UI::Element::Alert" position="late" element="alert" namespace="http://projectamin.org/ns/ui/1" target="html" />
   <filter class="Amin::Filter::UI::Element::App" position="late" element="app" namespace="http://projectamin.org/ns/ui/1" target="html" />
   <filter class="Amin::Filter::UI::Element::AsyncImage" position="late" element="asyncimage" namespace="http://projectamin.org/ns/ui/1" target="html" />
+  <filter class="Amin::Filter::UI::Element::Audio" position="late" element="audio" namespace="http://projectamin.org/ns/ui/1" target="html" />
   <filter class="Amin::Filter::UI::Element::Badge" position="late" element="badge" namespace="http://projectamin.org/ns/ui/1" target="html" />
   <filter class="Amin::Filter::UI::Element::Button" position="late" element="button" namespace="http://projectamin.org/ns/ui/1" target="html" />
   <filter class="Amin::Filter::UI::Element::Card" position="late" element="card" namespace="http://projectamin.org/ns/ui/1" target="html" />
