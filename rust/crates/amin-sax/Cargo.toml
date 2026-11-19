@@ -1,0 +1,16 @@
+[package]
+name         = "amin-sax"
+version      = "0.1.0"
+description  = "Push-based (SAX) XML reader, conformant with the org.xml.sax event model. Dependency-free text-XML front end for Amin's SAX filter chains; standalone so it can be published on its own."
+edition.workspace      = true
+rust-version.workspace = true
+license.workspace      = true
+homepage.workspace     = true
+repository.workspace   = true
+
+[dependencies]
+thiserror.workspace = true
+
+[lib]
+name = "amin_sax"
+path = "src/lib.rs"
