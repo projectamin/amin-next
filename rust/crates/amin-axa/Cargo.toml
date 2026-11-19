@@ -1,0 +1,27 @@
+[package]
+name         = "amin-axa"
+version      = "0.1.0"
+description  = "The AXA render path in Rust (proxy-plan §8 P4): the ui:→html: projection and the app element filter, driven through the same SAX chain the Perl Amin::AXA::HTTP adapter runs, producing byte-identical pages."
+edition.workspace      = true
+rust-version.workspace = true
+license.workspace      = true
+homepage.workspace     = true
+repository.workspace   = true
+# The binary is declared explicitly below; don't also auto-discover src/main.rs.
+autobins = false
+
+[dependencies]
+amin-sax.workspace  = true
+sha2.workspace      = true
+rand.workspace      = true
+thiserror.workspace = true
+tokio.workspace     = true
+clap                = { version = "4", features = ["derive"] }
+
+[lib]
+name = "amin_axa"
+path = "src/lib.rs"
+
+[[bin]]
+name = "amin-axa"
+path = "src/bin/amin-axa.rs"

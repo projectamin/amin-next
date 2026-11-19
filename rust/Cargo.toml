@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members  = ["crates/awp3", "crates/aminexec", "crates/bsax", "crates/bitcache", "crates/ainit", "crates/ratchet", "crates/amin-sax", "crates/amin-machine", "crates/amin-proxy"]
+members  = ["crates/awp3", "crates/aminexec", "crates/bsax", "crates/bitcache", "crates/ainit", "crates/ratchet", "crates/amin-sax", "crates/amin-machine", "crates/amin-proxy", "crates/amin-axa"]
 
 [workspace.package]
 version      = "3.0.0"
