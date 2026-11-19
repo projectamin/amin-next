@@ -1,0 +1,37 @@
+[package]
+name         = "amin-proxy"
+version      = "0.1.0"
+description  = "Amin-native L7 reverse-proxy vocabulary (P0). Parses the same <amin:proxy> profile as the Perl Amin::Proxy::Config and emits byte-identical <proxy:backend> decisions, so the Perl and Rust streams stay in step."
+edition.workspace      = true
+rust-version.workspace = true
+license.workspace      = true
+homepage.workspace     = true
+repository.workspace   = true
+# Both binaries are declared explicitly below; don't also auto-discover
+# `src/main.rs` as a second `amin-proxy` target.
+autobins = false
+
+[dependencies]
+amin-sax.workspace     = true
+amin-machine.workspace = true
+thiserror.workspace    = true
+tokio.workspace     = true
+rustls              = { workspace = true, features = ["ring"] }
+tokio-rustls        = { version = "0.26", default-features = false, features = ["ring"] }
+rustls-pemfile      = "1"
+serde               = { version = "1", features = ["derive"] }
+clap                = { version = "4", features = ["derive"] }
+# SHA3-256 of the canonical compiled profile (`X-Amin-Profile-SHA3`).
+sha3.workspace      = true
+
+[lib]
+name = "amin_proxy"
+path = "src/lib.rs"
+
+[[bin]]
+name = "proxydump"
+path = "src/bin/proxydump.rs"
+
+[[bin]]
+name = "amin-proxyd"
+path = "src/main.rs"
