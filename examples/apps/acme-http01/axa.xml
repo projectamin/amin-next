@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  acme-http01 app declarations.
+
+  The HTTP-01 responder is just a route whose fragment is the ACME filter's
+  element.  `type="text/plain"` selects the byte-exact serializer, so the
+  key authorization the filter emits IS the response body — the same mechanism
+  the `/hello/:who` route in shop-ui uses for a plain-text body.  The token is
+  captured from the path (`:token`) and substituted like any other value.
+-->
+<axa:app xmlns:axa="http://projectamin.org/ns/axa/1"
+         xmlns:amin="http://projectamin.org/ns/2026/"
+         id="io.projectamin.apps.acme-http01"
+         name="acme-http01">
+
+  <!-- RFC 8555 §8.1 — the CA fetches this path and expects the key
+       authorization (`token "." thumbprint(account key)`). -->
+  <axa:route path="/.well-known/acme-challenge/:token" method="GET" type="text/plain"><amin:acme-challenge token="{token}"/></axa:route>
+
+  <!-- The issuance driver (the filter's client half): ordering a certificate
+       for a name this app already serves.  In practice this route sits behind
+       the machine's permanent region (Auth::ZCap); here it just demonstrates
+       the client element. -->
+  <axa:route path="/acme/issue/:domain" method="GET" type="text/plain"><amin:acme-order domain="{domain}" cert="/var/lib/amin/acme/{domain}.pem" key="/var/lib/amin/acme/{domain}.key"/></axa:route>
+
+</axa:app>

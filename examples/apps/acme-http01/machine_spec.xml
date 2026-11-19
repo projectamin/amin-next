@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  acme-http01 machine spec (the app's OWN filter declarations).
+
+  Merged machine-first by the adapter (§5.2): the bundle's entries are appended
+  to the machine's, so the bundle can only add — never remove, reorder or shadow
+  a machine filter.  A bundle may not declare a `permanent` position.
+
+  The ACME filter is declared HERE, at the app level, not at the proxy level:
+  the front only ever sees an already-provisioned cert/key (proxy-plan §5.5).
+  `key` is the account key both halves use; the responder answers challenge
+  tokens with it, and the client signs every RFC 8555 request with it.
+-->
+<amin:machine xmlns:amin="http://projectamin.org/ns/2026/">
+
+  <!-- Responder: <amin:acme-challenge token="…"/> → the key authorization. -->
+  <filter class="Amin::Filter::Acme" position="middle"
+          element="acme-challenge" namespace="http://projectamin.org/ns/2026/"
+          key="/var/lib/amin/acme/account.key" />
+
+  <!-- Client: <amin:acme-order domain="…" cert="…" key="…"/> → issuance. -->
+  <filter class="Amin::Filter::Acme" position="middle"
+          element="acme-order" namespace="http://projectamin.org/ns/2026/"
+          key="/var/lib/amin/acme/account.key"
+          directory="https://acme-v02.api.letsencrypt.org/directory" />
+
+</amin:machine>
