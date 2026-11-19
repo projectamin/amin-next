@@ -29,15 +29,18 @@ pub fn write_end_elem<B: BufMut>(out: &mut B) {
     out.put_u8(Tag::EndEl as u8);
 }
 
-/// `start_element`.  `attrs` are `(name_id, value_bytes)` — name_id MUST be
-/// obtained via [`crate::vocab::by_name`] (0..=61) to keep wire bytes tight.
+/// `start_element`.  `attrs` are `(name_id, value_bytes)` — each name_id is a
+/// NAME_ID from [`crate::vocab::by_name`] (core) or a spec-declared band id
+/// (see [`crate::vocab::Vocab::name_id`]); a name outside both rides the escape
+/// path with `vocab::escape_id()` and a length-prefixed inline LocalName (not
+/// expressible through this helper).
 ///
 /// Panic-free contract: `ns_id ∈ 0..16`, `attr_count ∈ 0..=attr_max`.
 pub fn write_start_elem<B: BufMut>(
     out: &mut B,
     ns_id: u8,
-    name_id: u8,
-    attrs: &[(u8, impl AsRef<[u8]>)],
+    name_id: u32,
+    attrs: &[(u32, impl AsRef<[u8]>)],
 ) {
     // flags high bit 4 = NS inline; low 4 = count or 15 escape
     let ns_inline: u8 = 1; // always emit inline NS on start to keep decoder
@@ -49,10 +52,10 @@ pub fn write_start_elem<B: BufMut>(
     out.put_u8(first_byte);
     // NS: 4 bits high + reserved 0x00 = next byte
     out.put_u8((ns_id & 0x0F) << 4);
-    leb_u32(out, u32::from(name_id));
+    leb_u32(out, name_id);
     if count > 14 { leb_u32(out, u32::from(count)) }
     for (aid, v) in attrs {
-        leb_u32(out, u32::from(*aid));
+        leb_u32(out, *aid);
         let vb = v.as_ref();
         leb_u32(out, vb.len() as u32);
         out.put_slice(vb);

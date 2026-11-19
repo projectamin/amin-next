@@ -172,7 +172,7 @@ pub fn encode_boot_profile(node_id: &str, slab_dev: &str) -> Vec<u8> {
         &mut buf,
         AMIN,
         vocab::by_name(b"profile").expect("profile in vocab"),
-        &[] as &[(u8, &[u8])],
+        &[] as &[(u32, &[u8])],
     );
     for (order, name, attrs) in [
         (
@@ -189,14 +189,14 @@ pub fn encode_boot_profile(node_id: &str, slab_dev: &str) -> Vec<u8> {
         (5, "supervisor", &[][..]),
         (6, "workload-ready", &[][..]),
     ] {
-        let mut pair: Vec<(u8, Vec<u8>)> = vec![
+        let mut pair: Vec<(u32, Vec<u8>)> = vec![
             (vocab::by_name(b"order").expect("order in vocab"), order.to_string().into_bytes()),
             (vocab::by_name(b"name").expect("name in vocab"), name.as_bytes().to_vec()),
         ];
         for (k, v) in attrs {
             pair.push((vocab::by_name(k).expect("attr in vocab"), v.to_vec()));
         }
-        let borrowed: Vec<(u8, &[u8])> = pair.iter().map(|(a, b)| (*a, b.as_slice())).collect();
+        let borrowed: Vec<(u32, &[u8])> = pair.iter().map(|(a, b)| (*a, b.as_slice())).collect();
         encode::write_start_elem(&mut buf, AMIN, vocab::by_name(b"stage").expect("stage in vocab"), &borrowed);
         encode::write_end_elem(&mut buf);
     }

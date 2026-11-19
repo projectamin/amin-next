@@ -86,11 +86,13 @@ impl Default for Stage {
 /// is ≥ 5 is counted in [`ParsedInitProfile::skipped_elements`] rather
 /// than materialised — closed-world drop-unknown guarantee.
 pub fn parse_init_profile_bsax(bsax_bytes: &[u8]) -> Result<ParsedInitProfile> {
-    // We allow the FULL closed-world vocab (all 107 IDs).  The *stage*
-    // filter then drops stages with order>=5 (and any element that
-    // doesn't contribute to ainit stages).  This way supervisors can
-    // embed bc:signer envelopes + any future names inside init-profile
-    // without ainit choking (it just counts them as skipped).
+    // The codec default is a pure 1:1 mirror (no name policy).  ainit
+    // deliberately ARMS the opt-in closed-world guard at its own boundary:
+    // every compiled-vocab name decodes, while anything off the vocab (an
+    // escaped name, a corp-namespace element) is rejected before it can reach
+    // the stage loop.  The *stage* filter then drops stages with order>=5, so
+    // a supervisor can still embed bc:signer envelopes and future vocab names
+    // inside init-profile without ainit choking (counted as skipped).
     let bounds = Bounds { allow_vocab_only: true, ..Bounds::default() };
     let mut decoder = StreamDecoder::new(bounds);
     decoder.feed(bsax_bytes);
@@ -122,7 +124,7 @@ pub fn parse_init_profile_bsax(bsax_bytes: &[u8]) -> Result<ParsedInitProfile> {
             Event::StartElement { ns_id, name_id, attrs, .. } => {
                 let is_amin = ns_id == vocab::ns_id::AMIN;
                 let name_bytes = vocab::BY_ID.get(name_id as usize).copied().unwrap_or(b"");
-                let is_ainit_region = (102..=107).contains(&u32::from(name_id));
+                let is_ainit_region = (102..=107).contains(&name_id);
 
                 if is_ainit_region { ainit_region_names += 1; }
 
@@ -191,7 +193,7 @@ pub fn parse_init_profile_bsax(bsax_bytes: &[u8]) -> Result<ParsedInitProfile> {
             Event::Chars(c) if in_ainit_stage => {
                 stage_chars_buffer.extend_from_slice(c);
             },
-            Event::Chars(_) | Event::Iws(_) | Event::Pi { .. } | Event::DictEntry { .. } => {
+            Event::Chars(_) | Event::Iws(_) | Event::Pi { .. } => {
                 skipped += 1;
             },
         }
@@ -234,8 +236,8 @@ mod tests {
 
     // Shortcut helpers for writing BSAX `<stage order=X name=Y ... />`
     // self-closing elements with attrs.
-    fn stage_attrs(order: u32, name: &str, extra: &[(&[u8], &[u8])]) -> Vec<(u8, Vec<u8>)> {
-        let mut out: Vec<(u8, Vec<u8>)> = vec![
+    fn stage_attrs(order: u32, name: &str, extra: &[(&[u8], &[u8])]) -> Vec<(u32, Vec<u8>)> {
+        let mut out: Vec<(u32, Vec<u8>)> = vec![
             (vocab::by_name(b"order").unwrap(), order.to_string().into_bytes()),
             (vocab::by_name(b"name").unwrap(),  name.as_bytes().to_vec()),
         ];
@@ -252,7 +254,7 @@ mod tests {
         encode::write_start_doc(&mut buf);
 
         // <amin:profile> wrapper (profile = vocab id 0, amin ns = 1)
-        encode::write_start_elem(&mut buf, AMIN, vocab::by_name(b"profile").unwrap(), &[] as &[(u8, &[u8])]);
+        encode::write_start_elem(&mut buf, AMIN, vocab::by_name(b"profile").unwrap(), &[] as &[(u32, &[u8])]);
 
         // Stages 1-6 as self-closing with order attrs.
         let all = [
@@ -269,7 +271,7 @@ mod tests {
         ];
         for (order, name, extras) in all {
             let attrs = stage_attrs(order, name, extras);
-            let borrowed: Vec<(u8, &[u8])> = attrs.iter().map(|(a,b)| (*a, b.as_slice())).collect();
+            let borrowed: Vec<(u32, &[u8])> = attrs.iter().map(|(a,b)| (*a, b.as_slice())).collect();
             encode::write_start_elem(&mut buf, AMIN, vocab::by_name(b"stage").unwrap(), &borrowed);
             encode::write_end_elem(&mut buf);
         }
@@ -314,7 +316,7 @@ mod tests {
         let mut buf = BytesMut::new();
         encode::write_magic(&mut buf);
         encode::write_start_doc(&mut buf);
-        encode::write_start_elem(&mut buf, AMIN, vocab::by_name(b"profile").unwrap(), &[] as &[(u8, &[u8])]);
+        encode::write_start_elem(&mut buf, AMIN, vocab::by_name(b"profile").unwrap(), &[] as &[(u32, &[u8])]);
         for (order, name, refused_val) in [
             (1, "hwcheck",  b"true" as &[u8]),
             (2, "fw",       b"1"),
@@ -322,7 +324,7 @@ mod tests {
             (4, "mesh",     b"no"),
         ] {
             let attrs = stage_attrs(order, name, &[(b"refused", refused_val)]);
-            let borrowed: Vec<(u8, &[u8])> = attrs.iter().map(|(a,b)| (*a, b.as_slice())).collect();
+            let borrowed: Vec<(u32, &[u8])> = attrs.iter().map(|(a,b)| (*a, b.as_slice())).collect();
             encode::write_start_elem(&mut buf, AMIN, vocab::by_name(b"stage").unwrap(), &borrowed);
             encode::write_end_elem(&mut buf);
         }
@@ -344,7 +346,7 @@ mod tests {
         let mut buf = BytesMut::new();
         encode::write_magic(&mut buf);
         encode::write_start_doc(&mut buf);
-        encode::write_start_elem(&mut buf, AMIN, vocab::by_name(b"profile").unwrap(), &[] as &[(u8, &[u8])]);
+        encode::write_start_elem(&mut buf, AMIN, vocab::by_name(b"profile").unwrap(), &[] as &[(u32, &[u8])]);
         encode::write_end_elem(&mut buf);
         encode::write_end_doc(&mut buf);
         let p = parse_init_profile_bsax(&buf.freeze()).unwrap();

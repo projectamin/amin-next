@@ -11,6 +11,17 @@
 //! name ids themselves are unchanged in meaning, only their wire width.  Any
 //! LocalName unknown to this table is sent on the wire as the escape marker +
 //! length-prefixed UTF-8 (larger + slower).
+//!
+//! # The spec-declared band
+//!
+//! `BY_ID` is the **compiled core** closed world.  A machine spec may declare
+//! its own element/attribute LocalNames (`<filter element=…>` + optional
+//! `<vocab><name>`); those ride a **dynamic band** appended past the fixed
+//! escape sentinel — see [`Vocab`].  Both the Rust and Perl codecs derive the
+//! identical band from the same signed spec, so an external filter's vocabulary
+//! never has to be wired into Amin core to keep BSAX tight.
+
+use alloc::vec::Vec;
 
 /// 4-bit NS_ID inline constants.  MUST stay 1:1 with Perl Handler/Generator::BSAX
 /// `use constant { NS_NONE => 0, NS_AMIN => 1, NS_UI => 2, NS_MAP => 3, NS_BITCACHE => 4,
@@ -106,14 +117,27 @@ pub const BY_ID: &[&[u8]] = &[
     b"mime", b"path", b"sheets", b"rows", b"cells", b"msg",
 ];
 
-/// NAME_ID escape marker: always the first ID past the last vocab slot.
-#[inline] pub const fn escape_id() -> u32 { BY_ID.len() as u32 }
+/// Number of compiled core NAME_ID slots (the closed world shared verbatim
+/// with Perl). `0..CORE_LEN` index [`BY_ID`]; `CORE_LEN` itself is the
+/// inline-escape sentinel.
+pub const CORE_LEN: u32 = BY_ID.len() as u32;
 
-/// Build-time reverse map: LocalName → NAME_ID.  `None` ⇒ use [`escape_id`].
-pub const fn by_name(name: &[u8]) -> Option<u8> {
+/// NAME_ID escape marker: always the first ID past the last core vocab slot.
+/// Held FIXED at [`CORE_LEN`] so the sentinel never moves when a machine spec
+/// declares a [`Vocab`] band — a name the consumer cannot resolve stays on the
+/// escape path, byte-identical to the pre-band codec.
+#[inline] pub const fn escape_id() -> u32 { CORE_LEN }
+
+/// First NAME_ID a spec-declared band name may take (`escape_id() + 1`).
+#[inline] pub const fn band_start() -> u32 { CORE_LEN + 1 }
+
+/// Build-time reverse map into the compiled core: LocalName → NAME_ID.
+/// `None` ⇒ the name is not in the core table (use [`escape_id`] or a
+/// [`Vocab`] band).
+pub const fn by_name(name: &[u8]) -> Option<u32> {
     let mut i = 0usize;
     while i < BY_ID.len() {
-        if slices_eq(BY_ID[i], name) { return Some(i as u8) }
+        if slices_eq(BY_ID[i], name) { return Some(i as u32) }
         i += 1;
     }
     None
@@ -127,6 +151,76 @@ const fn slices_eq(a: &[u8], b: &[u8]) -> bool {
         i += 1;
     }
     true
+}
+
+/// Spec-declared NAME_ID band — the dynamic half of the NAME_ID space.
+///
+/// A machine spec may declare element/attribute LocalNames (`<filter
+/// element=…>` plus optional `<vocab><name>`).  Names not already in the
+/// compiled core table [`BY_ID`] are assigned NAME_IDs `band_start(),
+/// band_start()+1, …` in first-seen order (core wins, first-seen wins).  Both
+/// the Rust and Perl codecs derive the identical map from the same signed spec,
+/// so an external filter's vocabulary rides the tight NAME_ID path without a
+/// single name being wired into Amin core.  An empty band is byte-identical to
+/// the pre-band codec — every undeclared name simply rides the escape path.
+///
+/// Band ids are `u32` because a NAME_ID is a LEB128 `u32` on the wire and the
+/// Perl codec derives the same unbounded space; storing them in a narrower type
+/// would silently truncate a large spec's names.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct Vocab {
+    /// Spec-declared names in first-seen order, core names and duplicates
+    /// already excluded.  Index `i` ⇒ NAME_ID `band_start() + i`.
+    band: Vec<Vec<u8>>,
+}
+
+impl Vocab {
+    /// An empty band — resolution falls back to the compiled core table alone.
+    #[must_use]
+    pub const fn empty() -> Self { Self { band: Vec::new() } }
+
+    /// Derive the band from spec-declared names in document order.
+    #[must_use]
+    pub fn from_names<S: AsRef<[u8]>>(names: &[S]) -> Self {
+        let mut band: Vec<Vec<u8>> = Vec::new();
+        for n in names {
+            let n = n.as_ref();
+            if n.is_empty() { continue }
+            if by_name(n).is_some() { continue }                    // core wins
+            if band.iter().any(|b| b.as_slice() == n) { continue }  // first-seen wins
+            band.push(n.to_vec());
+        }
+        Self { band }
+    }
+
+    /// Number of spec-declared band names.
+    #[must_use] pub fn len(&self) -> usize { self.band.len() }
+
+    /// `true` when the spec declared no LocalName outside the core vocabulary.
+    #[must_use] pub fn is_empty(&self) -> bool { self.band.is_empty() }
+
+    /// LocalName → NAME_ID: the core table first, then the band.  `None` ⇒ the
+    /// name is unknown to this spec and must ride the escape path.
+    #[must_use]
+    pub fn name_id(&self, name: &[u8]) -> Option<u32> {
+        if let Some(id) = by_name(name) { return Some(id) }
+        self.band
+            .iter()
+            .position(|b| b.as_slice() == name)
+            .map(|i| band_start() + i as u32)
+    }
+
+    /// NAME_ID → LocalName for a spec-declared **band** id (`> escape_id()`).
+    ///
+    /// `None` for a core id, the `escape_id()` sentinel, or a band id this spec
+    /// never declared — the last is the loud contract error the decoder raises
+    /// ([`crate::DecodeError::NameOutOfBand`]) rather than reading an inline
+    /// name that was never written.
+    #[must_use]
+    pub fn band_name(&self, id: u32) -> Option<&[u8]> {
+        let idx = id.checked_sub(band_start())? as usize;
+        self.band.get(idx).map(Vec::as_slice)
+    }
 }
 
 #[cfg(test)]
@@ -255,5 +349,34 @@ mod tests {
     #[test]
     fn unknown_returns_none_for_escape_marker() {
         assert_eq!(by_name(b"custom-widget-99"), None);
+    }
+
+    #[test]
+    fn band_is_derived_core_wins_first_seen() {
+        // Spec-declared names in document order; `id`/`status` are core (wins),
+        // the repeated `frob` proves first-seen order ⇒ band = [frob, widget].
+        // Mirrors Perl t/11 §9 (`@vocab = qw(id frob widget status frob)`).
+        let names: &[&[u8]] = &[b"id", b"frob", b"widget", b"status", b"frob"];
+        let v = Vocab::from_names(names);
+        assert_eq!(v.len(), 2);
+        assert_eq!(v.name_id(b"id"), by_name(b"id"));            // core wins
+        assert_eq!(v.name_id(b"status"), by_name(b"status"));    // core wins
+        assert_eq!(v.name_id(b"frob"), Some(band_start()));
+        assert_eq!(v.name_id(b"widget"), Some(band_start() + 1));
+        assert_eq!(v.name_id(b"nope"), None);                    // ⇒ escape path
+        assert_eq!(v.band_name(band_start()), Some(&b"frob"[..]));
+        assert_eq!(v.band_name(band_start() + 1), Some(&b"widget"[..]));
+        assert_eq!(v.band_name(band_start() + 2), None);         // undeclared
+        assert_eq!(v.band_name(escape_id()), None);              // the sentinel
+        assert_eq!(v.band_name(9), None);                        // a core id
+    }
+
+    #[test]
+    fn empty_band_resolves_only_core() {
+        let v = Vocab::empty();
+        assert!(v.is_empty());
+        assert_eq!(v.name_id(b"status"), by_name(b"status"));
+        assert_eq!(v.name_id(b"frob"), None);
+        assert_eq!(v.band_name(band_start()), None);
     }
 }

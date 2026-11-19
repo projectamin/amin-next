@@ -24,6 +24,7 @@
 
 use alloc::vec::Vec;
 
+use crate::vocab::Vocab;
 use crate::{Attr, DecodeError, Event, Tag, MAGIC};
 
 /// Decoder configuration — all numbers are deliberately conservative (by
@@ -36,10 +37,20 @@ pub struct Bounds {
     pub value_max_bytes: usize,
     /// Maximum attributes per `start_element`.
     pub attr_max:        usize,
-    /// When `true`, escaped names (id ≥ vocab::escape_id()) or NS_ID=15
-    /// (escape) are rejected with [`DecodeError::ProhibitedName`].  The
-    /// escaped bytes are still consumed first so the stream stays aligned.
-    /// Mirrors the allow-list guard in `Amin::Util::Fold`.
+    /// Opt-in closed-world hardening for a *consumer* that wants it.  When
+    /// `true`, a name on the **inline-escape** path (`id ==
+    /// vocab::escape_id()`) or NS_ID=15 (escape) is rejected with
+    /// [`DecodeError::ProhibitedName`]; the escaped bytes are still consumed
+    /// first so the stream stays aligned.  A **spec-declared band** id is
+    /// accepted — it names vocabulary the consumer's own spec handed the
+    /// decoder.
+    ///
+    /// Defaults to `false`: BSAX is a **pure 1:1 mirror of the XML event set**
+    /// (see crate docs, "Escape hatches are not a trust boundary").  The codec
+    /// is not a policy point, so unknown names ride the escape path exactly as
+    /// the XML parser would surface them.  Closed-world enforcement belongs in
+    /// the filter chain (`Amin::Filter::UI::Guard`, ainit's own stage filter);
+    /// a consumer may still arm this at its own boundary as belt-and-braces.
     pub allow_vocab_only: bool,
 }
 
@@ -49,7 +60,7 @@ impl Default for Bounds {
             name_max_bytes:  8 * 1024,
             value_max_bytes: 256 * 1024,
             attr_max:        128,
-            allow_vocab_only: true,
+            allow_vocab_only: false,
         }
     }
 }
@@ -74,6 +85,11 @@ pub struct StreamDecoder {
     buf: Vec<u8>,
     off: usize,
     bounds: Bounds,
+    /// The consumer spec's declared NAME_ID band — resolves band ids
+    /// (`> vocab::escape_id()`) to the LocalNames the producer's matching spec
+    /// declared.  Empty ⇒ only the compiled core table resolves, byte-identical
+    /// to the pre-band codec.
+    vocab: Vocab,
     /// NS_ID reused on START_ELEM when the inline-NS flag is clear (matches the
     /// encode-side delta so the element's namespace isn't repeated every tag).
     last_ns_id: u8,
@@ -82,14 +98,25 @@ pub struct StreamDecoder {
 }
 
 impl StreamDecoder {
-    /// Build a decoder.  No magic check happens until the first 8 bytes have
-    /// been fed, so the header may itself straddle a chunk boundary.
+    /// Build a decoder with no spec-declared band.  No magic check happens
+    /// until the first 8 bytes have been fed, so the header may itself straddle
+    /// a chunk boundary.
     #[must_use]
     pub fn new(bounds: Bounds) -> Self {
+        Self::with_vocab(bounds, Vocab::empty())
+    }
+
+    /// Build a decoder carrying the consumer spec's declared NAME_ID band —
+    /// see [`crate::vocab::Vocab`].  Pass the SAME spec the producer encoded
+    /// against so band ids resolve; an id past the declared band is a loud
+    /// [`DecodeError::NameOutOfBand`].
+    #[must_use]
+    pub fn with_vocab(bounds: Bounds, vocab: Vocab) -> Self {
         Self {
             buf: Vec::new(),
             off: 0,
             bounds,
+            vocab,
             last_ns_id: 0,
             magic_seen: false,
             finished: false,
@@ -134,7 +161,7 @@ impl StreamDecoder {
         }
 
         let last_ns = self.last_ns_id;
-        match parse_event(&self.buf, &mut self.off, last_ns, &self.bounds)? {
+        match parse_event(&self.buf, &mut self.off, last_ns, &self.bounds, &self.vocab)? {
             None => Ok(Poll::NeedMore),
             Some((event, ns_id)) => {
                 self.last_ns_id = ns_id;
@@ -202,6 +229,45 @@ fn len_prefixed<'a>(
     Ok(take(buf, off, n))
 }
 
+/// Resolve a NAME_ID to its LocalName override bytes.
+///
+/// The NAME_ID space has three regions (the "three-region rule"):
+///   * `id <  escape_id()` — a compiled core slot; `Ok(Some(None))` (the caller
+///     resolves it via [`crate::vocab::BY_ID`]);
+///   * `id == escape_id()` — an inline, length-prefixed UTF-8 name follows;
+///   * `escape_id() < id` — a spec-declared band slot, resolved via `vocab`.
+///
+/// Returns `Ok(None)` when more input is needed (transactional: `off` may have
+/// advanced only for the escape form's length prefix, and a later poll retries
+/// from the event start), `Err(..)` on a bounds violation or a band id the
+/// consumer's spec never declared ([`DecodeError::NameOutOfBand`]).
+// The outer/none `Option` is "need more input"; the inner `Option` is "is there
+// an override at all" — the two questions are genuinely distinct.
+#[allow(clippy::option_option)]
+fn resolve_name<'a>(
+    buf: &'a [u8],
+    off: &mut usize,
+    name_id: u32,
+    vocab: &'a Vocab,
+    bounds: &Bounds,
+    at: usize,
+) -> Result<Option<Option<&'a [u8]>>, DecodeError> {
+    let esc = crate::vocab::escape_id();
+    if name_id < esc {
+        return Ok(Some(None));
+    }
+    if name_id == esc {
+        return match len_prefixed(buf, off, bounds.name_max_bytes, DecodeError::NameTooLong)? {
+            Some(n) => Ok(Some(Some(n))),
+            None => Ok(None),
+        };
+    }
+    match vocab.band_name(name_id) {
+        Some(n) => Ok(Some(Some(n))),
+        None => Err(DecodeError::NameOutOfBand(name_id, at)),
+    }
+}
+
 /// Parse exactly one event from `buf` starting at `*off`.  Transactional: on
 /// `None` (need more input) `*off` is left untouched, so a later poll retries
 /// the same event from the start.
@@ -210,6 +276,7 @@ fn parse_event<'a>(
     off: &mut usize,
     last_ns_id: u8,
     bounds: &Bounds,
+    vocab: &'a Vocab,
 ) -> Result<Option<(Event<'a>, u8)>, DecodeError> {
     if *off >= buf.len() {
         return Ok(None);
@@ -258,16 +325,16 @@ fn parse_event<'a>(
                 }
             }
             let name_id = match leb(buf, &mut p)? { Some(v) => v, None => return Ok(None) };
-            let mut local_name_override = None;
-            if name_id >= crate::vocab::escape_id() {
-                local_name_override =
-                    match len_prefixed(buf, &mut p, bounds.name_max_bytes, DecodeError::NameTooLong)? {
-                        Some(n) => Some(n),
-                        None => return Ok(None),
-                    };
-            }
+            let local_name_override =
+                match resolve_name(buf, &mut p, name_id, vocab, bounds, start)? {
+                    Some(n) => n,
+                    None => return Ok(None),
+                };
+            // Closed-world hardening (opt-in): the inline escape is what breaks
+            // the closed world — a spec-declared band id is vocabulary the
+            // consumer's own spec handed the decoder, so it is allowed.
             if bounds.allow_vocab_only
-                && (name_id >= crate::vocab::escape_id() || ns_id == crate::vocab::ns_id::ESCAPE)
+                && (name_id == crate::vocab::escape_id() || ns_id == crate::vocab::ns_id::ESCAPE)
             {
                 return Err(DecodeError::ProhibitedName(name_id, start));
             }
@@ -283,27 +350,25 @@ fn parse_event<'a>(
             let mut attrs: Vec<Attr<'a>> = Vec::with_capacity(n_attrs.min(16));
             for _ in 0..n_attrs {
                 let aid = match leb(buf, &mut p)? { Some(v) => v, None => return Ok(None) };
-                let mut name_override = None;
-                if aid >= crate::vocab::escape_id() {
-                    name_override =
-                        match len_prefixed(buf, &mut p, bounds.name_max_bytes, DecodeError::NameTooLong)? {
-                            Some(s) => Some(s),
-                            None => return Ok(None),
-                        };
-                    if bounds.allow_vocab_only {
-                        return Err(DecodeError::ProhibitedName(aid, p));
-                    }
+                let at = p;
+                let name_override =
+                    match resolve_name(buf, &mut p, aid, vocab, bounds, at)? {
+                        Some(n) => n,
+                        None => return Ok(None),
+                    };
+                if bounds.allow_vocab_only && aid == crate::vocab::escape_id() {
+                    return Err(DecodeError::ProhibitedName(aid, p));
                 }
                 let value = match len_prefixed(buf, &mut p, bounds.value_max_bytes, DecodeError::ValueTooLong)? {
                     Some(v) => v,
                     None => return Ok(None),
                 };
-                attrs.push(Attr { name_id: aid as u8, name_override, value });
+                attrs.push(Attr { name_id: aid, name_override, value });
             }
             (
                 Event::StartElement {
                     ns_id,
-                    name_id: name_id as u8,
+                    name_id,
                     ns_uri_override,
                     local_name_override,
                     attrs,
@@ -313,28 +378,15 @@ fn parse_event<'a>(
         },
         Tag::Pi => {
             let tid = match leb(buf, &mut p)? { Some(v) => v, None => return Ok(None) };
-            let mut target_override = None;
-            if tid >= crate::vocab::escape_id() {
-                target_override =
-                    match len_prefixed(buf, &mut p, bounds.name_max_bytes, DecodeError::NameTooLong)? {
-                        Some(s) => Some(s),
-                        None => return Ok(None),
-                    };
-            }
+            let target_override = match resolve_name(buf, &mut p, tid, vocab, bounds, start)? {
+                Some(n) => n,
+                None => return Ok(None),
+            };
             let data = match len_prefixed(buf, &mut p, bounds.value_max_bytes, DecodeError::ValueTooLong)? {
                 Some(d) => d,
                 None => return Ok(None),
             };
-            (Event::Pi { target_id: tid as u8, target_override, data }, last_ns_id)
-        },
-        Tag::Dict => {
-            let ns_id = (flags >> 4) & 0x0F;
-            let id = match leb(buf, &mut p)? { Some(v) => v, None => return Ok(None) };
-            let name = match len_prefixed(buf, &mut p, bounds.name_max_bytes, DecodeError::NameTooLong)? {
-                Some(n) => n,
-                None => return Ok(None),
-            };
-            (Event::DictEntry { ns_id, id, name }, last_ns_id)
+            (Event::Pi { target_id: tid, target_override, data }, last_ns_id)
         },
     };
 
@@ -359,7 +411,7 @@ mod tests {
         encode::write_magic(&mut out);
         encode::write_start_doc(&mut out);
         // <amin:status kind="success" rc="0" pid="123" duration="0.1" exit_kind="ok"/>
-        let attrs: [(u8, &[u8]); 5] = [
+        let attrs: [(u32, &[u8]); 5] = [
             (vocab::by_name(b"kind").unwrap(), b"success"),
             (vocab::by_name(b"rc").unwrap(), b"0"),
             (vocab::by_name(b"pid").unwrap(), b"123"),
@@ -394,7 +446,7 @@ mod tests {
         let mut out = vec![];
         encode::write_magic(&mut out);
         encode::write_start_doc(&mut out);
-        let attrs: [(u8, &[u8]); 1] = [(vocab::by_name(b"kind").unwrap(), b"success")];
+        let attrs: [(u32, &[u8]); 1] = [(vocab::by_name(b"kind").unwrap(), b"success")];
         encode::write_start_elem(&mut out, vocab::ns_id::AMIN, vocab::by_name(b"status").unwrap(), &attrs);
         // 40-byte characters payload forces the long form (len >= 31).
         encode::write_chars(&mut out, &b"x".repeat(40));
@@ -461,11 +513,11 @@ mod tests {
         match d.poll_event().unwrap() {
             Poll::Event(Event::StartElement { ns_id, name_id, ns_uri_override, local_name_override, attrs }) => {
                 assert_eq!(ns_id, vocab::ns_id::ESCAPE);
-                assert_eq!(name_id as u32, vocab::escape_id());
+                assert_eq!(name_id, vocab::escape_id());
                 assert_eq!(ns_uri_override, Some(&uri[..]));
                 assert_eq!(local_name_override, Some(&name[..]));
                 assert_eq!(attrs.len(), 1);
-                assert_eq!(attrs[0].name_id as u32, vocab::escape_id());
+                assert_eq!(attrs[0].name_id, vocab::escape_id());
                 assert_eq!(attrs[0].local_name(), Some(&an[..]));
                 assert_eq!(attrs[0].value, &val[..]);
             },
@@ -479,8 +531,9 @@ mod tests {
     #[test]
     fn vocab_only_bounds_rejects_escaped_names() {
         // Hand-build MAGIC + START_ELEM(ns_inline, 0 attrs) with an escaped
-        // (id == ESCAPE) element name.  With the default `allow_vocab_only`
-        // the decoder must refuse it rather than surface a non-vocab name.
+        // (id == ESCAPE) element name.  `allow_vocab_only` is now OPT-IN
+        // (default false — the codec is a pure 1:1 mirror), so a consumer that
+        // wants closed-world hardening must arm it explicitly.
         let mut out = vec![];
         out.extend_from_slice(&MAGIC);
         out.push(0x40 | 0x10); // StartEl, ns inline, 0 attrs
@@ -489,13 +542,60 @@ mod tests {
         encode::leb_u32(&mut out, 3);
         out.extend_from_slice(b"zzz");
         out.push(0x60);
-        let mut d = StreamDecoder::new(Bounds::default());
+        let bounds = Bounds { allow_vocab_only: true, ..Bounds::default() };
+        let mut d = StreamDecoder::new(bounds);
         d.feed(&out);
         // The escaped name bytes are walked (so we know where the name ends)
         // before the guard rejects it — no desync, just a deterministic Err.
         match d.poll_event() {
             Err(DecodeError::ProhibitedName(id, _)) => assert_eq!(id, vocab::escape_id()),
             other => panic!("expected ProhibitedName, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn escaped_names_decode_cleanly_by_default() {
+        // The pure-1:1 default: the SAME escaped-name stream the opt-in guard
+        // rejects above must decode without error, surfacing the raw LocalName
+        // via `local_name_override` — exactly how the XML parser would surface
+        // an unknown element.  No Amin-core edit is needed for an external
+        // filter's name.
+        let mut out = vec![];
+        out.extend_from_slice(&MAGIC);
+        out.push(0x00); // StartDoc
+        out.push(0x40 | 0x10); // StartEl, ns inline, 0 attrs
+        out.push(0x01 << 4); // NS_ID = AMIN
+        encode::leb_u32(&mut out, vocab::escape_id());
+        encode::leb_u32(&mut out, 3);
+        out.extend_from_slice(b"zzz");
+        out.push(0x60);
+        out.push(0x20);
+        let mut d = StreamDecoder::new(Bounds::default());
+        d.feed(&out);
+        assert!(matches!(d.poll_event(), Ok(Poll::Event(Event::StartDocument))));
+        match d.poll_event().unwrap() {
+            Poll::Event(Event::StartElement { local_name_override, .. }) => {
+                assert_eq!(local_name_override, Some(&b"zzz"[..]));
+            },
+            other => panic!("not an escaped start_element: {other:?}"),
+        }
+        assert!(matches!(d.poll_event(), Ok(Poll::Event(Event::EndElement))));
+    }
+
+    #[test]
+    fn dict_entry_tag_is_rejected_as_unknown() {
+        // DICT_ENTRY (0xE0) is retired: it has no XML::SAX analogue, so a pure
+        // 1:1 codec has no event for it.  0xE0 now maps to no known tag, i.e.
+        // the same deterministic rejection both fronts give any unknown byte.
+        assert_eq!(Tag::from_byte(0xE0), None);
+        let mut out = vec![];
+        out.extend_from_slice(&MAGIC);
+        out.push(0xE0); // was DICT_ENTRY
+        let mut d = StreamDecoder::new(Bounds::default());
+        d.feed(&out);
+        match d.poll_event() {
+            Err(DecodeError::UnknownTag(0xE0, _)) => {},
+            other => panic!("expected UnknownTag(0xE0), got {other:?}"),
         }
     }
 
@@ -543,7 +643,7 @@ mod tests {
         assert!(matches!(d.poll_event(), Ok(Poll::Event(Event::StartDocument))));
         match d.poll_event().unwrap() {
             Poll::Event(Event::Pi { target_id, target_override, data: pd }) => {
-                assert_eq!(u32::from(target_id), vocab::escape_id());
+                assert_eq!(target_id, vocab::escape_id());
                 assert_eq!(target_override, Some(&target[..]));
                 assert_eq!(pd, &data[..]);
             },
@@ -561,7 +661,7 @@ mod tests {
         let mut out = vec![];
         encode::write_magic(&mut out);
         encode::write_start_doc(&mut out);
-        let doc_attrs: [(u8, &[u8]); 4] = [
+        let doc_attrs: [(u32, &[u8]); 4] = [
             (vocab::by_name(b"format").unwrap(), b"xlsx"),
             (vocab::by_name(b"title").unwrap(),  b"Q3"),
             (vocab::by_name(b"out").unwrap(),    b"out/q3.xlsx"),
@@ -594,7 +694,7 @@ mod tests {
                 assert_eq!(ns_id, vocab::ns_id::AMIN);
                 assert_eq!(ns_uri_override, None);
                 assert_eq!(local_name_override, None);
-                assert_eq!(u32::from(name_id), 137);
+                assert_eq!(name_id, 137);
                 assert_eq!(vocab::BY_ID[name_id as usize], b"document");
                 assert_eq!(attrs.len(), 4);
                 for a in &attrs {
@@ -613,7 +713,7 @@ mod tests {
                 assert_eq!(ns_id, vocab::ns_id::AMIN);
                 // Shared LocalName (`sheet`) still resolves to its existing
                 // slot; the NS nibble is what makes it an amin:sheet here.
-                assert_eq!(u32::from(name_id), 50);
+                assert_eq!(name_id, 50);
                 assert_eq!(attrs[0].local_name(), Some(&b"name"[..]));
             },
             other => panic!("not an amin:sheet start_element: {other:?}"),
@@ -621,7 +721,7 @@ mod tests {
         match d.poll_event().unwrap() {
             Poll::Event(Event::StartElement { ns_id, name_id, attrs, .. }) => {
                 assert_eq!(ns_id, vocab::ns_id::AMIN);
-                assert_eq!(u32::from(name_id), 68);
+                assert_eq!(name_id, 68);
                 assert_eq!(attrs[0].local_name(), Some(&b"type"[..]));
             },
             other => panic!("not an amin:cell start_element: {other:?}"),
@@ -647,8 +747,8 @@ mod tests {
         out.push(0x0F << 4); // NS_ID = ESCAPE
         encode::leb_u32(&mut out, uri.len() as u32);
         out.extend_from_slice(uri);
-        encode::leb_u32(&mut out, u32::from(vocab::by_name(b"document").unwrap()));
-        encode::leb_u32(&mut out, u32::from(vocab::by_name(b"format").unwrap()));
+        encode::leb_u32(&mut out, vocab::by_name(b"document").unwrap());
+        encode::leb_u32(&mut out, vocab::by_name(b"format").unwrap());
         encode::leb_u32(&mut out, 4);
         out.extend_from_slice(b"acme");
         out.push(0x60); // EndEl
@@ -667,7 +767,7 @@ mod tests {
                 assert_eq!(local_name_override, None);
                 // Same LocalName slot as the platform grammar, but the URI is
                 // the app's — no collision at the SAX boundary.
-                assert_eq!(u32::from(name_id), 137);
+                assert_eq!(name_id, 137);
                 assert_eq!(vocab::BY_ID[name_id as usize], b"document");
                 assert_eq!(attrs.len(), 1);
                 assert_eq!(attrs[0].name_id, vocab::by_name(b"format").unwrap());
@@ -679,5 +779,61 @@ mod tests {
         }
         assert!(matches!(d.poll_event(), Ok(Poll::Event(Event::EndElement))));
         assert!(matches!(d.poll_event(), Ok(Poll::Event(Event::EndDocument))));
+    }
+
+    #[test]
+    fn band_ids_resolve_via_vocab_and_out_of_band_is_loud() {
+        // Spec-declared band (mirrors Perl t/11 §9): `frob`/`widget` are not in
+        // the compiled core, so they take band ids `band_start()`/`+1`.  The
+        // decoder resolves them from the consumer's `Vocab`; the SAME bytes
+        // under a decoder whose spec declares no such names is a loud
+        // `NameOutOfBand`, never a silent desync.
+        let names: &[&[u8]] = &[b"id", b"frob", b"widget", b"status", b"frob"];
+        let encoder_vocab = vocab::Vocab::from_names(names);
+        let frob = encoder_vocab.name_id(b"frob").unwrap();
+        let widget = encoder_vocab.name_id(b"widget").unwrap();
+        assert_eq!(frob, vocab::band_start());
+
+        let mut out = vec![];
+        encode::write_magic(&mut out);
+        encode::write_start_doc(&mut out);
+        encode::write_start_elem(&mut out, vocab::ns_id::AMIN, frob, &[(widget, b"v")]);
+        encode::write_end_elem(&mut out);
+        encode::write_end_doc(&mut out);
+
+        // Same spec ⇒ band ids resolve to the declared LocalNames.
+        let decoder_vocab = vocab::Vocab::from_names(names);
+        let mut d = StreamDecoder::with_vocab(Bounds::default(), decoder_vocab);
+        d.feed(&out);
+        assert!(matches!(d.poll_event(), Ok(Poll::Event(Event::StartDocument))));
+        match d.poll_event().unwrap() {
+            Poll::Event(Event::StartElement { name_id, local_name_override, attrs, .. }) => {
+                assert_eq!(name_id, frob);
+                assert_eq!(local_name_override, Some(&b"frob"[..]));
+                assert_eq!(attrs.len(), 1);
+                assert_eq!(attrs[0].name_id, widget);
+                assert_eq!(attrs[0].local_name(), Some(&b"widget"[..]));
+            },
+            other => panic!("not a band start_element: {other:?}"),
+        }
+
+        // A decoder that declares NO band cannot resolve the id: loud error.
+        let mut d = StreamDecoder::new(Bounds::default());
+        d.feed(&out);
+        assert!(matches!(d.poll_event(), Ok(Poll::Event(Event::StartDocument))));
+        match d.poll_event() {
+            Err(DecodeError::NameOutOfBand(id, _)) => assert_eq!(id, frob),
+            other => panic!("expected NameOutOfBand, got {other:?}"),
+        }
+
+        // Closed-world hardening ACCEPTS a declared band id (it is the
+        // consumer's own spec vocabulary) — only the inline escape is barred.
+        let bounds = Bounds { allow_vocab_only: true, ..Bounds::default() };
+        let band_names: &[&[u8]] = &[b"frob", b"widget"];
+        let decoder_vocab = vocab::Vocab::from_names(band_names);
+        let mut d = StreamDecoder::with_vocab(bounds, decoder_vocab);
+        d.feed(&out);
+        assert!(matches!(d.poll_event(), Ok(Poll::Event(Event::StartDocument))));
+        assert!(matches!(d.poll_event(), Ok(Poll::Event(Event::StartElement { .. }))));
     }
 }

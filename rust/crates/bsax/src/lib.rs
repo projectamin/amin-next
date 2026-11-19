@@ -42,7 +42,9 @@
 //!                     payload: if len==31, LEB128(full_len) follows; then raw bytes
 //! 0xA0  IWS           same encoding as CHARS (ignorable whitespace — filters typically skip)
 //! 0xC0  PI            flags unused; NAME_ID(target) + LEN_PREFIXED(data)
-//! 0xE0  DICT_ENTRY    flags[4] NS_ID:4; flags[0..3] NAME_ID high bits; LEN_PREFIXED(utf8 name)
+//! 0xE0  (retired)     was DICT_ENTRY (stream-local interning).  It had no
+//!                     XML::SAX analogue, so a pure 1:1 codec has no event for
+//!                     it — the byte is now rejected as an unknown tag.
 //! ```
 //!
 //! ### NAME_ID space (closed-world IDs = 1 byte LEB128; ESCAPE = BY_ID.len())
@@ -60,6 +62,10 @@
 //! 122..136 sec:*     : payload-neutral PQ E2EE (Double Ratchet + PQXDH filter pair)
 //! 137..171 document  : amin:* document grammar (platform vocabulary, core NS)
 //!      ESCAPE        → NAME_ID:LEB = BY_ID.len() then LEN_PREFIXED(utf8 raw name) follows
+//!  ESCAPE+1..       : spec-declared band (a machine spec's own LocalNames — see
+//!                     [`vocab::Vocab`]); resolved from the consumer's spec, no
+//!                     core edit.  A band id the consumer's spec does not
+//!                     declare is a loud [`DecodeError::NameOutOfBand`].
 //! ```
 //!
 //! ### NS_ID (4 bits):
@@ -74,10 +80,11 @@
 //!
 //! ## Safety properties (P/B/N decode path)
 //!
-//! * **P (Perl Safe)** : On the Perl decode side, escaped names (id >= vocab::escape_id())
-//!   validated against [`Amin::Util::Fold`] allowed-name hashes BEFORE the
-//!   event is forwarded to the 5-position chain.  Unknown names never reach
-//!   user filters.
+//! * **P (Perl Safe)** : the Perl decode side is a pure 1:1 mirror — an unknown
+//!   name rides the escape path and is surfaced exactly as the XML parser would
+//!   surface it.  No name is rejected in the codec; the closed-world contract
+//!   is enforced *in the chain* (e.g. `Amin::Filter::UI::Guard`), so a codec
+//!   change is never required to admit an external filter's vocabulary.
 //! * **B (eBPF/ubpf)** : On the Rust side, [`decode::StreamDecoder`] is a
 //!   resumable state machine (`feed` bytes in, `poll_event` out).  No parsing
 //!   cost is incurred until a whole event is buffered, so it is safe to drive
@@ -85,16 +92,16 @@
 //! * **N (Landlock/seccomp)** : `bsax::decode` never opens files, never execs,
 //!   never touches networking.  All it does is read bytes → emit tagged enums.
 //!   A Landlock allow-list of `{}` + seccomp `read/write/exit` only is
-//!   sufficient; see [`crate::decode::Bounds`].
+//!   sufficient; see [`crate::decode::Bounds`].  A consumer on a hard-trust
+//!   path may additionally arm [`decode::Bounds::allow_vocab_only`].
 //!
 //! ## Escape hatches are not a trust boundary
 //!
-//! Three wire constructs carry **producer-controlled strings outside the
+//! Two wire constructs carry **producer-controlled strings outside the
 //! closed-world NAME_ID vocabulary**, and are therefore escape hatches rather
 //! than named vocabulary:
 //!
 //! * `PI` (0xC0) — `Target` + `Data`;
-//! * `DICT_ENTRY` (0xE0) — interned names;
 //! * `NS_ID` / `NAME_ID` escape — inline UTF-8 URI / LocalName.
 //!
 //! `PI` is **not** an Amin invention: it is a straight mirror of the XML::SAX
@@ -167,8 +174,6 @@ pub enum Tag {
     Iws      = 0xA0,
     /// `processing_instruction`
     Pi       = 0xC0,
-    /// `dict_entry` (stream-local name interning)
-    Dict     = 0xE0,
 }
 
 impl Tag {
@@ -186,7 +191,6 @@ impl Tag {
             0x80 => Self::Chars,
             0xA0 => Self::Iws,
             0xC0 => Self::Pi,
-            0xE0 => Self::Dict,
             _    => return None,
         };
         Some((tag, flags))
@@ -195,25 +199,28 @@ impl Tag {
 
 /// One decoded attribute of a `start_element`.
 ///
-/// `name_id < vocab::escape_id()` names a closed-world vocabulary slot, looked
-/// up via `vocab::BY_ID[name_id]`.  When `name_id == vocab::escape_id()` the
-/// LocalName was not in the vocabulary and is carried verbatim in
-/// `name_override` (a length-prefixed UTF-8 string on the wire).  Use
-/// [`Attr::local_name`] to resolve either case without branching.
+/// `name_id < vocab::escape_id()` names a compiled closed-world vocabulary
+/// slot, looked up via `vocab::BY_ID[name_id]`.  When `name_id ==
+/// vocab::escape_id()` the LocalName was not in the vocabulary and is carried
+/// verbatim in `name_override` (a length-prefixed UTF-8 string on the wire).
+/// When `name_id > vocab::escape_id()` it addresses the consumer's spec-declared
+/// band, also surfaced in `name_override`.  Use [`Attr::local_name`] to resolve
+/// any case without branching.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Attr<'a> {
-    /// `< vocab::escape_id()` → closed-world vocab; `== escape_id()` → escaped.
-    pub name_id: u8,
-    /// Raw UTF-8 LocalName, populated only on the escape path.
+    /// `< vocab::escape_id()` → compiled core vocab; `>= escape_id()` → override.
+    pub name_id: u32,
+    /// Raw UTF-8 LocalName, populated on the escape (inline) and spec-band paths.
     pub name_override: Option<&'a [u8]>,
     /// Attribute value bytes (UTF-8 by the SAX contract).
     pub value: &'a [u8],
 }
 
 impl<'a> Attr<'a> {
-    /// Resolve the LocalName: the closed-world vocab entry when `name_id`
-    /// addresses one, otherwise the escaped raw name.  `None` only if the id
-    /// is neither in range nor accompanied by an override (malformed).
+    /// Resolve the LocalName: the compiled core vocab entry when `name_id`
+    /// addresses one, otherwise the override (an inline escaped name or a
+    /// spec-declared band name).  `None` only if the id is neither in range nor
+    /// accompanied by an override (malformed).
     #[must_use]
     pub fn local_name(&self) -> Option<&'a [u8]> {
         match vocab::BY_ID.get(self.name_id as usize) {
@@ -234,15 +241,16 @@ pub enum Event<'a> {
     EndDocument,
     /// Corresponds to `start_element($el)`.
     /// `name_id < vocab::escape_id()` → look up via `vocab::BY_ID[name_id]`;
-    /// else use `local_name_override`.
+    /// else use `local_name_override` (inline escape or spec-band name).
     StartElement {
         /// 4-bit NS_ID.  If 15 (=escape), read `ns_uri_override` instead.
         ns_id: u8,
-        /// `< vocab::escape_id()` → closed-world vocab; else → escaped (raw name follows).
-        name_id: u8,
+        /// `< vocab::escape_id()` → core vocab; else → override (escape or band).
+        name_id: u32,
         /// Only populated when `ns_id == 15` (escape).
         ns_uri_override: Option<&'a [u8]>,
-        /// Only populated when `name_id >= vocab::escape_id()` (escape).
+        /// Inline escaped name (`name_id == escape_id()`) or a spec-declared
+        /// band name (`name_id > escape_id()`); `None` for a compiled core name.
         local_name_override: Option<&'a [u8]>,
         /// Decoded attributes in wire order.
         attrs: Vec<Attr<'a>>,
@@ -257,22 +265,12 @@ pub enum Event<'a> {
     Iws(&'a [u8]),
     /// Corresponds to `processing_instruction`.
     Pi {
-        /// NAME_ID of the PI target (>= vocab::escape_id() = escape → raw bytes follow).
-        target_id: u8,
-        /// Raw target name if escaped.
+        /// NAME_ID of the PI target (`> escape_id()` = escape → raw bytes follow).
+        target_id: u32,
+        /// Raw target name if escaped or a spec-band name.
         target_override: Option<&'a [u8]>,
         /// PI data portion.
         data: &'a [u8],
-    },
-    /// Stream-local name interning entry (only emitted if NAME_ID escape is
-    /// used; normal Amin vocab NEVER emits these).
-    DictEntry {
-        /// NS_ID (4 bits).
-        ns_id: u8,
-        /// Assigned name ID (must be ≥ 128 because 0..escape_id are closed-world).
-        id: u32,
-        /// Raw UTF-8 LocalName.
-        name: &'a [u8],
     },
 }
 
@@ -297,4 +295,11 @@ pub enum DecodeError {
     /// to the decoder (via `Amin::Util::Fold`-style contract).
     #[error("prohibited name (id={0}) at offset {1}")]
     ProhibitedName(u32, usize),
+    /// NAME_ID addresses the spec-declared [`vocab::Vocab`] band
+    /// (`> vocab::escape_id()`) but the consumer's spec does not declare that
+    /// slot.  This is a loud contract mismatch — the id names a vocabulary the
+    /// consumer was never handed — never a silent desync, and never mistaken
+    /// for an inline escaped name that was not written on the wire.
+    #[error("NAME_ID {0} past the spec's declared band (band ends before it) at offset {1}")]
+    NameOutOfBand(u32, usize),
 }
