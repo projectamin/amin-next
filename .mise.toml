@@ -261,6 +261,8 @@ echo "[+] Building bctool (ML-DSA-87 zcap-signer + slab tool for tests)..."
 cargo build -p bitcache --manifest-path rust/Cargo.toml
 echo "[+] Building aminexec (sandbox executor ABI — fail-closed sandbox_missing_abi when backends unavailable)..."
 cargo build -p aminexec --manifest-path rust/Cargo.toml
+echo "[+] Building awp3 cdylib (AWP/3 mesh transport bound by Amin::Net::AWP3)..."
+cargo build -p awp3 --manifest-path rust/Cargo.toml
 
 echo "[+] Bootstrap complete. Use \`mise run test\` to run the suite."
 '''
@@ -295,6 +297,12 @@ set -e
 mise exec -- prove -v -r t/
 echo "---"
 (cd rust && cargo test --workspace)
+'''
+
+[tasks.bench]
+description = "A/B the AXA loop origin (Amin::AXA::Serve) against Starman on the same bundle — throughput + tail latency"
+run = '''
+exec bench/axa-bench "$@"
 '''
 
 [tasks.app]

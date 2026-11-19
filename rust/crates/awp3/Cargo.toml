@@ -10,19 +10,32 @@ repository.workspace   = true
 
 [features]
 default = []
+# Reserved for a future QUIC carrier of the same frames; the frame codec itself
+# is transport-agnostic (see docs/proxy-plan.md §6).
 quic    = ["dep:quinn", "dep:rustls"]
 
 [dependencies]
-blake3.workspace       = true
-cpufeatures.workspace  = true
-bytes.workspace        = true
-tokio.workspace        = true
-anyhow.workspace       = true
-thiserror.workspace    = true
-tracing.workspace      = true
-quinn                  = { workspace = true, optional = true }
-rustls                 = { workspace = true, optional = true }
+# Hybrid PQ key agreement — ML-KEM-768 (§6 key exchange).
+ml-kem.workspace        = true
+# X25519 leg of the hybrid KEM tuple.
+x25519-dalek.workspace  = true
+# Composite authentication — ML-DSA-65 (§6; the ratchet crate carries -87) + Ed25519.
+ml-dsa.workspace        = true
+ed25519-dalek.workspace = true
+# ASCON-128a per-frame AEAD (§6).
+ascon-aead.workspace    = true
+# HKDF-SHA256 for the handshake combiner and direction keys.
+hkdf.workspace          = true
+sha2.workspace          = true
+# BLAKE3 rolling frame chain (§6).
+blake3.workspace        = true
+zeroize.workspace       = true
+rand.workspace          = true
+thiserror.workspace     = true
+quinn                   = { workspace = true, optional = true }
+rustls                  = { workspace = true, optional = true }
 
 [lib]
-name = "awp3"
-path = "src/lib.rs"
+name       = "awp3"
+path       = "src/lib.rs"
+crate-type = ["cdylib", "rlib"]

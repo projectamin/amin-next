@@ -22,7 +22,7 @@ use experimental 'signatures';
 
 use Exporter 'import';
 our @ISA       = ('Exporter');
-our @EXPORT_OK = qw(tool_aminexec tool_bctool tool_rctool);
+our @EXPORT_OK = qw(tool_aminexec tool_bctool tool_rctool awp3_lib);
 
 sub _project_root {
     # __FILE__ may be ABSOLUTE (()=-@INC normalization) or a bare relative
@@ -65,6 +65,31 @@ sub tool_rctool {
     state $t;
     return $t if defined $t;
     return $t = _pick('AMIN_RCTOOL', 'rctool');
+}
+
+# The AWP/3 transport ships as a cdylib (rust/crates/awp3) that Perl binds with
+# FFI::Platypus.  Cargo writes it as target/{debug,release}/libawp3.<ext>; the
+# extension is platform-dependent, so resolve the exact filename rather than a
+# bare stem.  AMIN_AWP3_LIB pins an authority-managed install.
+sub _awp3_filename {
+    return 'awp3.dll'      if $^O =~ /MSWin32|cygwin/i;
+    return 'libawp3.dylib' if $^O eq 'darwin';
+    return 'libawp3.so';
+}
+
+sub awp3_lib {
+    state $l;
+    return $l if defined $l;
+    return $l = $ENV{AMIN_AWP3_LIB}
+        if defined $ENV{AMIN_AWP3_LIB} && length $ENV{AMIN_AWP3_LIB};
+    my $name = _awp3_filename();
+    my $root = _project_root();
+    for my $c ("$root/target/debug/$name", "$root/target/release/$name",
+               "$root/rust/target/debug/$name", "$root/rust/target/release/$name",
+               "$root/local/lib/$name") {
+        return $l = $c if -f $c;
+    }
+    return $l = '';
 }
 
 1;
