@@ -16,6 +16,19 @@
   <filter class="Amin::AI::Model" position="begin" window="document" namespace="http://projectamin.org/ns/ai/1" />
   <filter class="Amin::AI::Gate" position="begin" element="request" namespace="http://projectamin.org/ns/ai/1" />
   <filter class="Amin::Schedule::Placement" position="begin" namespace="http://projectamin.org/ns/2026/" />
+  <!-- PROXY routing: a begin candidate bound to <amin:request>.  Element-scoped,
+       so it splices in only on a request document and lands below the static
+       begin filters (auth first).  Its compiled route table is injected, not
+       streamed — see docs/proxy-plan.md §5.1–§5.3. -->
+  <filter class="Amin::Proxy::Route" position="begin" element="request" namespace="http://projectamin.org/ns/2026/" />
+  <!-- PROXY rate limit: element-agnostic `begin` static, so it always sees
+       <amin:request> and sits just above the routing gate.  It is NOT an
+       element-scoped candidate like Proxy::Route: a _LazyGate splices only ONE
+       candidate per element, so a second request-bound candidate would shadow
+       routing rather than chain with it.  A shed request is swallowed (never
+       routed) and denied with a -7100 <amin:status> -> 429 — see
+       docs/proxy-plan.md §P5. -->
+  <filter class="Amin::Proxy::RateLimit" position="begin" namespace="http://projectamin.org/ns/2026/" />
   <filter class="Amin::Command::Addr2line" position="middle" element="command" name="addr2line" namespace="http://projectamin.org/ns/2026/" />
   <filter class="Amin::Command::Ar" position="middle" element="command" name="ar" namespace="http://projectamin.org/ns/2026/" />
   <filter class="Amin::Command::As" position="middle" element="command" name="as" namespace="http://projectamin.org/ns/2026/" />
@@ -370,7 +383,9 @@
   <filter class="Amin::Filter::UI::Element::Stack" position="late" element="stack" namespace="http://projectamin.org/ns/ui/1" target="ios" />
   <filter class="Amin::Filter::UI::Element::Stack" position="late" element="stack" namespace="http://projectamin.org/ns/ui/1" target="android" />
   <filter class="Amin::Filter::UI::Element::Text" position="late" element="text" namespace="http://projectamin.org/ns/ui/1" target="ios" />
+  <filter class="Amin::Filter::UI::Element::Markdown" position="late" element="markdown" namespace="http://projectamin.org/ns/ui/1" target="ios" />
   <filter class="Amin::Filter::UI::Element::Text" position="late" element="text" namespace="http://projectamin.org/ns/ui/1" target="android" />
+  <filter class="Amin::Filter::UI::Element::Markdown" position="late" element="markdown" namespace="http://projectamin.org/ns/ui/1" target="android" />
   <filter class="Amin::Filter::UI::Element::Toolbar" position="late" element="toolbar" namespace="http://projectamin.org/ns/ui/1" target="ios" />
   <filter class="Amin::Filter::UI::Element::Toolbar" position="late" element="toolbar" namespace="http://projectamin.org/ns/ui/1" target="android" />
   <filter class="Amin::Filter::UI::Element::VStack" position="late" element="vstack" namespace="http://projectamin.org/ns/ui/1" target="ios" />
@@ -393,6 +408,11 @@
   <filter class="Amin::Filter::UI::Element::Cell" position="late" element="cell" namespace="http://projectamin.org/ns/ui/1" target="android" />
   <filter class="Amin::Filter::UI::Element::Style" position="late" element="style" namespace="http://projectamin.org/ns/ui/1" target="ios" />
   <filter class="Amin::Filter::UI::Element::Style" position="late" element="style" namespace="http://projectamin.org/ns/ui/1" target="android" />
+  <!-- ui:swap — a streaming update fragment (for="ID" mode="…").  Bound to
+       every target: HTML applies it through the page's swap runtime, source
+       dialects render the subtree inline. -->
+  <filter class="Amin::Filter::UI::Element::Swap" position="late" element="swap" namespace="http://projectamin.org/ns/ui/1" target="ios" />
+  <filter class="Amin::Filter::UI::Element::Swap" position="late" element="swap" namespace="http://projectamin.org/ns/ui/1" target="android" />
   <!-- The same fleet bound to the html target.  These filters share the
        SwiftUI/Compose classes; only the injected Render dialect differs, and
        Amin::UI::Target::HTML emits html:* events instead of stream text. -->
@@ -419,6 +439,7 @@
   <filter class="Amin::Filter::UI::Element::Sparkline" position="late" element="sparkline" namespace="http://projectamin.org/ns/ui/1" target="html" />
   <filter class="Amin::Filter::UI::Element::Stack" position="late" element="stack" namespace="http://projectamin.org/ns/ui/1" target="html" />
   <filter class="Amin::Filter::UI::Element::Text" position="late" element="text" namespace="http://projectamin.org/ns/ui/1" target="html" />
+  <filter class="Amin::Filter::UI::Element::Markdown" position="late" element="markdown" namespace="http://projectamin.org/ns/ui/1" target="html" />
   <filter class="Amin::Filter::UI::Element::Toolbar" position="late" element="toolbar" namespace="http://projectamin.org/ns/ui/1" target="html" />
   <filter class="Amin::Filter::UI::Element::VStack" position="late" element="vstack" namespace="http://projectamin.org/ns/ui/1" target="html" />
   <filter class="Amin::Filter::UI::Element::Form" position="late" element="form" namespace="http://projectamin.org/ns/ui/1" target="html" />
@@ -429,6 +450,7 @@
   <filter class="Amin::Filter::UI::Element::Tr" position="late" element="tr" namespace="http://projectamin.org/ns/ui/1" target="html" />
   <filter class="Amin::Filter::UI::Element::Cell" position="late" element="cell" namespace="http://projectamin.org/ns/ui/1" target="html" />
   <filter class="Amin::Filter::UI::Element::Style" position="late" element="style" namespace="http://projectamin.org/ns/ui/1" target="html" />
+  <filter class="Amin::Filter::UI::Element::Swap" position="late" element="swap" namespace="http://projectamin.org/ns/ui/1" target="html" />
   <filter class="Amin::AI::Graph" position="late" namespace="http://projectamin.org/ns/ai/1" />
   <!-- document generation.  Element-scoped `late` candidate: spliced only
        while an amin:document flows.  The grammar is platform vocabulary, so it

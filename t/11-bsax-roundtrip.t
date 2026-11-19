@@ -160,12 +160,11 @@ is scalar(@fb), scalar(@xml), "XML fallback produces same event count";
 }
 
 # 8. Strict XML::SAX parity for the event kinds that are NOT start/end element.
-#    A hand-built stream exercises the three arms the aligned decoder must fire
+#    A hand-built stream exercises the arms the aligned decoder must fire
 #    exactly once each, in document order:
 #      0xA0 IWS        → ignorable_whitespace   (must NOT fold into `characters`)
 #      0xC0 PI         → processing_instruction  (escaped/PROHIBITED target path)
-#      0xE0 DICT_ENTRY → no handler event; interns id → name, transparently
-#                        resolved by a LATER NAME_ID reference (_lex_name).
+#    0xE0 (former DICT_ENTRY) is retired — asserted as an unknown tag at the end.
 {
     my $leb = sub {                     # LEB128 u32, byte-string form
         my $n = shift;
@@ -175,13 +174,11 @@ is scalar(@fb), scalar(@xml), "XML fallback produces same event count";
     };
     my $lpfx = sub { $leb->(length $_[0]) . $_[0] };   # LEB length + raw bytes
 
-    my $DICT_ID = 200;                  # ≥128 ⇒ never collides with a vocab slot
     my $s  = "AMINBSA1";                # magic
     $s .= "\x00";                       # StartDoc
-    # DICT_ENTRY: flags[4] = NS_ID (AMIN=1) ⇒ tag 0xF0; LEB id; len-prefixed name
-    $s .= "\xF0" . $leb->($DICT_ID) . $lpfx->('frobnicate');
-    # StartEl: NS present + 0 attrs ⇒ tag 0x50; NS byte 0x10 (AMIN); interned id
-    $s .= "\x50" . "\x10" . $leb->($DICT_ID);
+    # StartEl: NS present + 0 attrs ⇒ tag 0x50; NS byte 0x10 (AMIN); `status`
+    # is closed-world NAME_ID 4 (no interning needed — the codec is 1:1).
+    $s .= "\x50" . "\x10" . $leb->(4);
     $s .= "\x82" . "hi";               # Chars "hi"
     $s .= "\xA3" . "\n  ";             # IWS
     # PI: target id == ESCAPE ⇒ inline len-prefixed target, then data blob
@@ -192,28 +189,173 @@ is scalar(@fb), scalar(@xml), "XML fallback produces same event count";
 
     my $want = [
         'start_document',
-        [start_element => { LocalName => 'frobnicate',
+        [start_element => { LocalName => 'status',
                             NamespaceURI => $NS_AMIN, Attributes => [] }],
         [characters => 'hi'],
         [ignorable_whitespace => "\n  "],
         [processing_instruction => { Target => 'xml-stylesheet',
                                      Data   => 'type="text/xsl"' }],
-        [end_element => { LocalName => 'frobnicate', NamespaceURI => $NS_AMIN }],
+        [end_element => { LocalName => 'status', NamespaceURI => $NS_AMIN }],
         'end_document',
     ];
 
     my $h = Amin::Test::RecordingHandler->new;
     Amin::Generator::BSAX->new(Handler => $h)->parse_bytes($s);
     is $h->captured, $want,
-       "IWS→ignorable_whitespace, PI→processing_instruction, DICT name resolves";
+       "IWS→ignorable_whitespace, PI→processing_instruction survive 1:1";
 
-    # The same stream fed one byte at a time must be identical — interning,
-    # IWS and PI must all survive chunk boundaries intact.
+    # The same stream fed one byte at a time must be identical — IWS and PI
+    # must both survive chunk boundaries intact.
     my $hc = Amin::Test::RecordingHandler->new;
     my $gc = Amin::Generator::BSAX->new(Handler => $hc);
     for my $i (0 .. length($s) - 1) { $gc->feed(substr($s, $i, 1)) }
     $gc->finish;
-    is $hc->captured, $want, "IWS/PI/DICT survive 1-byte chunked feed";
+    is $hc->captured, $want, "IWS/PI survive 1-byte chunked feed";
+
+    # 0xE0 (former DICT_ENTRY, stream-local interning) is retired: it had no
+    # XML::SAX analogue, so a pure 1:1 codec rejects it as an unknown tag
+    # rather than inventing a vocabulary entry the XML path could never see.
+    my $bad = "AMINBSA1" . "\x00" . "\xF0" . $leb->(200) . $lpfx->('frobnicate');
+    ok dies { Amin::Generator::BSAX->new(
+                Handler => Amin::Test::RecordingHandler->new)->parse_bytes($bad) },
+       '0xE0 (former DICT_ENTRY) is rejected as an unknown tag';
+}
+
+# 9. Spec-declared BSAX vocabulary band — the dynamic half of the NAME_ID space.
+#    A LocalName the machine contract declares (here an external filter's own
+#    element + attribute, NOT in Amin core) must round-trip with no name wired
+#    into Amin core, and a band id the consumer's spec does NOT declare must be
+#    a LOUD contract error rather than a silent desync.
+{
+    my $leb = sub {
+        my $n = shift; my $s = '';
+        do { my $b = $n & 0x7F; $n >>= 7; $b |= 0x80 if $n; $s .= chr($b) } while $n;
+        $s;
+    };
+    my $ESC = Amin::Generator::BSAX::ESCAPE();
+    my $NSF = 'http://example.com/ns/frob/1';
+    # The spec declares the external filter's element + attribute.  `id`/`status`
+    # are core names included to prove the core table wins, and the repeated
+    # `frob` proves first-seen order: band = [frob, widget] ⇒ ids ESC+1, ESC+2.
+    my @vocab = qw(id frob widget status frob);
+
+    my $el = {
+        NamespaceURI => $NSF, LocalName => 'frob', Prefix => 'frob', Name => 'frob:frob',
+        Attributes => { '{}widget' => {
+            Name => 'frob:widget', LocalName => 'widget', Prefix => 'frob',
+            NamespaceURI => $NSF, Value => '42' } },
+    };
+    my $mk = sub {
+        my ($v) = @_;
+        my $e = Amin::Handler::BSAX->new($v ? (vocab => $v) : ());
+        $e->start_document({});
+        $e->start_element($el);
+        $e->end_element({});
+        $e->end_document({});
+        return $e->output;
+    };
+    my $with = $mk->(\@vocab);
+    my $none = $mk->(undef);
+
+    ok length($with) < length($none),
+       "band id on the wire is smaller than the ESCAPE+inline name form ("
+       . length($with) . " vs " . length($none) . " B)";
+
+    # Same spec on both ends ⇒ identical events, no core edit.
+    my $rh = Amin::Test::RecordingHandler->new;
+    Amin::Generator::BSAX->new(Handler => $rh, vocab => \@vocab)->parse_bytes($with);
+    my $ev = $rh->captured;
+    is $ev->[1][1]{LocalName}, 'frob', 'band element LocalName round-trips';
+    is $ev->[1][1]{NamespaceURI}, $NSF, 'band element keeps its custom NS URI';
+    is $ev->[1][1]{Attributes}[0]{LocalName}, 'widget', 'band attribute LocalName round-trips';
+    is $ev->[1][1]{Attributes}[0]{Value}, '42', 'band attribute value round-trips';
+
+    # A band id only means something under the spec that declares it: the SAME
+    # bytes decoded by an EMPTY-band consumer must fail loudly, not desync.
+    ok dies { Amin::Generator::BSAX->new(
+                Handler => Amin::Test::RecordingHandler->new)->parse_bytes($with) },
+       'band id without a declaring spec is a loud contract error';
+
+    # The escape path still carries an undeclared name: the no-vocab stream
+    # decodes to the same LocalName even under a band-aware decoder.
+    my $rh2 = Amin::Test::RecordingHandler->new;
+    Amin::Generator::BSAX->new(Handler => $rh2, vocab => \@vocab)->parse_bytes($none);
+    is $rh2->captured->[1][1]{LocalName}, 'frob',
+       'escape path (no band) still round-trips an undeclared name';
+
+    # A hand-built NAME_ID beyond this decoder's band ⇒ loud error (never a
+    # silent inline read, which is exactly how a spec mismatch would hide).
+    my $bad = "AMINBSA1" . "\x00"
+            . "\x50" . "\x10" . $leb->($ESC + 1)   # StartEl NS_AMIN, id ESC+1
+            . "\x60" . "\x20";
+    ok dies { Amin::Generator::BSAX->new(
+                Handler => Amin::Test::RecordingHandler->new)->parse_bytes($bad) },
+       'out-of-band NAME_ID is rejected, not silently read as inline';
+}
+
+# 10. The band is a DYNAMIC PROPERTY OF THE SPEC: the element name an external
+#     filter binds to is harvested from the machine contract (element-scoped
+#     <filter element=…> + <vocab><name>), in document order — never wired into
+#     Amin core.  Mirrors the Rust harvest test
+#     amin-machine::spec::tests::spec_vocab_band_harvests_element_filters_and_vocab_block
+#     (same fixture ⇒ identical band on both sides).
+{
+    require Amin::Machine::MachineSpec;
+    my $spec_xml = <<'XML';
+<machine>
+  <name>Test::Machine</name>
+  <filter class="Amin::Proxy::Route" element="request"/>
+  <filter class="Amin::Proxy::RateLimit"/>
+  <filter class="Amin::Acme::Challenge" element="acme-challenge"/>
+  <vocab>
+    <name>frob</name>
+    <name>  widget  </name>
+  </vocab>
+</machine>
+XML
+    my $spec = Amin::Machine::MachineSpec->new(xml => $spec_xml)->spec;
+    is $spec->{name}, 'Test::Machine',
+       'machine <name> is not shadowed by <vocab><name> children';
+    is $spec->{vocab}, [qw(request acme-challenge frob widget)],
+       'spec vocab band = element filters + <vocab> names, in document order';
+
+    # The harvested names ARE the codec band.  None is in Amin core, so the
+    # band is all four ⇒ ESC+1, ESC+2, …  An external element (here
+    # acme-challenge) rides the compact NAME_ID path with no core edit.
+    my $NSAC = 'http://example.com/ns/acme/1';
+    my $el = {
+        NamespaceURI => $NSAC, LocalName => 'acme-challenge',
+        Prefix => 'acme', Name => 'acme:acme-challenge', Attributes => {},
+    };
+    my $mk = sub {
+        my ($v) = @_;
+        my $e = Amin::Handler::BSAX->new($v ? (vocab => $v) : ());
+        $e->start_document({});
+        $e->start_element($el);
+        $e->end_element({});
+        $e->end_document({});
+        return $e->output;
+    };
+    my $band = $mk->($spec->{vocab});
+    my $none = $mk->(undef);
+    ok length($band) < length($none),
+       "harvested-spec band id beats the ESCAPE+inline form ("
+       . length($band) . " vs " . length($none) . " B)";
+
+    # Same harvested spec on both ends ⇒ the external element round-trips.
+    my $rh = Amin::Test::RecordingHandler->new;
+    Amin::Generator::BSAX->new(Handler => $rh, vocab => $spec->{vocab})
+        ->parse_bytes($band);
+    is $rh->captured->[1][1]{LocalName}, 'acme-challenge',
+       'external element round-trips via the spec-harvested band';
+    is $rh->captured->[1][1]{NamespaceURI}, $NSAC,
+       'external element keeps its custom NS URI through the band';
+
+    # The band id is meaningless without the spec that declares it: the same
+    # bytes under a spec that does not declare the name must fail loudly.
+    ok dies { Amin::Generator::BSAX->new(
+                Handler => Amin::Test::RecordingHandler->new)->parse_bytes($band) },
+       'a foreign spec cannot silently resolve another spec\'s band id';
 }
 
 done_testing();

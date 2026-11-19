@@ -21,17 +21,37 @@ sub spec ($self) {
     return $self->{spec};
 }
 
+# The signed-reference half (parse → get → verify) lives in
+# Amin::Bitcache::Reference so a machine spec, a proxy config and a route spec
+# all resolve through one implementation (proxy-plan §5.13).  The spec keeps
+# only the disk-candidate half below.
+sub _reference ($self) {
+    return $self->{_reference} if $self->{_reference};
+    require Amin::Bitcache::Reference;
+    return $self->{_reference} = Amin::Bitcache::Reference->new(
+        uri   => $self->{bc_uri},
+        path  => $self->{path},
+        hash  => $self->{bc_hash},
+        slab_path        => $self->{slab_path},
+        bctool_path      => $self->{bctool_path},
+        trust_anchor_dir => $self->{trust_anchor_dir},
+        signer_name      => $self->{signer_name},
+        signer_ts        => $self->{signer_ts},
+        signer_vk        => $self->{signer_vk},
+        signer_sig       => $self->{signer_sig},
+    )->parse;
+}
+
 sub _load ($self) {
     if (defined $self->{xml}) {
         return $self->{xml};
     }
-    $self->_parse_bc_uri;
-    if (defined $self->{bc_hash} && length $self->{bc_hash}) {
+    my $ref = $self->_reference;
+    if ($ref->addressed) {
         $self->{_from_bitcache} = 1;
-        my $raw = $self->_bctool_get($self->{bc_hash});
-        return undef unless defined $raw && length $$raw;
-        return undef unless $self->_bctool_verify;
-        return $$raw;
+        my $bytes = $ref->resolve;
+        return undef unless defined $bytes && length $bytes;
+        return $bytes;
     }
     for my $candidate ($self->_candidates) {
         next unless defined $candidate && length $candidate;
@@ -66,6 +86,10 @@ sub _parse ($self, $xml) {
         generator => undef,
         name      => undef,
         ui_dialects => {},
+        # Raw spec-declared BSAX vocabulary band names (document order).  The
+        # codec drops core names and assigns band NAME_IDs — see
+        # Amin::{Handler,Generator}::BSAX.
+        vocab     => [],
     };
     my $degrade = sub {
         $result->{allowed} = $self->{_from_bitcache} ? {} : $self->_allow_all_registered;
@@ -85,6 +109,7 @@ sub _parse ($self, $xml) {
     my %allowed;
     $allowed{$_->{class}} = 1 for $c->{filters}->@*;
     $result->{filters} = $c->{filters};
+    $result->{vocab}   = $c->{vocab_names};
     $result->{allowed} = (scalar keys %allowed) ? \%allowed
         : ($self->{_from_bitcache} ? {} : $self->_allow_all_registered);
 
@@ -98,109 +123,6 @@ sub _parse ($self, $xml) {
     }
     $result->{name} = $c->{name} if defined $c->{name};
     return $result;
-}
-
-sub _parse_bc_uri ($self) {
-    my $uri = $self->{bc_uri};
-    unless (defined $uri && length $uri) {
-        my $p = $self->{path};
-        if (defined $p && $p =~ m{^bitcache://}) {
-            $uri = $p;
-        }
-    }
-    return unless defined $uri && length $uri;
-
-    require URI;
-    require URI::Escape;
-    my $u = eval { URI->new($uri) };
-    return unless $u && $u->scheme eq 'bitcache';
-
-    my $algo = $u->authority // '';
-    return unless $algo eq 'blake3';
-
-    my $path = $u->path // '';
-    $path =~ s{^/}{};
-    return unless length($path) == 64 && $path =~ /^[0-9a-f]{64}$/;
-    $self->{bc_hash} = $path;
-
-    my %q = $u->query_form;
-    my %map = (signer => 'signer_name', ts => 'signer_ts',
-               sig    => 'signer_sig',  vk => 'signer_vk');
-    for my $key (keys %map) {
-        if (exists $q{$key} && defined $q{$key} && length $q{$key}) {
-            $self->{$map{$key}} = $q{$key};
-        }
-    }
-    return;
-}
-
-sub _bctool ($self) {
-    require Amin::ToolPaths;
-    my $default = Amin::ToolPaths::tool_bctool();
-    return $self->{bctool_path} if defined $self->{bctool_path};
-    return length $default ? $default : 'bctool';
-}
-
-sub _slab ($self) {
-    state $default = do {
-        require File::Temp;
-        File::Temp::tempdir(CLEANUP => 1) . '/default.slab';
-    };
-    my $p = $self->{slab_path};
-    return (defined $p && length $p) ? $p : $default;
-}
-
-sub _bctool_get ($self, $hash) {
-    return unless defined $hash && length($hash) == 64;
-    require IPC::Run;
-    my $bctool = $self->_bctool;
-    my $slab   = $self->_slab;
-    my ($in, $out, $err) = ('', '', '');
-    my $h = IPC::Run::harness(
-        [$bctool, 'get', '--slab', $slab, '--hash', $hash],
-        \$in, \$out, \$err, debug => 0);
-    eval { IPC::Run::start($h); IPC::Run::finish($h) };
-    my $rc = $? >> 8;
-    if ($@ || $rc != 0) {
-        return;
-    }
-    return \$out;
-}
-
-sub _bctool_verify ($self) {
-    my $name = $self->{signer_name};
-    my $ts   = $self->{signer_ts};
-    my $sig  = $self->{signer_sig};
-    return 0 unless defined $name && length $name;
-    return 0 unless defined $ts   && length $ts;
-    return 0 unless defined $sig  && length $sig;
-
-    my $vk = $self->{signer_vk};
-    unless (defined $vk && length $vk) {
-        my $ta = $self->{trust_anchor_dir};
-        return 0 unless defined $ta && length $ta;
-        require Digest::SHA;
-        my $hex = Digest::SHA::sha256_hex($name);
-        $vk = "$ta/$hex.vk";
-        return 0 unless -f $vk;
-    }
-
-    require IPC::Run;
-    my $bctool = $self->_bctool;
-    my $slab   = $self->_slab;
-    my ($in, $out, $err) = ('', '', '');
-    my $h = IPC::Run::harness(
-        [$bctool, 'verify',
-            '--slab', $slab,
-            '--hash', $self->{bc_hash},
-            '--name', $name,
-            '--ts',   $ts,
-            '--vk',   $vk,
-            '--sig',  $sig],
-        \$in, \$out, \$err, debug => 0);
-    eval { IPC::Run::start($h); IPC::Run::finish($h) };
-    my $rc = $? >> 8;
-    return ($rc == 0) ? 1 : 0;
 }
 
 sub _allow_all_registered ($self) {
@@ -226,6 +148,12 @@ sub new ($class) {
     bless {
         filters => [], ui_dialects => {}, name => undef,
         _in_name => 0, _name_text => '',
+        # BSAX dynamic vocabulary band: LocalNames the spec declares in document
+        # order — every element-scoped `<filter element=…>` plus any explicit
+        # `<vocab><name>…</name></vocab>`.  Raw (unfiltered) here; the codec
+        # drops core names and assigns band NAME_IDs (ESCAPE+1, …) itself.
+        vocab_names => [],
+        _in_vocab => 0, _capturing_vname => 0, _vname_text => '',
     }, $class;
 }
 
@@ -244,7 +172,9 @@ sub _surface ($el) {
 sub start_document ($self, @) { return }
 sub end_document   ($self, @) { return }
 sub characters ($self, $ch) {
-    $self->{_name_text} .= $ch->{Data} if $self->{_in_name} && defined $ch->{Data};
+    my $d = $ch->{Data};
+    $self->{_name_text}  .= $d if $self->{_in_name}        && defined $d;
+    $self->{_vname_text} .= $d if $self->{_capturing_vname} && defined $d;
     return;
 }
 
@@ -252,12 +182,24 @@ sub start_element ($self, $el) {
     my $name = $el->{LocalName} // $el->{Name} // '';
     return unless length $name;
     my %a = _surface($el);
+    # Inside <vocab>, only <name> children matter: each contributes one
+    # spec-declared LocalName to the BSAX dynamic vocabulary band.  Returning
+    # early stops <vocab><name> being mistaken for the machine <name>.
+    if ($self->{_in_vocab}) {
+        if ($name eq 'name') { $self->{_capturing_vname} = 1; $self->{_vname_text} = '' }
+        return;
+    }
+    if ($name eq 'vocab') { $self->{_in_vocab} = 1; return }
     if ($name eq 'filter') {
         my $class = $a{class} // $a{name};
         return unless defined $class && length $class;
         my %meta = %a;
         delete @meta{qw(class name)};
         push $self->{filters}->@*, { class => $class, meta => \%meta };
+        # An element-scoped filter declares a LocalName the machine's BSAX
+        # vocabulary must cover — harvested in document order (first-seen wins).
+        push $self->{vocab_names}->@*, $a{element}
+            if defined $a{element} && length $a{element};
     }
     elsif ($name eq 'ui-dialect') {
         my ($t, $c) = ($a{target}, $a{class} // $a{name});
@@ -283,6 +225,13 @@ sub start_element ($self, $el) {
 
 sub end_element ($self, $el) {
     my $name = $el->{LocalName} // $el->{Name} // '';
+    if ($self->{_capturing_vname} && $name eq 'name') {
+        $self->{_capturing_vname} = 0;
+        (my $t = $self->{_vname_text}) =~ s/^\s+|\s+$//g;
+        push $self->{vocab_names}->@*, $t if length $t;
+        return;
+    }
+    if ($name eq 'vocab') { $self->{_in_vocab} = 0; return }
     if ($name eq 'name' && $self->{_in_name}) {
         $self->{_in_name} = 0;
         (my $t = $self->{_name_text}) =~ s/^\s+|\s+$//g;

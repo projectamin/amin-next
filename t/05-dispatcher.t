@@ -38,8 +38,8 @@ is($late->[1], 'Amin::Filter::UI::Guard',
 is($late->[-2], 'Amin::AI::Graph', 'spec late idx -2 = AI::Graph');
 is($late->[-1], 'Amin::Content::Document',
     'spec late idx -1 = Content::Document (appended after the ui: region)');
-is(scalar($late->@*), 103,
-    'spec late = Map::Topology + UI::Guard + 33×3 ui: element filters + AI::Graph'
+is(scalar($late->@*), 109,
+    'spec late = Map::Topology + UI::Guard + 35×3 ui: element filters + AI::Graph'
     . ' + Content::Document');
 {
     my @el = @$late[2 .. $#$late - 2];
@@ -50,9 +50,9 @@ is(scalar($late->@*), 103,
         next unless $f->{class} =~ /^Amin::Filter::UI::Element::/;
         $target{ $f->{meta}{target} // '' }++;
     }
-    is($target{ios}, 33, 'late declares 33 ios element candidates');
-    is($target{android}, 33, 'late declares 33 android element candidates');
-    is($target{html}, 33, 'late declares 33 html element candidates');
+    is($target{ios}, 35, 'late declares 35 ios element candidates');
+    is($target{android}, 35, 'late declares 35 android element candidates');
+    is($target{html}, 35, 'late declares 35 html element candidates');
     is(scalar(keys %target), 3,
         'ui: element filters are target-scoped only (ios/android/html) — a neutral host splices none');
 }
@@ -106,8 +106,12 @@ is($by_pos{begin}[5]{class}, 'Amin::AI::Model',
 is($by_pos{begin}[6]{class}, 'Amin::AI::Gate',
     'spec begin idx 6 = AI::Gate (model allowlist + ZCap scope check before placement)');
 is($by_pos{begin}[7]{class}, 'Amin::Schedule::Placement',
-    'spec begin idx 7 = Schedule::Placement (innermost begin, wraps AFTER profile/zcap/ucc/ai, before middle)');
-is(scalar($by_pos{begin}->@*), 8, 'spec begin position count = 8 (ZCap→Cond→Profile→UCC::General→UCC::Credit→AI::Model→AI::Gate→Placement)');
+    'spec begin idx 7 = Schedule::Placement (wraps AFTER profile/zcap/ucc/ai, before middle)');
+is($by_pos{begin}[8]{class}, 'Amin::Proxy::Route',
+    'spec begin idx 8 = Proxy::Route (element-scoped candidate on <amin:request>; splices below auth)');
+is($by_pos{begin}[9]{class}, 'Amin::Proxy::RateLimit',
+    'spec begin idx 9 = Proxy::RateLimit (element-agnostic static; sheds above the routing gate)');
+is(scalar($by_pos{begin}->@*), 10, 'spec begin position count = 10 (ZCap→Cond→Profile→UCC::General→UCC::Credit→AI::Model→AI::Gate→Placement→Proxy::Route→Proxy::RateLimit)');
 
 my $chain = Amin::Machine::Dispatcher::_build_chain(
     Amin::Handler::Writer->new,

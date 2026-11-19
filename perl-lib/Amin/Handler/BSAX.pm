@@ -9,6 +9,7 @@ use Class::Tiny qw(fh autoflush), {
     stack   => sub { [] },   # CODE default: non-CODE refs are one shared ref per class
     last_ns => 0+0,
     wrote_magic => 0,
+    vocab   => undef,        # spec-declared band names (raw, document order)
 };
 
 # 4-bit NS_IDs MUST stay 1:1 with Rust bsax/src/lib.rs NS_ID enum.
@@ -108,6 +109,39 @@ BEGIN {
     @ID{@VOCAB} = (0 .. $#VOCAB);
 }
 
+# Spec-declared BSAX vocabulary band — the dynamic half of the NAME_ID space.
+# LocalNames the machine spec declares (element-scoped `<filter element=…>` +
+# `<vocab><name>`) that are NOT in the Amin core table above are assigned
+# NAME_IDs ESCAPE+1, ESCAPE+2, … in first-seen order (core wins, first-seen
+# wins).  Both ends derive the identical map from the same signed spec, so no
+# name is ever wired into Amin core.  An absent vocab ⇒ empty band ⇒ this
+# encoder behaves exactly as before (unknown names ride the escape path).  Keep
+# the assignment order byte-identical to Amin::Generator::BSAX and
+# rust/crates/bsax/src/vocab.rs.
+#
+# Derived LAZILY (not in BUILD): XML::SAX::Base supplies this class's
+# constructor, so Class::Tiny's BUILD hook is never invoked.  Cached on first
+# name lookup.
+sub _band_id ($self) {
+    return $self->{_band_id} if exists $self->{_band_id};
+    my %band_id;
+    for my $n (@{ $self->vocab // [] }) {
+        next unless length $n;
+        next if exists $ID{$n};            # core wins — never needs a band id
+        next if exists $band_id{$n};       # first-seen wins
+        $band_id{$n} = ESCAPE + 1 + scalar(keys %band_id);
+    }
+    return $self->{_band_id} = \%band_id;
+}
+
+# LocalName → NAME_ID: core table first, then the spec band; undef ⇒ escape.
+sub _name_id ($self, $name) {
+    return $ID{$name} if exists $ID{$name};
+    my $b = $self->_band_id;
+    return $b->{$name} if exists $b->{$name};
+    return undef;
+}
+
 sub output ($s) { $s->buf }
 
 sub _push ($self, $data) {
@@ -146,7 +180,7 @@ sub start_element ($self, $el) {
     my ($ln, $ns) = @{$el}{qw(LocalName NamespaceURI)};
     my $ns_id = $NS2ID{$ns // ''} // NS_ESCAPE;
 
-    my $name_id = exists $ID{$ln} ? $ID{$ln} : undef;
+    my $name_id = $self->_name_id($ln);
     my @attrs_raw = values $el->{Attributes}->%*;
     my @attrs;
     for my $a (@attrs_raw) {
@@ -157,7 +191,7 @@ sub start_element ($self, $el) {
         next unless length $an;
         my $av = $a->{Value} // '';
         next unless length $av || defined $a->{Value};
-        my $aid = exists $ID{$an} ? $ID{$an} : undef;
+        my $aid = $self->_name_id($an);
         push @attrs, [$aid, $an, $av];
     }
     my $count = scalar @attrs;

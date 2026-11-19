@@ -55,7 +55,11 @@ sub parse ($self, $doc) {
         utf8::decode($doc) unless utf8::is_utf8($doc);
         Amin::Generator::XML->new(Handler => $machine)->parse_string($doc);
     } else {
-        Amin::Generator::BSAX->new(Handler => $machine)->parse_bytes($doc);
+        # The spec that the Dispatcher just resolved also declares the BSAX
+        # vocabulary band, so the decoder resolves spec-declared NAME_IDs with
+        # no name wired into Amin core (Configuration as Contract).
+        Amin::Generator::BSAX->new(Handler => $machine, vocab => $machine->vocab)
+            ->parse_bytes($doc);
     }
     my $h = $machine->Handler;
     $h->can('output') && return $h->output;

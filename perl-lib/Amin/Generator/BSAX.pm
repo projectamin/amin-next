@@ -3,16 +3,13 @@ use v5.38; use warnings; use utf8;
 use parent 'XML::SAX::Base';  # Generator, not Handler — ISA SAX so Handler chain works
 
 use Amin qw(NS);
-use Amin::Util::Fold qw(_flags _vals);  # re-use allow-list contracts
 use Class::Tiny qw(Handler), {
     inbuf       => '',    # unconsumed bytes (compacted as events are emitted)
     magic_seen  => 0,
     last_ns     => 0+0,
     last_ns_uri => '',    # set ONLY if last_ns == NS_ESCAPE (custom Corp URI)
     stack       => sub { [] },
-    dict        => sub { {} },  # DICT_ENTRY (0xE0) stream-local name interning:
-                                # id → LocalName, consulted BEFORE the escape
-                                # rule in _lex_name().  Empty for Amin vocab.
+    vocab       => undef, # spec-declared band names (raw, document order)
 };
 # Mirrors of Amin::Handler::BSAX constants — MUST stay 1:1 with Handler::BSAX
 # and rust/crates/bsax/src/vocab.rs BY_ID slice.
@@ -37,6 +34,7 @@ my %AMIN_DOC_ELEM = map { $_ => 1 }
 # its RHS at BEGIN so we must populate VOCAB first inside the same explicit BEGIN.
 our @NAMEBYID_BY_POS;  # placeholder; real data is the hash below
 our %NAMEBYID;         # id→name lookup, populated in BEGIN
+our %CORENAME;         # name→1 core-name set, populated in BEGIN
 BEGIN {
     my @VOCAB = (
         # amin core (Handler::BSAX 1:1 copy)
@@ -79,6 +77,31 @@ BEGIN {
     constant->import(ESCAPE => scalar @VOCAB);  # 172 ⇒ 2-byte LEB128 (≥128)
     %NAMEBYID = ();
     @NAMEBYID{0 .. $#VOCAB} = @VOCAB;
+    %CORENAME = ();
+    @CORENAME{@VOCAB} = (1) x @VOCAB;
+}
+
+# Spec-declared BSAX vocabulary band — the dynamic half of the NAME_ID space.
+# Mirrors Amin::Handler::BSAX exactly: spec-declared LocalNames not in the Amin
+# core table get NAME_IDs ESCAPE+1, ESCAPE+2, … in first-seen order (core wins,
+# first-seen wins).  Both ends derive the identical map from the same signed
+# spec, so no name is wired into Amin core.  An absent vocab ⇒ empty band ⇒ ids
+# >= ESCAPE resolve to nothing and the escape path applies — i.e. a spec that
+# declares nothing behaves exactly as before.
+#
+# Derived LAZILY (not in BUILD): XML::SAX::Base supplies this class's
+# constructor, so Class::Tiny's BUILD hook is never invoked.  Cached on first
+# name lookup.
+sub _band ($self) {
+    return $self->{_band} if exists $self->{_band};
+    my (%seen, @band);
+    for my $n (@{ $self->vocab // [] }) {
+        next unless length $n;
+        next if $CORENAME{$n};  # core wins — a core name never needs a band id
+        next if $seen{$n}++;    # first-seen wins
+        push @band, $n;
+    }
+    return $self->{_band} = \@band;
 }
 
 # ── Streaming entry points ─────────────────────────────────────────────────
@@ -95,7 +118,6 @@ sub reset ($self) {
     $self->{last_ns}     = 0;
     $self->{last_ns_uri} = '';
     $self->{stack}       = [];
-    $self->{dict}        = {};
     return;
 }
 
@@ -157,11 +179,26 @@ sub _pump ($self) {
     return;
 }
 
-# _lex_name($id) — resolve a NAME_ID to bytes.  A DICT_ENTRY (0xE0) interns the
-# name first, so an interned id shadows the closed-world vocab; an id that is
-# neither interned nor in the vocab (>= ESCAPE) returns undef, which signals the
-# caller to read a length-prefixed inline name from the wire.
-sub _lex_name ($self, $id) { $self->{dict}{$id} // $NAMEBYID{$id} }
+# _lex_name($id) — resolve a NAME_ID to bytes.  Three regions, mirroring Rust
+# decode:
+#   id <  ESCAPE                 ⇒ core closed-world vocab (NAMEBYID)
+#   id == ESCAPE                 ⇒ returns undef ⇒ caller reads the length-
+#                                  prefixed inline name off the wire (escape path)
+#   ESCAPE < id <= band_max      ⇒ spec band (derived from this consumer's spec)
+#   id >  band_max               ⇒ LOUD contract error.  A band id outside this
+#                                  spec's declared band means the producer and
+#                                  consumer specs disagree — a desync we refuse
+#                                  to paper over with a silent inline read.
+sub _lex_name ($self, $id) {
+    return $NAMEBYID{$id} if $id < ESCAPE;
+    return undef          if $id == ESCAPE;   # escape: inline name follows
+    my $band = $self->_band;
+    my $idx  = $id - ESCAPE - 1;
+    return $band->[$idx] if $idx < @$band;
+    die sprintf 'BSAX NAME_ID %d out of range: codec vocab has ESCAPE=%d entries '
+              . 'and the machine spec band declares %d name(s)',
+        $id, ESCAPE, scalar @$band;
+}
 
 # Decode exactly one event into the handler.  Returns 1 when a whole event was
 # consumed (and $$qr advanced past it), 0 when more bytes are required (leaving
@@ -227,28 +264,6 @@ sub _one_event ($self, $br, $qr, $h, $tag, $kind, $flags, $tag_start) {
             $count = _leb_at($br,\$q);
             return 0 unless defined $count;
         } else { $count = $flags & 0x0F }
-
-        # ── P/B/N guard — match Util::Fold allow-list semantics ──
-        # Closed-world enforcement: non-vocab elements are DROPPED while still
-        # walking their attribute bytes so the stream stays aligned.
-        if ($self->{allowed_names} && $nid >= ESCAPE) {
-            for (1..$count) {
-                my $aid = _leb_at($br,\$q);
-                return 0 unless defined $aid;
-                if ($aid >= ESCAPE) {
-                    my $l = _leb_at($br,\$q);
-                    return 0 unless defined $l;
-                    return 0 if $q + $l > length $b;
-                    $q += $l;
-                }
-                my $vl = _leb_at($br,\$q);
-                return 0 unless defined $vl;
-                return 0 if $q + $vl > length $b;
-                $q += $vl;
-            }
-            $$qr = $q;
-            return 1;
-        }
 
         my $attrs = {};
         for (1..$count) {
@@ -361,19 +376,9 @@ sub _one_event ($self, $br, $qr, $h, $tag, $kind, $flags, $tag_start) {
         $$qr = $q; return 1;
     }
 
-    if ($kind == 0xE0) {                                                    # DICT_ENTRY
-        # Stream-local name interning (flags[4]=NS_ID, then NAME_ID + name).
-        # XML::SAX has no analogue, so no handler fires — the entry is applied
-        # transparently by _lex_name() for every later NAME_ID reference.
-        my $id = _leb_at($br, \$q);
-        return 0 unless defined $id;
-        my $l = _leb_at($br, \$q);
-        return 0 unless defined $l;
-        return 0 if $q + $l > length $b;
-        $self->{dict}{$id} = substr($b, $q, $l); $q += $l;
-        $$qr = $q; return 1;
-    }
-
+    # 0xE0 (was DICT_ENTRY, stream-local interning) is retired: it had no
+    # XML::SAX analogue, so a pure 1:1 codec has no event for it.  It falls
+    # through to the unknown-tag error, matching the Rust decoder's behaviour.
     die sprintf "BSAX unknown tag 0x%02X at offset %d", $tag, $tag_start;
 }
 

@@ -33,9 +33,15 @@ sub new ($class, %o) {
     $self->{chain} = _build_chain($self->Handler, $self->Log, $self->Mode // 'render',
         $self->{late_filters_enable} // { map => 1, ui => 1, ai => 1 },
         $spec->{allowed}, $spec->{filters}, undef, $self->{ui_os} // 'tty',
-        $spec->{ui_dialects});
+        $spec->{ui_dialects}, $self->{proxy});
     return $self;
 }
+
+# The spec-declared BSAX vocabulary band: LocalNames the machine contract adds
+# to the codec NAME_ID space (<filter element=…> + <vocab><name>).  Threaded to
+# Amin::Generator::BSAX so the decoder resolves band ids without any name being
+# wired into Amin core.  Absent in the spec ⇒ empty list.
+sub vocab ($self) { $self->{machine_spec}{vocab} // [] }
 
 sub _resolve_spec ($o) {
     my $raw = delete $o->{machine_spec};
@@ -119,7 +125,7 @@ package Amin::Machine::Dispatcher::_LazyGate;
 use v5.38; use warnings; use utf8;
 use experimental 'signatures';
 
-use Class::Tiny qw(Handler Log Mode candidates target render), {
+use Class::Tiny qw(Handler Log Mode candidates target render proxy), {
     active => sub { [] },      # [{ node, d, class, doc }] — currently spliced instances
     depth  => sub { 0 },       # shadow element depth for pop bookkeeping
 };
@@ -252,6 +258,7 @@ sub start_element ($self, $el) {
                 Handler => $rest, Log => $self->Log, Mode => $self->Mode,
                 Name    => $cn,   Element => $c->{meta}{element},
                 Render  => $self->render,
+                Proxy   => $self->proxy,
                 Amin::Machine::Dispatcher::_filter_cfg($c->{meta}));
             $new->can('name')    && $new->name($cn);
             $new->can('element') && $new->element($c->{meta}{element});
@@ -370,11 +377,13 @@ sub run ($pkg_or_self, %o) {
         $self->{Handler} //= $Handler; $self->{Log} //= $Log;
         $self->{machine_spec} = $spec;
         $self->{chain} = _build_chain($self->Handler, $self->Log, $mode, $late_en,
-            $spec->{allowed}, $spec->{filters}, undef, $ui_os, $spec->{ui_dialects});
+            $spec->{allowed}, $spec->{filters}, undef, $ui_os, $spec->{ui_dialects},
+            $self->{proxy} // $o{proxy});
     } else {
         $self = bless({ Mode => $mode, Handler => $Handler, Log => $Log, machine_spec => $spec }, $pkg_or_self);
         $self->{chain} = _build_chain($self->Handler, $self->Log, $mode, $late_en,
-            $spec->{allowed}, $spec->{filters}, undef, $ui_os, $spec->{ui_dialects});
+            $spec->{allowed}, $spec->{filters}, undef, $ui_os, $spec->{ui_dialects},
+            $o{proxy});
     }
     (my $gen_file = "$gen_class.pm") =~ s{::}{/}g;
     eval { require $gen_file };
@@ -396,7 +405,7 @@ sub _filter_cfg ($meta) {
     return map { $_ => $meta->{$_} } grep { !$structural{$_} } keys %$meta;
 }
 
-sub _build_chain ($h, $l, $mode, $late_enable = {}, $allowed = undef, $spec_filters = undef, $realized = undef, $ui_os = 'tty', $ui_dialects = undef) {
+sub _build_chain ($h, $l, $mode, $late_enable = {}, $allowed = undef, $spec_filters = undef, $realized = undef, $ui_os = 'tty', $ui_dialects = undef, $proxy = undef) {
     my $head = $h;
     # Filters are never auto-loaded; they are always machine-spec declared.
     # When _build_chain is called directly without a spec (e.g. from tests),
@@ -492,6 +501,7 @@ sub _build_chain ($h, $l, $mode, $late_enable = {}, $allowed = undef, $spec_filt
                 target     => $ui_os,
                 candidates => $cands,
                 render     => $render,
+                proxy      => $proxy,
             );
         }
         my $filters = $by_p{$pos} // [];
@@ -517,6 +527,7 @@ sub _build_chain ($h, $l, $mode, $late_enable = {}, $allowed = undef, $spec_filt
                 Name    => $f->{meta}{name},
                 Element => $f->{meta}{element},
                 Render  => $render,
+                Proxy   => $proxy,
                 _filter_cfg($f->{meta}));
             $head->can('name')    && $head->name($f->{meta}{name});
             $head->can('element') && $head->element($f->{meta}{element});
