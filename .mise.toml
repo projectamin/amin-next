@@ -81,6 +81,23 @@ if ! mise bootstrap packages status --missing; then
   mise bootstrap packages apply --yes --update
 fi
 
+# Homebrew drops formula symlinks under $(brew --prefix)/bin, but that dir is
+# only added to PATH when `brew shellenv` has been evaluated — which is not the
+# case in a mise task (nor in the enter/postinstall hooks that call this task).
+# mise resolves brew by its known prefix, so [bootstrap.packages] can report
+# cmake/pkgconf as "installed" while `command -v cmake` below still fails with
+# "missing: cmake pkg-config". Add the standard Homebrew prefixes so the
+# preflight and the CMake / pkg-config builds resolve the tools mise just installed.
+for d in /opt/homebrew/bin /usr/local/bin; do
+  if [ -d "$d" ]; then
+    case ":$PATH:" in
+      *":$d:"*) ;;
+      *) PATH="$d:$PATH" ;;
+    esac
+  fi
+done
+export PATH
+
 # ── Preflight: host build tools mise cannot provision ─────────────────────
 # [bootstrap.packages] has Linux (apt/apk/…) and macOS (brew) backends but no
 # FreeBSD `pkg` backend, so on FreeBSD cmake/pkg-config/GNU make are host
