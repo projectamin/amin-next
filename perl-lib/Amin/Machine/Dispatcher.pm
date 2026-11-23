@@ -33,7 +33,8 @@ sub new ($class, %o) {
     $self->{chain} = _build_chain($self->Handler, $self->Log, $self->Mode // 'render',
         $self->{late_filters_enable} // { map => 1, ui => 1, ai => 1 },
         $spec->{allowed}, $spec->{filters}, undef, $self->{ui_os} // 'tty',
-        $spec->{ui_dialects}, $self->{proxy});
+        $spec->{ui_dialects}, $self->{proxy},
+        $self->{map_out} // 'xml', $spec->{map_dialects});
     return $self;
 }
 
@@ -378,12 +379,13 @@ sub run ($pkg_or_self, %o) {
         $self->{machine_spec} = $spec;
         $self->{chain} = _build_chain($self->Handler, $self->Log, $mode, $late_en,
             $spec->{allowed}, $spec->{filters}, undef, $ui_os, $spec->{ui_dialects},
-            $self->{proxy} // $o{proxy});
+            $self->{proxy} // $o{proxy}, $o{map_out} // $self->{map_out} // 'xml',
+            $spec->{map_dialects});
     } else {
         $self = bless({ Mode => $mode, Handler => $Handler, Log => $Log, machine_spec => $spec }, $pkg_or_self);
         $self->{chain} = _build_chain($self->Handler, $self->Log, $mode, $late_en,
             $spec->{allowed}, $spec->{filters}, undef, $ui_os, $spec->{ui_dialects},
-            $o{proxy});
+            $o{proxy}, $o{map_out} // 'xml', $spec->{map_dialects});
     }
     (my $gen_file = "$gen_class.pm") =~ s{::}{/}g;
     eval { require $gen_file };
@@ -405,7 +407,7 @@ sub _filter_cfg ($meta) {
     return map { $_ => $meta->{$_} } grep { !$structural{$_} } keys %$meta;
 }
 
-sub _build_chain ($h, $l, $mode, $late_enable = {}, $allowed = undef, $spec_filters = undef, $realized = undef, $ui_os = 'tty', $ui_dialects = undef, $proxy = undef) {
+sub _build_chain ($h, $l, $mode, $late_enable = {}, $allowed = undef, $spec_filters = undef, $realized = undef, $ui_os = 'tty', $ui_dialects = undef, $proxy = undef, $map_out = 'xml', $map_dialects = undef) {
     my $head = $h;
     # Filters are never auto-loaded; they are always machine-spec declared.
     # When _build_chain is called directly without a spec (e.g. from tests),
@@ -414,32 +416,37 @@ sub _build_chain ($h, $l, $mode, $late_enable = {}, $allowed = undef, $spec_filt
     if (!$spec_filters || !@$spec_filters) {
         require Amin::Machine::MachineSpec;
         my $default = Amin::Machine::MachineSpec->new->spec;
-        $spec_filters = $default->{filters};
-        $allowed    //= $default->{allowed};
+        $spec_filters  = $default->{filters};
+        $allowed     //= $default->{allowed};
         $ui_dialects //= $default->{ui_dialects};
+        $map_dialects //= $default->{map_dialects};
     }
-    elsif (!defined $ui_dialects) {
+    elsif (!defined $ui_dialects || !defined $map_dialects) {
         require Amin::Machine::MachineSpec;
-        $ui_dialects = Amin::Machine::MachineSpec->new->spec->{ui_dialects};
+        my $default = Amin::Machine::MachineSpec->new->spec;
+        $ui_dialects  //= $default->{ui_dialects};
+        $map_dialects //= $default->{map_dialects};
     }
 
-    # The shared render context the ui: element-filter fleet injects as
-    # `Render`.  Which dialect serves the effective target is a contract fact
-    # declared in the spec (<ui-dialect target="ios" class="…"/>), never a
-    # class-name rule.  A target with no dialect (tty/neutral) yields no render
-    # — and, since every ui: element filter is target-scoped, no splicing at
-    # all: the subtree passes through untouched.
-    my $render;
-    if (defined $ui_dialects && (my $d = $ui_dialects->{$ui_os})) {
+    # The shared render contexts.  Which dialect serves a target is a contract
+    # fact declared in the spec (<ui-dialect>/<map-dialect>), never a class-name
+    # rule.  A ui: target with no dialect (tty/neutral) yields no render — and,
+    # since every ui: element filter is target-scoped, no splicing at all: the
+    # subtree passes through untouched.  `--out=xml` deliberately selects no
+    # map dialect, so Topology only annotates the profile.
+    my $target_for = sub ($dialects, $key) {
+        return undef unless defined $dialects && defined $key;
+        my $d = $dialects->{$key} or return undef;
         my $cls = $d->{class};
-        if (defined $cls && length $cls) {
-            unless ($cls->can('new')) {
-                (my $file = "$cls.pm") =~ s{::}{/}g;
-                eval { require $file; 1 };
-            }
-            $render = $cls->new if $cls->can('new');
+        return undef unless defined $cls && length $cls;
+        unless ($cls->can('new')) {
+            (my $file = "$cls.pm") =~ s{::}{/}g;
+            eval { require $file; 1 };
         }
-    }
+        return $cls->can('new') ? $cls->new : undef;
+    };
+    my $render     = $target_for->($ui_dialects,  $ui_os);
+    my $map_render = $target_for->($map_dialects, $map_out);
     my %by_p;
     my %cands_by_p;
     if ($spec_filters && @$spec_filters) {
@@ -526,7 +533,8 @@ sub _build_chain ($h, $l, $mode, $late_enable = {}, $allowed = undef, $spec_filt
                 Handler => $head, Log => $l, Mode => $mode,
                 Name    => $f->{meta}{name},
                 Element => $f->{meta}{element},
-                Render  => $render,
+                Render  => (($f->{meta}{namespace} // '') eq 'http://projectamin.org/ns/map/1')
+                             ? $map_render : $render,
                 Proxy   => $proxy,
                 _filter_cfg($f->{meta}));
             $head->can('name')    && $head->name($f->{meta}{name});

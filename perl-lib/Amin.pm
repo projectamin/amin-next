@@ -20,7 +20,7 @@ sub new ($class, %opts) {
         log                 => $opts{Log},
         late_filters_enable => $opts{late_filters_enable} // { map => 1, ui => 1 },
         ui_os               => $opts{ui_os}   // 'tty',
-        map_out             => $opts{map_out} // 'svg',
+        map_out             => $opts{map_out} // 'xml',
         machine_spec        => $opts{machine_spec},
         machine_spec_xml    => $opts{machine_spec_xml},
         machine_spec_path   => $opts{machine_spec_path},

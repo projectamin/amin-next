@@ -42,7 +42,8 @@ binmode STDOUT, ':encoding(UTF-8)';
 binmode STDERR, ':encoding(UTF-8)';
 
 our $VERSION = '3.0.0-bootstrap';
-my ($LEGACY, $STREAM_OPT, $MAP_OUT, $UI_OS) = (0, 1, 'svg', 'tty');
+my ($LEGACY, $STREAM_OPT, $UI_OS) = (0, 1, 'tty');
+my ($MAP_OUT, $MAP_OUT_GIVEN) = ('xml', 0);
 my ($MACHINE_SPEC);
 # Default to `localhost` (both loopback families), not a bare IPv4 literal:
 # localhost resolves ::1 first, so a v4-only listener stalls browsers.
@@ -61,7 +62,7 @@ my (@INC_EXTRA, @W_PERM, @W_BEG, @W_MID, @W_LATE, @W_END);
 GetOptions(
     'legacy-processing!' => \$LEGACY,
     'stream!'            => \$STREAM_OPT,
-    'out=s'              => \$MAP_OUT,
+    'out=s'              => sub { $MAP_OUT = $_[1]; $MAP_OUT_GIVEN = 1 },
     'os=s'               => \$UI_OS,
     'machine-spec=s'     => \$MACHINE_SPEC,
     'listen=s'           => sub { $LISTEN = $_[1]; $LISTEN_GIVEN = 1 },
@@ -202,12 +203,19 @@ if (($ARGV[0] // '') eq 'proxy') {
 }
 
 my $mode = shift(@ARGV) // usage(2);
+my $MODE_REQ = $mode;
 my $path = shift(@ARGV) // usage(2);
 usage(2) unless $MODE->{$mode} && length($path) && -e $path;
 
 my ($LATE_MAP, $LATE_UI) = (1, 1);
 if    ($mode eq 'map') { $mode = 'render'; ($LATE_MAP, $LATE_UI) = (1, 0) }
 elsif ($mode eq 'ui')  { $mode = 'render'; ($LATE_MAP, $LATE_UI) = (0, 1) }
+
+# --out selects the map artifact only in `map` mode; every other mode keeps
+# profile-in/profile-out semantics (map_out=xml means Topology annotates the
+# profile with map:node/map:link instead of opening a render artifact).
+if ($MODE_REQ eq 'map') { $MAP_OUT = 'svg' unless $MAP_OUT_GIVEN }
+else                    { $MAP_OUT = 'xml' }
 
 if ($LATE_MAP) {
     $MAP_OUT =~ /^(svg|dot|xml)$/ or die "--out must be svg|dot|xml\n";
@@ -246,6 +254,11 @@ my $handler_class = ($spec->{handler} && $spec->{handler}{class})
 # replaces the spec's XML writer for that target (the spec declares
 # Amin::Handler::Writer for the XML/map modes).  It ignores `indent`.
 $handler_class = 'Amin::Handler::HTML' if $LATE_UI && $UI_OS eq 'html';
+# `map --out=svg|dot` produces a standalone artifact: the map target emits the
+# drawing as events (svg:*) or one map-dot stream fragment, and a dumb
+# serializer keeps only that artifact.  --out=xml keeps the XML writer.
+$handler_class = 'Amin::Handler::SVG' if $MODE_REQ eq 'map' && $MAP_OUT eq 'svg';
+$handler_class = 'Amin::Handler::DOT' if $MODE_REQ eq 'map' && $MAP_OUT eq 'dot';
 (my $handler_file = "$handler_class.pm") =~ s{::}{/}g;
 eval { require $handler_file };
 die "Cannot load machine-spec handler '$handler_class': $@" if $@;

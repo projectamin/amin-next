@@ -331,6 +331,12 @@
   <ui-dialect target="ios"     class="Amin::UI::Target::SwiftUI" />
   <ui-dialect target="android" class="Amin::UI::Target::Compose" />
   <ui-dialect target="html"    class="Amin::UI::Target::HTML" />
+  <!-- map: which dialect renders the svg/dot artifact is a contract fact too.
+       The Dispatcher resolves this and injects the target into Map::Topology as
+       `Render`; the xml output target selects no dialect, so Topology only
+       annotates the profile with map:node/map:link events. -->
+  <map-dialect target="svg" class="Amin::Map::Target::SVG" />
+  <map-dialect target="dot" class="Amin::Map::Target::DOT" />
   <!-- ui: projection fleet — ONE filter per ui: kind (axa-plan §4.3).  Each is
        an element-scoped `late` candidate bound to a target, so the position's
        _LazyGate splices in only while its element flows: a machine that never

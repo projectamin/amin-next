@@ -86,6 +86,7 @@ sub _parse ($self, $xml) {
         generator => undef,
         name      => undef,
         ui_dialects => {},
+        map_dialects => {},
         # Raw spec-declared BSAX vocabulary band names (document order).  The
         # codec drops core names and assigns band NAME_IDs — see
         # Amin::{Handler,Generator}::BSAX.
@@ -117,6 +118,9 @@ sub _parse ($self, $xml) {
     # profile-declared target (ios/android).  The Dispatcher reads this to build
     # the shared render context the ui: element filters inject as `Render`.
     $result->{ui_dialects} = $c->{ui_dialects};
+    # map: render targets follow the same rule: --out=svg|dot selects a
+    # spec-declared dialect the Dispatcher injects into Map::Topology.
+    $result->{map_dialects} = $c->{map_dialects};
 
     for my $tag (qw(handler log generator)) {
         $result->{$tag} = $c->{$tag} if $c->{$tag};
@@ -146,7 +150,7 @@ use v5.38; use warnings;
 
 sub new ($class) {
     bless {
-        filters => [], ui_dialects => {}, name => undef,
+        filters => [], ui_dialects => {}, map_dialects => {}, name => undef,
         _in_name => 0, _name_text => '',
         # BSAX dynamic vocabulary band: LocalNames the spec declares in document
         # order — every element-scoped `<filter element=…>` plus any explicit
@@ -201,10 +205,11 @@ sub start_element ($self, $el) {
         push $self->{vocab_names}->@*, $a{element}
             if defined $a{element} && length $a{element};
     }
-    elsif ($name eq 'ui-dialect') {
+    elsif ($name eq 'ui-dialect' || $name eq 'map-dialect') {
         my ($t, $c) = ($a{target}, $a{class} // $a{name});
         if (defined $t && length $t && defined $c && length $c) {
-            $self->{ui_dialects}{$t} = { class => $c };
+            my $key = $name eq 'ui-dialect' ? 'ui_dialects' : 'map_dialects';
+            $self->{$key}{$t} = { class => $c };
         }
     }
     elsif (($name eq 'handler' || $name eq 'log' || $name eq 'generator')

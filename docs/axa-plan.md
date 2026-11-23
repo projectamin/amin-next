@@ -51,17 +51,21 @@ The seams AXA needs were already there, but the render side was stubbed when thi
   `_build_chain`), which composes the neutral `ui:` Guard plus the
   target-scoped element-filter fleet and one dialect target for the effective
   `--os` (`ios`/`android`; `tty`/`html` splice nothing and pass `ui:` through).
-- `--out=svg|dot|xml` is likewise parsed and validated, and `map_out` is
-  never passed to `Amin::Filter::Map::Topology`. `amin map … --out=svg`
-  returns **XML**, not SVG.
+- `--out=svg|dot|xml` reaches the Dispatcher as `map_out` and selects a
+  spec-declared `<map-dialect>` target. `amin map … --out=svg` produces a
+  standalone SVG document, `--out=dot` produces Graphviz text, and
+  `--out=xml` stays profile-in/profile-out.
 - A fleet of per-kind `Amin::Filter::UI::Element::*` filters (declared `late`
   and target-scoped) splices itself in on each `<ui:*>` element and prepends an
   additive `amin:stream` render fragment; a neutral `Amin::Filter::UI::Guard`
   enforces the closed-world vocabulary fail-closed on every host. The shared
   render context is one `Amin::UI::Target::{SwiftUI,Compose}` instance
   (`--os=ios` / `--os=android`), selected by the spec's `<ui-dialect>` entry.
-- `Amin::Filter::Map::Topology` accumulates nodes/regions/edges in memory
-  and emits `map:node` events; nothing serializes them to SVG/DOT.
+- `Amin::Filter::Map::Topology` accumulates nodes/regions/edges and emits
+  `map:node`/`map:link` events. At the document boundary — never at map-layer
+  close, since `map:` siblings need not be contiguous — it hands the complete
+  graph to the injected map target (`Amin::Map::Target::{SVG,DOT}`), which owns
+  layout and emits the artifact as events or one stream fragment.
 - There is no HTTP server, no PSGI/Plack, no template engine anywhere in
   the tree or `cpanfile`.
 
