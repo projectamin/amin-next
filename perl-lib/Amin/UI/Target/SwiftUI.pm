@@ -1,7 +1,7 @@
 package Amin::UI::Target::SwiftUI;
 
 # The SwiftUI dialect of the ui: target contract (see Amin::UI::Target::Base).
-# Selected by `--os=ios`.  A total map from the 25-kind ui: vocabulary to
+# Selected by `--os=ios`.  A total map from the 36-kind ui: vocabulary to
 # SwiftUI: `_cont` gives each container its head and block-close, `_leaf` gives
 # each leaf its whole expression.  Nothing is buffered — the target emits each
 # fragment as the element filters drive it.
@@ -49,16 +49,38 @@ sub _cont ($self, $k, $pad, $pad1, $a) {
     return { head => "$pad" . ".sheet(isPresented: \$showSheet)" } if $k eq 'sheet';
     return { head => "$pad" . ".alert(" . $self->lit($title) . ", isPresented: \$showAlert)" }
                                                        if $k eq 'alert';
-    return { head => "$pad" . "Form" }                 if $k eq 'form';
+    # a form submits to its action: the runtime's axaSubmit is the intent
+    return { head => "$pad" . "Form",
+             post => "\n$pad1" . ".onSubmit { axaSubmit(method: "
+                     . $self->lit($self->attr($a, 'method') || 'get') . ", action: "
+                     . $self->lit($self->attr($a, 'action')) . ") }" }  if $k eq 'form';
     return { head => "$pad" . "Picker(\"\", selection: .constant(0))" }
                                                        if $k eq 'select';
     return { head => "$pad" . "VStack" }               if $k eq 'table';
     return { head => "$pad" . "HStack" }               if $k eq 'tr';
     return { head => "$pad" . "Group" }                if $k eq 'cell';
-    # a streaming update fragment has no SwiftUI identity of its own: its
-    # content is simply the view it was authored to look like
-    return { head => "$pad" . "Group" }                if $k eq 'swap';
+    # a streaming update: its content is applied to the view with the target
+    # id, not drawn where it sits (the runtime's AxaSwap does the applying)
+    return { head => "$pad" . "AxaSwap(target: " . $self->lit($self->attr($a, 'for'))
+                     . ", mode: " . $self->lit($self->attr($a, 'mode') || 'replace') . ")" }
+                                                       if $k eq 'swap';
     return undef;
+}
+
+# ui:field by semantic type (Base::field_type): each is the native control.
+sub _field ($self, $a) {
+    my $type  = $self->field_type($a);
+    my $name  = $self->attr($a, 'name');
+    my $ph    = $self->attr($a, 'placeholder');
+    my $label = $self->lit(length $ph ? $ph : $name);
+    my $val   = $self->lit($self->attr($a, 'value'));
+    return "EmptyView() // hidden field " . $self->lit($name)   if $type eq 'hidden';
+    return "SecureField($label, text: .constant($val))"         if $type eq 'secure';
+    return "Toggle($label, isOn: .constant("
+         . ($self->truthy($self->attr($a, 'value')) ? 'true' : 'false') . "))" if $type eq 'toggle';
+    return "TextField($label, text: .constant($val)).keyboardType(.decimalPad)" if $type eq 'number';
+    return "TextEditor(text: .constant($val))"                  if $type eq 'multiline';
+    return "TextField($label, text: .constant($val))";
 }
 
 # A leaf kind → its whole expression.  The unreachable stub keeps a new `ui:`
@@ -82,8 +104,7 @@ sub _leaf ($self, $k, $pad, $a, $text) {
     return $pad . ".searchable(text: \$query)"                 if $k eq 'searchable';
     return $pad . "Text(" . $self->lit($text) . ").badge(" . (length $points ? $points : 1) . ")"
                                                                if $k eq 'badge';
-    return $pad . "TextField(" . $self->lit($self->attr($a, 'name')) . ", text: .constant("
-                 . $self->lit($self->attr($a, 'value')) . "))" if $k eq 'field';
+    return $pad . $self->_field($a)                            if $k eq 'field';
     return $pad . "Text(" . $self->lit($text) . ")"            if $k eq 'option';
     return $pad . "/* ui:style */"                             if $k eq 'style';
     return $pad . "EmptyView() /* ui:$k unimplemented */";

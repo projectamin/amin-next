@@ -10,6 +10,7 @@ package Amin::UI::Target::HTML;
 
 use v5.38; use warnings; use utf8; use experimental 'signatures';
 use parent 'Amin::UI::Target::Base';
+use Amin::UI::Target::HTML::Material;
 
 use constant XHTML => 'http://www.w3.org/1999/xhtml';
 
@@ -250,6 +251,10 @@ sub open ($self, $k, $a, $h) {
         $self->_start($h, 'html', lang => 'en');
         $self->_start($h, 'head');
         $self->_inline($h, 'title', $title);
+        $self->_start($h, 'meta', name => 'viewport', content => 'width=device-width,initial-scale=1');
+        $self->_end($h, 'meta');
+        # the target's default look; zero specificity, so an app's ui:style wins
+        $self->_inline($h, 'style', $Amin::UI::Target::HTML::Material::CSS);
         $self->_end($h, 'head');
         $self->_start($h, 'body');
         $f->{closes} = ['body', 'html'];
@@ -302,10 +307,27 @@ sub open ($self, $k, $a, $h) {
         $self->_start($h, 'select', @at, @id);
         $f->{closes} = ['select'];
     }
+    elsif ($k eq 'field' && $self->attr($a, 'type') eq 'multiline') {
+        # a multi-line field: the value is the textarea's content
+        my @at;
+        for my $n (qw(name placeholder)) {
+            my $v = $self->attr($a, $n);
+            push @at, $n => $v if length $v;
+        }
+        my $rows = $self->attr($a, 'lines');
+        push @at, rows => ($rows =~ /\A\d{1,2}\z/ && $rows > 0 ? $rows : 4);
+        $self->_start($h, 'textarea', @at, @id);
+        $f->{closes} = ['textarea'];
+        $f->{text}   = $self->attr($a, 'value');
+        $f->{leaf}   = 1;
+    }
     elsif ($k eq 'field') {
         # a void element: <input> closes itself and has no content
         my @at;
+        # semantic types (see Target::Base::field_type) → <input type>
         my $type = $self->attr($a, 'type');
+        $type = 'password' if $type eq 'secure';
+        $type = 'checkbox' if $type eq 'toggle';
         push @at, type => (length $type ? $type : 'text');
         for my $n (qw(name value placeholder min max)) {
             my $v = $self->attr($a, $n);

@@ -27,7 +27,7 @@ use Class::Tiny { sink => undef, buf => '' }, { stack => sub { [] } };
 # downstream target can pick its projection out of the stream by channel.
 use constant AMIN_NS => 'http://projectamin.org/ns/2026/';
 
-# The 23 container kinds.  Every other kind in the 34-element ui: vocabulary is
+# The 23 container kinds.  Every other kind in the 36-element ui: vocabulary is
 # a leaf whose whole expression is produced on close().
 our %CONTAINER = map {; $_ => 1 } qw(
     app scene list row column hstack vstack stack grid section card
@@ -36,6 +36,18 @@ our %CONTAINER = map {; $_ => 1 } qw(
 );
 
 sub is_container ($self, $k) { $CONTAINER{$k} ? 1 : 0 }
+
+# The semantic ui:field types.  A target maps each to its own control; an
+# unlisted type is plain text.  `hidden` carries a value with the enclosing
+# form and draws nothing.
+#   text  secure  toggle  number  multiline (lines=N)  hidden
+sub field_type ($self, $a) {
+    my $t = $self->attr($a, 'type');
+    return $t =~ /\A(?:secure|toggle|number|multiline|hidden)\z/ ? $t : 'text';
+}
+
+# a toggle's value: anything but empty, 0, false or off
+sub truthy ($self, $v) { return (length($v // '') && $v !~ /\A(?:0|false|off|no)\z/i) ? 1 : 0 }
 
 # The wire channel this dialect publishes its fragments on.  Owned here so no
 # element filter has to know which dialect it is serving.

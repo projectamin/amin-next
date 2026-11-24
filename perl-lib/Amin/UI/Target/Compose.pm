@@ -61,15 +61,42 @@ sub _cont ($self, $k, $pad, $pad1, $a) {
              close_empty => ")" }                      if $k eq 'toolbar';
     return { head => "$pad" . "ModalBottomSheet(onDismissRequest = { })" } if $k eq 'sheet';
     return { head => "$pad" . "AlertDialog(onDismissRequest = { })" }      if $k eq 'alert';
-    return { head => "$pad" . "Column" }               if $k eq 'form';
+    # a form submits to its action: the runtime's AxaForm is the intent
+    return { head => "$pad" . "AxaForm(method = " . $self->lit($self->attr($a, 'method') || 'get')
+                     . ", action = " . $self->lit($self->attr($a, 'action')) . ")" }
+                                                       if $k eq 'form';
     return { head => "$pad" . "Column" }               if $k eq 'select';
     return { head => "$pad" . "Column" }               if $k eq 'table';
     return { head => "$pad" . "Row" }                  if $k eq 'tr';
     return { head => "$pad" . "Box" }                  if $k eq 'cell';
-    # a streaming update fragment has no Compose identity of its own: its
-    # content is simply the view it was authored to look like
-    return { head => "$pad" . "Box" }                  if $k eq 'swap';
+    # a streaming update: its content is applied to the view with the target
+    # id, not drawn where it sits (the runtime's AxaSwap does the applying)
+    return { head => "$pad" . "AxaSwap(target = " . $self->lit($self->attr($a, 'for'))
+                     . ", mode = " . $self->lit($self->attr($a, 'mode') || 'replace') . ")" }
+                                                       if $k eq 'swap';
     return undef;
+}
+
+# ui:field by semantic type (Base::field_type): each is the native control.
+sub _field ($self, $a) {
+    my $type  = $self->field_type($a);
+    my $name  = $self->attr($a, 'name');
+    my $ph    = $self->attr($a, 'placeholder');
+    my $label = "label = { Text(" . $self->lit(length $ph ? $ph : $name) . ") }";
+    my $val   = $self->lit($self->attr($a, 'value'));
+    my $base  = "value = $val, onValueChange = { }, $label";
+    return "Unit // hidden field " . $self->lit($name)          if $type eq 'hidden';
+    return "TextField($base, visualTransformation = PasswordVisualTransformation())"
+                                                               if $type eq 'secure';
+    return "Switch(checked = " . ($self->truthy($self->attr($a, 'value')) ? 'true' : 'false')
+         . ", onCheckedChange = { })"                          if $type eq 'toggle';
+    return "TextField($base, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number))"
+                                                               if $type eq 'number';
+    if ($type eq 'multiline') {
+        my $n = $self->attr($a, 'lines');
+        return "TextField($base, minLines = " . ($n =~ /\A\d{1,2}\z/ && $n > 0 ? $n : 4) . ")";
+    }
+    return "TextField($base)";
 }
 
 # A leaf kind → its whole expression.  The unreachable stub keeps a new `ui:`
@@ -93,8 +120,7 @@ sub _leaf ($self, $k, $pad, $a, $text) {
                  . ") // ui:audio"                              if $k eq 'audio';
     return $pad . "Sparkline(points = $points)"                if $k eq 'sparkline';
     return $pad . "/* ui:searchable */"                        if $k eq 'searchable';
-    return $pad . "TextField(value = " . $self->lit($self->attr($a, 'value'))
-                 . ", onValueChange = { })"                    if $k eq 'field';
+    return $pad . $self->_field($a)                            if $k eq 'field';
     return $pad . "Text(" . $self->lit($text) . ")"            if $k eq 'option';
     return $pad . "/* ui:style */"                             if $k eq 'style';
     return $pad . "/* ui:$k unimplemented */";
