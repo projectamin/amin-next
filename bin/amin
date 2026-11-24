@@ -16,7 +16,8 @@ binmode STDERR, ':encoding(UTF-8)';
 our $VERSION = '3.0.0-bootstrap';
 my ($LEGACY, $STREAM_OPT, $UI_OS) = (0, 1, 'tty');
 my ($MAP_OUT, $MAP_OUT_GIVEN) = ('xml', 0);
-my ($MACHINE_SPEC, $DOC_URI);
+my ($MACHINE_SPEC, $DOC_URI, $PROFILE_STDIN);
+my ($SHOW_HELP, $SHOW_VERSION);
 # Default to `localhost` (both loopback families), not a bare IPv4 literal:
 # localhost resolves ::1 first, so a v4-only listener stalls browsers.
 my $LISTEN = 'localhost:8787';
@@ -32,12 +33,15 @@ my ($WORKERS, $READ_TIMEOUT) = (4, 2);
 my ($LISTEN_GIVEN, $WORKERS_GIVEN) = (0, 0);
 my (@INC_EXTRA, @W_PERM, @W_BEG, @W_MID, @W_LATE, @W_END);
 GetOptions(
+    'h|help'             => \$SHOW_HELP,
+    'v|version'          => \$SHOW_VERSION,
     'legacy-processing!' => \$LEGACY,
     'stream!'            => \$STREAM_OPT,
     'out=s'              => sub { $MAP_OUT = $_[1]; $MAP_OUT_GIVEN = 1 },
     'os=s'               => \$UI_OS,
-    'machine-spec=s'     => \$MACHINE_SPEC,
+    'm|machine-spec=s'   => \$MACHINE_SPEC,
     'u|uri=s'            => \$DOC_URI,
+    'p|profile=s'        => \$PROFILE_STDIN,
     'listen=s'           => sub { $LISTEN = $_[1]; $LISTEN_GIVEN = 1 },
     'workers=i'          => sub { $WORKERS = $_[1]; $WORKERS_GIVEN = 1 },
     'read-timeout=i'     => \$READ_TIMEOUT,
@@ -47,7 +51,9 @@ GetOptions(
     'with-middle=s'      => sub { push @W_MID,  split /,/, $_[1] },
     'with-late=s'        => sub { push @W_LATE, split /,/, $_[1] },
     'with-end=s'         => sub { push @W_END,  split /,/, $_[1] },
-) or die "bad opts\n";
+) or usage(2);
+if ($SHOW_VERSION) { say "amin $VERSION"; exit 0 }
+if ($SHOW_HELP)    { usage(0) }
 
 for my $p (@INC_EXTRA) {
     -d $p or die "--inc path '$p' is not a directory\n";
@@ -134,27 +140,36 @@ if (($ARGV[0] // '') eq 'proxy') {
 my $mode = shift(@ARGV) // usage(2);
 my $MODE_REQ = $mode;
 my $path = shift(@ARGV);
-if (defined $DOC_URI && !defined $path) {
+
+# amin-legacy compat: -u/--uri supplies a profile URI; -p/--profile supplies a
+# profile path or '-' for STDIN.  These can stand in for the positional path.
+if (!defined $path && defined $DOC_URI) {
     $path = $DOC_URI;
 }
+if (!defined $path && defined $PROFILE_STDIN) {
+    $path = ($PROFILE_STDIN eq '' || $PROFILE_STDIN eq '-') ? '-' : $PROFILE_STDIN;
+}
+
 $path // usage(2);
 usage(2) unless $MODE->{$mode} && length($path);
 my $is_uri = $path =~ m{\A(?:file|https?|bitcache|bc)://}i ? 1 : 0;
+my $xml;
 if ($is_uri) {
     require Amin::Machine::MachineSpec;
     my $bytes = Amin::Machine::MachineSpec::_load_uri_static($path);
     die "Cannot load URI '$path'\n" unless defined $bytes && length $bytes;
-    # Write to a temp file so downstream path-based flows still work; keep the
-    # original URI for diagnostics.
-    require File::Temp;
-    my $tmp = File::Temp->new(SUFFIX => '.xml', UNLINK => 1);
-    binmode $tmp, ':raw';
-    print {$tmp} $bytes;
-    close $tmp;
-    $DOC_URI = $path;
-    $path = $tmp->filename;
+    $xml = $bytes;
+    $DOC_URI //= $path;
+} elsif ($path eq '-') {
+    local $/;
+    $xml = <STDIN>;
 } else {
     usage(2) unless -e $path;
+    # Read BYTES: the document is either XML or BSAX, and BSAX's magic and length
+    # fields are byte offsets — an encoding layer here would corrupt it before the
+    # dialect is known.  Amin->parse sniffs the dialect and decodes XML itself.
+    open(my $fh, '<:raw', $path) or die "Cannot read $path: $!";
+    $xml = do { local $/; <$fh> }; close $fh;
 }
 
 my ($LATE_MAP, $LATE_UI) = (1, 1);
@@ -182,11 +197,7 @@ if ($mode eq 'app') {
     $mode = 'render';
 }
 
-# Read BYTES: the document is either XML or BSAX, and BSAX's magic and length
-# fields are byte offsets — an encoding layer here would corrupt it before the
-# dialect is known.  Amin->parse sniffs the dialect and decodes XML itself.
-open(my $fh, '<:raw', $path) or die "Cannot read $path: $!";
-my $xml = do { local $/; <$fh> }; close $fh;
+# $xml is already loaded above (URI/file/STDIN).
 
 use Amin;
 use Amin::Log::Standard;
