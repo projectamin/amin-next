@@ -49,6 +49,7 @@ dependencies = [
 name = "amin-axa"
 version = "0.1.0"
 dependencies = [
+ "amin-machine",
  "amin-sax",
  "clap",
  "rand 0.8.8",
@@ -62,6 +63,7 @@ name = "amin-machine"
 version = "0.1.0"
 dependencies = [
  "amin-sax",
+ "bitcache",
  "bsax",
  "thiserror 1.0.69",
 ]

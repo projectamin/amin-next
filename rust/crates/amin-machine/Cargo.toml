@@ -11,6 +11,7 @@ repository.workspace   = true
 [dependencies]
 amin-sax.workspace  = true
 bsax                = { path = "../bsax", default-features = false, features = ["std"] }
+bitcache            = { path = "../bitcache" }
 thiserror.workspace = true
 
 [lib]

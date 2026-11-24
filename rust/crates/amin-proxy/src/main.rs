@@ -25,8 +25,9 @@ use amin_proxy::ProxyConfig;
 #[derive(Parser)]
 #[command(name = "amin-proxyd", version, about = "Amin 3 L7 reverse proxy (Rust peer)")]
 struct Cli {
-    /// Path to an `<amin:proxy>` profile.
-    #[arg(long)]
+    /// Path/URI to an `<amin:proxy>` profile. Supports file://, http(s)://,
+    /// bitcache://, bc:// in addition to local paths.
+    #[arg(long, short = 'u', alias = "uri")]
     profile: String,
     /// Listen address; overrides the profile's `amin:listen`.
     #[arg(long)]
@@ -37,10 +38,10 @@ struct Cli {
 async fn main() -> ExitCode {
     let cli = Cli::parse();
 
-    let xml = match std::fs::read_to_string(&cli.profile) {
+    let xml = match read_profile(&cli.profile) {
         Ok(xml) => xml,
         Err(e) => {
-            eprintln!("amin-proxyd: open {}: {e}", cli.profile);
+            eprintln!("amin-proxyd: {e}");
             return ExitCode::from(2);
         }
     };
@@ -90,4 +91,19 @@ async fn main() -> ExitCode {
         return ExitCode::from(1);
     }
     ExitCode::SUCCESS
+}
+
+
+fn read_profile(path: &str) -> Result<String, String> {
+    if path == "-" {
+        use std::io::Read;
+        let mut s = String::new();
+        std::io::stdin().read_to_string(&mut s).map_err(|e| format!("read stdin: {e}"))?;
+        return Ok(s);
+    }
+    if amin_machine::uri::is_uri(path) {
+        let r = amin_machine::uri::resolve(path)?;
+        return String::from_utf8(r.bytes).map_err(|e| format!("profile {path} is not utf-8: {e}"));
+    }
+    std::fs::read_to_string(path).map_err(|e| format!("open {path}: {e}"))
 }

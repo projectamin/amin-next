@@ -10,8 +10,11 @@
 //! failing a boot on a host whose spec is absent.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::path::{Path, PathBuf};
 
 use amin_sax::{Attributes, ContentHandler, SaxError};
+
+use crate::uri;
 
 /// One `<filter>` declaration: its class and every non-structural attribute.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -95,6 +98,7 @@ impl MachineSpec {
     }
 
     /// A spec resolved from `path` first, the default list thereafter.
+    /// `path` may be a local path or URI (`file://`, `http(s)://`, `bitcache://`, `bc://`).
     #[must_use]
     pub fn with_path(path: impl Into<String>) -> Self {
         Self {
@@ -106,15 +110,15 @@ impl MachineSpec {
     #[must_use]
     pub fn spec(&self) -> Spec {
         match self.load_xml() {
-            Some(xml) if !xml.is_empty() => parse_spec(&xml),
+            Some((xml, source)) if !xml.is_empty() => parse_spec(&xml, source.as_deref()),
             _ => Spec::degrade(),
         }
     }
 
-    /// The first readable candidate, or the embedded spec. Order mirrors the
-    /// Perl `_candidates`: explicit path, `$AMIN_MACHINE_SPEC`,
+    /// Resolve the first readable candidate, or the embedded spec.
+    /// Order mirrors Perl `_candidates`: explicit path/URI, `$AMIN_MACHINE_SPEC`,
     /// `/etc/amin/machine_spec.xml`, `$HOME/.amin/machine_spec.xml`, bundled.
-    fn load_xml(&self) -> Option<String> {
+    fn load_xml(&self) -> Option<(String, Option<String>)> {
         let mut candidates: Vec<String> = Vec::new();
         if let Some(p) = &self.path {
             candidates.push(p.clone());
@@ -130,37 +134,138 @@ impl MachineSpec {
                 candidates.push(format!("{home}/.amin/machine_spec.xml"));
             }
         }
+
         for candidate in candidates {
+            if uri::is_uri(&candidate) {
+                if let Ok(r) = uri::resolve(&candidate) {
+                    if let Ok(s) = String::from_utf8(r.bytes) {
+                        if !s.is_empty() {
+                            return Some((s, Some(r.source)));
+                        }
+                    }
+                }
+                // Explicit URI failed closed: do not silently fall through for explicit path/URI.
+                if self.path.as_deref() == Some(candidate.as_str())
+                    || std::env::var("AMIN_MACHINE_SPEC").ok().as_deref() == Some(candidate.as_str())
+                {
+                    return None;
+                }
+                continue;
+            }
             if let Ok(contents) = std::fs::read_to_string(&candidate) {
                 if !contents.is_empty() {
-                    return Some(contents);
+                    return Some((contents, Some(candidate)));
                 }
             }
         }
-        Some(EMBEDDED_SPEC.to_string())
+        Some((EMBEDDED_SPEC.to_string(), None))
     }
 }
 
 /// Parse spec XML into a [`Spec`]; degrade on any parse fault.
-fn parse_spec(xml: &str) -> Spec {
+fn parse_spec(xml: &str, base_path: Option<&str>) -> Spec {
+    let mut seen = BTreeSet::new();
+    parse_spec_with_includes(xml, base_path, &mut seen).unwrap_or_else(|_| Spec::degrade())
+}
+
+fn parse_spec_with_includes(
+    xml: &str,
+    base_path: Option<&str>,
+    seen: &mut BTreeSet<String>,
+) -> Result<Spec, String> {
     let mut collector = SpecCollector::default();
-    if amin_sax::parse(xml, &mut collector).is_err() {
-        return Spec::degrade();
+    amin_sax::parse(xml, &mut collector).map_err(|e| e.to_string())?;
+
+    let mut result = Spec::degrade();
+    result.allowed = Some(BTreeSet::new());
+
+    let base_dir = base_path.and_then(|p| {
+        if uri::is_uri(p) {
+            None
+        } else {
+            Path::new(p).parent().map(Path::to_path_buf)
+        }
+    });
+
+    for inc in &collector.includes {
+        let inc_path = resolve_include(inc, base_dir.as_deref())?;
+        let canon = canonicalize_lossy(&inc_path);
+        if !seen.insert(canon.clone()) {
+            return Err(format!("include cycle: {canon}"));
+        }
+        let inc_xml = std::fs::read_to_string(&inc_path)
+            .map_err(|e| format!("read include {}: {e}", inc_path.display()))?;
+        let child = parse_spec_with_includes(&inc_xml, Some(&inc_path.to_string_lossy()), seen)?;
+        merge_spec(&mut result, child);
     }
+
+    let local = collector_to_spec(collector);
+    merge_spec(&mut result, local);
     let mut allowed = BTreeSet::new();
-    for f in &collector.filters {
+    for f in &result.filters {
+        allowed.insert(f.class.clone());
+    }
+    result.allowed = if allowed.is_empty() { None } else { Some(allowed) };
+    Ok(result)
+}
+
+fn collector_to_spec(c: SpecCollector) -> Spec {
+    let mut allowed = BTreeSet::new();
+    for f in &c.filters {
         allowed.insert(f.class.clone());
     }
     Spec {
         allowed: if allowed.is_empty() { None } else { Some(allowed) },
-        filters: collector.filters,
-        handler: collector.handler,
-        log: collector.log,
-        generator: collector.generator,
-        name: collector.name,
-        ui_dialects: collector.ui_dialects,
-        vocab: collector.vocab_names,
+        filters: c.filters,
+        handler: c.handler,
+        log: c.log,
+        generator: c.generator,
+        name: c.name,
+        ui_dialects: c.ui_dialects,
+        vocab: c.vocab_names,
     }
+}
+
+fn merge_spec(dst: &mut Spec, src: Spec) {
+    dst.filters.extend(src.filters);
+    dst.vocab.extend(src.vocab);
+    dst.ui_dialects.extend(src.ui_dialects);
+    if src.handler.is_some() { dst.handler = src.handler; }
+    if src.log.is_some() { dst.log = src.log; }
+    if src.generator.is_some() { dst.generator = src.generator; }
+    if src.name.is_some() { dst.name = src.name; }
+}
+
+fn resolve_include(inc: &BTreeMap<String, String>, base_dir: Option<&Path>) -> Result<PathBuf, String> {
+    if inc.get("spec").map(String::as_str) == Some("amin-core") {
+        let here = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        return Ok(here.join("../../../../perl-lib/Amin/Machine/machine_spec.xml"));
+    }
+    let raw = inc
+        .get("path")
+        .or_else(|| inc.get("file"))
+        .or_else(|| inc.get("src"))
+        .cloned()
+        .ok_or_else(|| "include requires path= or spec=\"amin-core\"".to_string())?;
+    if uri::is_uri(&raw) {
+        return Err("include URI not supported; use local path or spec=\"amin-core\"".to_string());
+    }
+    let mut p = PathBuf::from(raw);
+    if p.is_relative() {
+        if let Some(base) = base_dir {
+            p = base.join(p);
+        }
+    }
+    let canon = p
+        .canonicalize()
+        .map_err(|e| format!("include not found {}: {e}", p.display()))?;
+    Ok(canon)
+}
+
+fn canonicalize_lossy(p: &Path) -> String {
+    p.canonicalize()
+        .map(|x| x.to_string_lossy().to_string())
+        .unwrap_or_else(|_| p.to_string_lossy().to_string())
 }
 
 /// Normalise one element's attributes to `LocalName => Value` — all the spec
@@ -190,6 +295,7 @@ struct SpecCollector {
     log: Option<ClassAttrs>,
     generator: Option<ClassAttrs>,
     name: Option<String>,
+    includes: Vec<BTreeMap<String, String>>,
     in_name: bool,
     name_text: String,
     /// The BSAX dynamic vocabulary band (see [`Spec::vocab`]) — raw names in
@@ -282,6 +388,11 @@ impl ContentHandler for SpecCollector {
                         self.ui_dialects
                             .insert(t.clone(), UiDialect { class: c.clone() });
                     }
+                }
+            }
+            "include" => {
+                if !a.is_empty() {
+                    self.includes.push(a.clone());
                 }
             }
             "handler" => {
@@ -403,8 +514,8 @@ mod tests {
 
     #[test]
     fn malformed_spec_degrades_quietly() {
-        assert_eq!(parse_spec("<machine><filter").allowed, None);
-        assert!(parse_spec("not xml at all").filters.is_empty());
+        assert_eq!(parse_spec("<machine><filter", None).allowed, None);
+        assert!(parse_spec("not xml at all", None).filters.is_empty());
     }
 
     // The BSAX dynamic vocabulary band is a property of the spec: element-scoped
@@ -425,7 +536,7 @@ mod tests {
               </vocab>
             </machine>
         "#;
-        let spec = parse_spec(xml);
+        let spec = parse_spec(xml, None);
         assert_eq!(spec.name.as_deref(), Some("Test::Machine"));
         assert_eq!(
             spec.vocab,

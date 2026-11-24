@@ -44,6 +44,7 @@ pub mod chain;
 mod bsax_front;
 mod gate;
 pub mod spec;
+pub mod uri;
 
 pub use chain::{build_chain, ChainContext, LateEnable, Machine};
 pub use spec::{ClassAttrs, MachineSpec, Spec, SpecFilter, UiDialect};

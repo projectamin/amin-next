@@ -28,8 +28,9 @@ use amin_proxy::{filters, ProxyConfig};
 #[derive(Parser)]
 #[command(name = "proxydump", version, about = "Amin 3 proxy decision dumper")]
 struct Cli {
-    /// Path to an `<amin:proxy>` profile, or `-` for stdin.
-    #[arg(long)]
+    /// Path/URI to an `<amin:proxy>` profile, or `-` for stdin. Supports
+    /// local paths and file://, http(s)://, bitcache://, bc:// URIs.
+    #[arg(long, short = 'u', alias = "uri")]
     profile: String,
     /// Request host (matched case-insensitively).
     #[arg(long, default_value = "")]
@@ -54,7 +55,7 @@ fn main() -> ExitCode {
     };
 
     let cfg = match ProxyConfig::parse_xml(&xml).and_then(|c| c.compile()) {
-        Ok(cfg) => cfg,
+        Ok(cfg) => cfg.with_source(&cli.profile),
         Err(e) => {
             eprintln!("proxydump: {e}");
             return ExitCode::from(3);
@@ -80,6 +81,10 @@ fn read_profile(path: &str) -> Result<String, String> {
             .read_to_string(&mut s)
             .map_err(|e| format!("read stdin: {e}"))?;
         return Ok(s);
+    }
+    if amin_machine::uri::is_uri(path) {
+        let r = amin_machine::uri::resolve(path).map_err(|e| format!("{e}"))?;
+        return String::from_utf8(r.bytes).map_err(|e| format!("profile {path} is not utf-8: {e}"));
     }
     std::fs::read_to_string(path).map_err(|e| format!("open {path}: {e}"))
 }

@@ -34,6 +34,10 @@ struct Cli {
     /// Path to an app bundle directory (holding `axa.xml`).
     #[arg(long)]
     app: String,
+    /// Optional explicit machine spec path/URI for bundle spec resolution.
+    /// Supports local paths and file://, http(s)://, bitcache://, bc://.
+    #[arg(long = "machine-spec", short = 'm', alias = "spec-uri")]
+    machine_spec: Option<String>,
     /// Listen address (`host:port`).
     #[arg(long)]
     listen: Option<String>,
@@ -43,6 +47,21 @@ struct Cli {
 async fn main() -> ExitCode {
     let cli = Cli::parse();
 
+    if let Some(spec_ref) = &cli.machine_spec {
+        // Parity hook: accept URI/path machine spec refs at CLI. The Rust AXA
+        // runtime currently lifts only the bundle-local ACME key from app
+        // machine_spec.xml; explicit remote spec loading is validated here so
+        // flags/URIs are accepted fail-closed.
+        if amin_machine::uri::is_uri(spec_ref) || std::path::Path::new(spec_ref).is_file() {
+            if let Err(e) = amin_machine::uri::resolve(spec_ref) {
+                eprintln!("amin-axa: machine spec {spec_ref}: {e}");
+                return ExitCode::from(3);
+            }
+        } else {
+            eprintln!("amin-axa: machine spec not found: {spec_ref}");
+            return ExitCode::from(3);
+        }
+    }
     let app = match App::load(&cli.app) {
         Ok(app) => app,
         Err(e) => {

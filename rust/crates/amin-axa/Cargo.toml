@@ -11,12 +11,13 @@ repository.workspace   = true
 autobins = false
 
 [dependencies]
-amin-sax.workspace  = true
-sha2.workspace      = true
-rand.workspace      = true
-thiserror.workspace = true
-tokio.workspace     = true
-clap                = { version = "4", features = ["derive"] }
+amin-sax.workspace     = true
+amin-machine.workspace = true
+sha2.workspace         = true
+rand.workspace         = true
+thiserror.workspace    = true
+tokio.workspace        = true
+clap                   = { version = "4", features = ["derive"] }
 
 [lib]
 name = "amin_axa"
