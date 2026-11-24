@@ -10,7 +10,8 @@
 //! * attributes are sorted by local name and formatted ` name="value"`, with
 //!   the value escaped; `xmlns` attributes are dropped;
 //! * text is escaped and emitted only when it sits directly inside a kept
-//!   (XHTML) element — text from a dropped scope is discarded;
+//!   (XHTML) element — text from a dropped scope is discarded; `<script>` and
+//!   `<style>` are raw-text elements, so their content is emitted verbatim;
 //! * escaping covers exactly `< > & "` (the five-char form belongs to
 //!   [`crate::formcodec`], which prepares input *for* this one).
 //!
@@ -32,14 +33,16 @@ const VOID: [&str; 13] = [
 /// Accumulates into `out`. `stack` holds the open element local names awaiting
 /// a close; `scope` records, per open element, whether it is a kept (XHTML)
 /// element, so [characters](ContentHandler::characters) can tell whether text
-/// belongs in the page. When `text_mode` is set the serializer is instead the
-/// plain-text sink (≈ `Amin::Handler::Text`): it emits no doctype, ignores every
-/// element, and passes character data through verbatim.
+/// belongs in the page. `raw` counts open `<script>`/`<style>` elements, whose
+/// content is code rather than character data. When `text_mode` is set the
+/// serializer is instead the plain-text sink (≈ `Amin::Handler::Text`): it emits
+/// no doctype, ignores every element, and passes character data through verbatim.
 #[derive(Debug, Default)]
 pub struct HtmlSerializer {
     out: String,
     stack: Vec<String>,
     scope: Vec<bool>,
+    raw: usize,
     text_mode: bool,
 }
 
@@ -165,6 +168,11 @@ impl ContentHandler for HtmlSerializer {
         if VOID.contains(&local_name) {
             self.push("/>\n");
         } else {
+            // Raw text: script/style content is code, not escaped character
+            // data (an escaped CSS child selector silently stops matching).
+            if local_name == "script" || local_name == "style" {
+                self.raw += 1;
+            }
             self.stack.push(local_name.to_string());
             self.push(">\n");
         }
@@ -186,6 +194,9 @@ impl ContentHandler for HtmlSerializer {
             self.push("</");
             self.push(&top);
             self.push(">\n");
+            if (top == "script" || top == "style") && self.raw > 0 {
+                self.raw -= 1;
+            }
         }
         Ok(())
     }
@@ -205,7 +216,11 @@ impl ContentHandler for HtmlSerializer {
         if ch.is_empty() {
             return Ok(());
         }
-        self.push(&escape(ch));
+        if self.raw > 0 {
+            self.push(ch);
+        } else {
+            self.push(&escape(ch));
+        }
         Ok(())
     }
 }

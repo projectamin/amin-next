@@ -153,8 +153,8 @@ path("$dir/axa.xml")->spew_utf8(<<~"XML");
       <axa:route path="/.well-known/acme-challenge/:token" method="GET" type="text/plain"><amin:acme-challenge token="{token}"/></axa:route>
     </axa:app>
     XML
-# The filter is declared at the APP level (never the proxy level) — the bundle's
-# own machine_spec.xml, merged machine-first by the adapter (§5.2).
+# The filter is declared at the APP level (never the proxy level).  AXA loads
+# only this explicit spec — no bundle discovery or machine-first merge.
 path("$dir/machine_spec.xml")->spew_utf8(<<~"XML");
     <?xml version="1.0" encoding="UTF-8"?>
     <amin:machine xmlns:amin="http://projectamin.org/ns/2026/">
@@ -164,7 +164,7 @@ path("$dir/machine_spec.xml")->spew_utf8(<<~"XML");
     </amin:machine>
     XML
 
-my $ctx = Amin::AXA::HTTP->boot(app_dir => $dir, machine_spec_path => "$ROOT/examples/apps/shop-ui/machine_spec.xml");
+my $ctx = Amin::AXA::HTTP->boot(app_dir => $dir, machine_spec_path => "$dir/machine_spec.xml");
 my $req = {
     method => 'GET', path => '/.well-known/acme-challenge/tok123', query => undef,
     version => '1.1', headers => [['Host' => 'localhost']], header => { host => 'localhost' },

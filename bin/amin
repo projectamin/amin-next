@@ -152,25 +152,6 @@ if (!defined $path && defined $PROFILE_STDIN) {
 
 $path // usage(2);
 usage(2) unless $MODE->{$mode} && length($path);
-my $is_uri = $path =~ m{\A(?:file|https?|bitcache|bc)://}i ? 1 : 0;
-my $xml;
-if ($is_uri) {
-    require Amin::Machine::MachineSpec;
-    my $bytes = Amin::Machine::MachineSpec::_load_uri_static($path);
-    die "Cannot load URI '$path'\n" unless defined $bytes && length $bytes;
-    $xml = $bytes;
-    $DOC_URI //= $path;
-} elsif ($path eq '-') {
-    local $/;
-    $xml = <STDIN>;
-} else {
-    usage(2) unless -e $path;
-    # Read BYTES: the document is either XML or BSAX, and BSAX's magic and length
-    # fields are byte offsets — an encoding layer here would corrupt it before the
-    # dialect is known.  Amin->parse sniffs the dialect and decodes XML itself.
-    open(my $fh, '<:raw', $path) or die "Cannot read $path: $!";
-    $xml = do { local $/; <$fh> }; close $fh;
-}
 
 my ($LATE_MAP, $LATE_UI) = (1, 1);
 if    ($mode eq 'map') { $mode = 'render'; ($LATE_MAP, $LATE_UI) = (1, 0) }
@@ -197,7 +178,27 @@ if ($mode eq 'app') {
     $mode = 'render';
 }
 
-# $xml is already loaded above (URI/file/STDIN).
+# Load the document AFTER `app` resolves the bundle directory to profile.xml;
+# reading the directory here would swallow the bytes and parse an empty doc.
+my $is_uri = $path =~ m{\A(?:file|https?|bitcache|bc)://}i ? 1 : 0;
+my $xml;
+if ($is_uri) {
+    require Amin::Machine::MachineSpec;
+    my $bytes = Amin::Machine::MachineSpec::_load_uri_static($path);
+    die "Cannot load URI '$path'\n" unless defined $bytes && length $bytes;
+    $xml = $bytes;
+    $DOC_URI //= $path;
+} elsif ($path eq '-') {
+    local $/;
+    $xml = <STDIN>;
+} else {
+    usage(2) unless -e $path;
+    # Read BYTES: the document is either XML or BSAX, and BSAX's magic and length
+    # fields are byte offsets — an encoding layer here would corrupt it before the
+    # dialect is known.  Amin->parse sniffs the dialect and decodes XML itself.
+    open(my $fh, '<:raw', $path) or die "Cannot read $path: $!";
+    $xml = do { local $/; <$fh> }; close $fh;
+}
 
 use Amin;
 use Amin::Log::Standard;

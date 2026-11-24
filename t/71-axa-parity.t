@@ -35,9 +35,17 @@ use Amin::Acme::Key;
 
 my $ROOT = path(dirname(__FILE__))->parent->absolute;
 my $APP  = "$ROOT/examples/apps/shop-ui";
-my $RUST = "$ROOT/rust/target/debug/amin-axa";
+# Cargo's target dir is centralised in .mise.toml / CI (CARGO_TARGET_DIR), so
+# look there first; the in-crate target is only a legacy fallback for a bare
+# `cargo build -p amin-axa` run from ./rust.
+my $RUST = do {
+    my $dir = defined $ENV{CARGO_TARGET_DIR} && length $ENV{CARGO_TARGET_DIR}
+        ? $ENV{CARGO_TARGET_DIR} : "$ROOT/rust/target";
+    "$dir/debug/amin-axa";
+};
+$RUST = "$ROOT/rust/target/debug/amin-axa" unless -x $RUST;
 unless (-x $RUST) {
-    skip_all "amin-axa not compiled; run `cargo build -p amin-axa` at ./rust";
+    skip_all "amin-axa not compiled; run `cargo build -p amin-axa --manifest-path rust/Cargo.toml`";
 }
 
 # ── socket helpers (mirrors t/70) ───────────────────────────────────────────

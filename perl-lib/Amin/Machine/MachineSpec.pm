@@ -140,13 +140,12 @@ sub _parse ($self, $xml) {
     return {
         filters => [], allowed => {}, filtermap => {},
         handler => undef, log => undef, generator => undef, name => undef,
-        ui_dialects => {}, map_dialects => {}, vocab_names => [],
+        ui_dialects => {}, map_dialects => {}, vocab_names => [], vocab => [],
     } unless defined $xml && length $xml;
 
-    my $result = $self->_parse_collect($xml, $self->{_spec_path}, {});
-    die "MachineSpec parse error: missing <amin:machine name=...> or <amin:name>...</amin:name>"
-        unless defined $result->{name} && length $result->{name};
-    return $result;
+    # `name` is metadata, not a contract requirement: app specs may be
+    # deliberately minimal (a single filter declaration, no machine name).
+    return $self->_parse_collect($xml, $self->{_spec_path}, {});
 }
 
 # Collect one spec document.  <amin:include> is resolved explicitly at parse
@@ -214,6 +213,8 @@ sub _parse_collect ($self, $xml, $base_path, $seen) {
     };
     $self->_merge_spec($result, $local);
     $result->{allowed} = $self->_name2spec_from_filters($result->{filters});
+    # Back-compat alias: BSAX callers harvest the band from `vocab`.
+    $result->{vocab} = $result->{vocab_names};
     return $result;
 }
 
