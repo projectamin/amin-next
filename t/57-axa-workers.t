@@ -7,7 +7,7 @@
 # adapter, three adds issued over separate connections would land on different
 # workers and the cart would silently lose most of them.
 #
-# It forks `bin/amin axa serve` (multiple workers), drives it over TCP with
+# It forks `bin/axa` (multiple workers), drives it over TCP with
 # fresh connections so the kernel spreads load across the pool, and asserts the
 # cart is complete on read-back.  Also covers the IPv6 bind and streaming
 # framing, since both are easy to lose in a server swap.
@@ -53,8 +53,8 @@ if ($pid == 0) {
     open STDERR, '>&', \*STDOUT or exit 127;
     # AXA_STORE keeps the test's database inside its tempdir
     local $ENV{AXA_STORE} = $db;
-    exec $^X, '-I', "$ROOT/perl-lib", "$ROOT/bin/amin",
-        'axa', 'serve', $APP,
+    exec $^X, '-I', "$ROOT/perl-lib", "$ROOT/bin/axa",
+        $APP,
         '--listen', 'localhost:' . $port,
         '--workers', 4;
     exit 127;

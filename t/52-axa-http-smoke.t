@@ -1,5 +1,5 @@
 #!/usr/bin/env perl
-# Loopback smoke test (plan M2): `bin/amin axa serve` is a real persistent
+# Loopback smoke test (plan M2): `bin/axa` is a real persistent
 # process — a real socket, a real HTTP client, and the process answering is
 # the one this test started.  No mocks anywhere in this file.
 use v5.38; use warnings; use utf8;
@@ -31,8 +31,8 @@ die "fork failed: $!" unless defined $pid;
 if ($pid == 0) {
     open STDOUT, '>>', $stderr or exit 127;
     open STDERR, '>&', \*STDOUT or exit 127;
-    exec $^X, '-I', "$ROOT/perl-lib", "$ROOT/bin/amin",
-        'axa', 'serve', $APP, '--listen', "127.0.0.1:$port";
+    exec $^X, '-I', "$ROOT/perl-lib", "$ROOT/bin/axa",
+        $APP, '--listen', "127.0.0.1:$port";
     exit 127;
 }
 

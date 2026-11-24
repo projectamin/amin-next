@@ -323,7 +323,7 @@ With `stream => 0` the same code path buffers instead: the latch is released
 at `end_document`, the body is sent with a `Content-Length`, and no chunk
 framing appears. Tests take that path; production takes the streaming one.
 
-**The origin is `Amin::Net::Loop`, pre-forked.** `bin/amin axa serve` runs
+**The origin is `Amin::Net::Loop`, pre-forked.** `bin/axa` runs
 one event loop per `--workers` process (default 4), each binding the same
 address with `SO_REUSEPORT` so the kernel spreads accepts. Never a
 `bin/amin` subprocess or fork-per-request: that is the 29.5 ms load, every
@@ -779,7 +779,7 @@ Files:
   `Amin::Net::Loop` origin that frames requests and streams responses.
 - `perl-lib/Amin/AXA/Session.pm` — cookie → session record, adapter-side;
   carries the CSRF token as transport hygiene, not as authorization (§5.6).
-- `bin/amin` — `amin axa serve <app> --listen 127.0.0.1:8787`.
+- `bin/axa` — `axa <app> --listen 127.0.0.1:8787`.
 - `cpanfile` — no Plack/Starman; the origin is our own loop.
 - `t/51-axa-http.t` (core + one loopback origin), `t/52-axa-http-smoke.t`
   (loopback).

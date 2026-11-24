@@ -1,6 +1,6 @@
 #!/usr/bin/env perl
 # Perl ↔ Rust parity for the AXA origin (proxy-plan §7/§8, P4): one app bundle
-# (examples/apps/shop-ui) served by the Perl adapter (`bin/amin axa serve`) and
+# (examples/apps/shop-ui) served by the Perl adapter (`bin/axa`) and
 # by the Rust peer (`amin-axa`), each fed the same raw requests over real
 # sockets.
 #
@@ -135,8 +135,8 @@ if ($perl_front == 0) {
     open STDERR, '>&', \*STDOUT or exit 127;
     # Keep the session store inside the test's tempdir.
     local $ENV{AXA_STORE} = $db;
-    exec $^X, '-I', "$ROOT/perl-lib", "$ROOT/bin/amin",
-        'axa', 'serve', $APP,
+    exec $^X, '-I', "$ROOT/perl-lib", "$ROOT/bin/axa",
+        $APP,
         '--listen', "127.0.0.1:$perl_port",
         '--workers', 1;
     exit 127;
@@ -383,8 +383,8 @@ subtest 'the ACME HTTP-01 responder is byte-identical' => sub {
     if ($pf == 0) {
         open STDOUT, '>>', $pl or exit 127;
         open STDERR, '>&', \*STDOUT or exit 127;
-        exec $^X, '-I', "$ROOT/perl-lib", "$ROOT/bin/amin",
-            'axa', 'serve', $adir,
+        exec $^X, '-I', "$ROOT/perl-lib", "$ROOT/bin/axa",
+            $adir,
             '--listen', "127.0.0.1:$pp", '--workers', 1;
         exit 127;
     }

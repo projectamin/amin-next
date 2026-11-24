@@ -1,0 +1,120 @@
+#!/usr/bin/env perl
+use v5.38; use warnings; use utf8;
+use experimental 'signatures';
+BEGIN {
+    use File::Basename qw(dirname);
+    use Cwd qw(abs_path);
+    my $root = abs_path(dirname(__FILE__) . '/..');
+    unshift @INC, "$root/perl-lib";
+    require Amin::Boot;
+    Amin::Boot->init(__FILE__, $root);
+}
+use Getopt::Long qw(:config auto_help auto_version bundling no_ignore_case);
+binmode STDOUT, ':encoding(UTF-8)';
+binmode STDERR, ':encoding(UTF-8)';
+
+our $VERSION = '3.0.0-bootstrap';
+
+# axa: serve an AXA app bundle.  The bundle is a directory holding axa.xml (the
+# routes and actions) and, optionally, machine_spec.xml (the bundle's own
+# filters) and filters/ (their code).  Everything the server needs comes from
+# the bundle and the machine spec; there is nothing else to pass.
+
+# Default to `localhost` (both loopback families), not a bare IPv4 literal:
+# localhost resolves ::1 first, so a v4-only listener stalls browsers.
+my $LISTEN = 'localhost:8787';
+my ($WORKERS, $READ_TIMEOUT) = (4, 2);
+my ($MACHINE_SPEC, $STORE, @INC_EXTRA);
+
+sub usage ($exit = 2) {
+    say STDERR <<"USAGE";
+Usage: $0 [options] [<app>]
+
+  <app>                 an app bundle: a directory (default: the current one) or
+                        a file:// URL to it.  A path to a file inside the bundle
+                        (e.g. its machine_spec.xml) names the bundle too.
+
+  -m, --machine-spec F  the machine's own spec (path or file:// URL); the bundle's
+                        machine_spec.xml is merged after it.  Default: the stock machine.
+  -I, --inc DIR         prepend DIR to \@INC (repeatable).  <app>/filters is added
+                        automatically when it exists.
+  -l, --listen H:P      bind address (default $LISTEN)
+  -w, --workers N       pre-forked workers (default $WORKERS)
+      --read-timeout S  seconds a silent connection may idle (default $READ_TIMEOUT)
+      --store FILE      session store (default \$AXA_STORE, else <app>/axa-store.sqlite)
+USAGE
+    exit $exit;
+}
+
+GetOptions(
+    'machine-spec|m=s' => \$MACHINE_SPEC,
+    'inc|I=s@'         => \@INC_EXTRA,
+    'listen|l=s'       => \$LISTEN,
+    'workers|w=i'      => \$WORKERS,
+    'read-timeout=i'   => \$READ_TIMEOUT,
+    'store=s'          => \$STORE,
+) or usage(2);
+usage(2) if @ARGV > 1;
+
+# A file:// URL is a path with a scheme; no other scheme is served from here.
+sub local_path ($ref) {
+    return $ref unless $ref =~ m{\A[A-Za-z][A-Za-z0-9+.-]*:};
+    $ref =~ m{\Afile://(?:localhost)?(/.*)\z}i
+        or die "'$ref' is not a local path or file:// URL\n";
+    my $p = $1;
+    $p =~ s/%([0-9A-Fa-f]{2})/chr hex $1/ge;
+    return $p;
+}
+
+my $dir = local_path(shift(@ARGV) // '.');
+$dir = dirname($dir) if -f $dir;
+-d $dir or die "App path must be a directory: $dir\n";
+-f "$dir/axa.xml" or die "Not an app bundle (no axa.xml): $dir\n";
+$dir = abs_path($dir);
+
+if (defined $MACHINE_SPEC) {
+    $MACHINE_SPEC = local_path($MACHINE_SPEC);
+    -f $MACHINE_SPEC or die "--machine-spec '$MACHINE_SPEC' is not a file\n";
+}
+for my $p (@INC_EXTRA) {
+    -d $p or die "--inc path '$p' is not a directory\n";
+    unshift @INC, abs_path($p);
+}
+unshift @INC, "$dir/filters" if -d "$dir/filters";
+
+require Amin::AXA::HTTP;
+require Amin::AXA::Serve;
+require Amin::AXA::Store::SQLite;
+require Amin::Log::Standard;
+
+# Sessions live off the heap.  The server preforks (SO_REUSEPORT), and a forked
+# worker gets its own copy of any in-process hash — so an in-memory cart would
+# diverge between requests (request A lands on worker 1, request B on worker 2
+# and B has never seen A's write).  The SQLite adapter closes per worker and
+# reconnects on first use, after the fork.
+my $db    = $STORE // $ENV{AXA_STORE} // "$dir/axa-store.sqlite";
+my $store = Amin::AXA::Store::SQLite->new(path => $db);
+
+# Boot once (plan §4.8): spec parse, bundle load, warm-up chain build.
+# stream => 1: the response goes to the socket as elements are generated.
+my $ctx = Amin::AXA::HTTP->boot(
+    app_dir => $dir, store => $store, stream => 1,
+    (defined $MACHINE_SPEC ? (machine_spec_path => $MACHINE_SPEC) : ()),
+);
+my $serve = Amin::AXA::Serve->new(
+    ctx    => $ctx,
+    log    => Amin::Log::Standard->new(stderr => 1),
+    stream => 1,
+    # A silent connection (a browser preconnect) is dropped after this; the loop
+    # multiplexes many partially-idle connections, so it costs nothing while a
+    # client sits silent.
+    read_timeout => $READ_TIMEOUT,
+);
+
+# $LISTEN may be a symbolic host ('localhost') or an IPv6 literal ('[::1]:8787');
+# Amin::Net::Loop->bind resolves either and binds one socket per address family,
+# so a browser that tries ::1 first is served.
+say STDERR "[axa] serving $dir — Amin::Net::Loop, $WORKERS worker(s), store=$db, streaming";
+say STDERR "[axa] listening on http://$LISTEN (Ctrl-C to stop)";
+$serve->serve(listen => $LISTEN, workers => $WORKERS);
+exit 0;

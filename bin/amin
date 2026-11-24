@@ -4,38 +4,10 @@ use experimental 'signatures';
 BEGIN {
     use File::Basename qw(dirname);
     use Cwd qw(abs_path);
-    use Config;
     my $root = abs_path(dirname(__FILE__) . '/..');
-
-    unless ($ENV{_AMIN_EXECED}) {
-        my $mise_shim = $ENV{HOME} . '/.local/share/mise/shims/perl';
-        if (-x $mise_shim && $^X =~ m{^/(usr|bin|sbin|opt)}) {
-            $ENV{_AMIN_EXECED} = 1;
-            exec $mise_shim, __FILE__, @ARGV
-                or die "exec mise perl ($mise_shim) failed: $!";
-        }
-        for my $d (glob($ENV{HOME} . '/.local/share/mise/installs/perl/*/*/bin/perl'),
-                   glob($ENV{HOME} . '/.local/share/mise/installs/perl/*/bin/perl')) {
-            if (-x $d) {
-                $ENV{_AMIN_EXECED} = 1;
-                exec $d, __FILE__, @ARGV
-                    or die "exec mise perl ($d) failed: $!";
-            }
-        }
-    }
-
-    # cpanm --local-lib-contained installs to three sub-paths under ./local:
-    #   lib/perl5                    (pure-perl dists, shared arch)
-    #   lib/perl5/$Config{archname}  (XS modules, compiled for this perl's arch)
-    #   lib/perl5/$perlver/$archname (old-style local::lib layout, just in case)
-    my $arch = $Config{archname};
-    my ($perlver) = $^V =~ /^v(\d+\.\d+\.\d+)/;
-    unshift @INC,
-        "$root/perl-lib",
-        "$root/local/lib/perl5",
-        "$root/local/lib/perl5/$arch",
-        (defined $perlver ? ("$root/local/lib/perl5/$perlver",
-                             "$root/local/lib/perl5/$perlver/$arch") : ());
+    unshift @INC, "$root/perl-lib";
+    require Amin::Boot;
+    Amin::Boot->init(__FILE__, $root);
 }
 use Getopt::Long qw(:config auto_help auto_version);
 binmode STDOUT, ':encoding(UTF-8)';
@@ -105,7 +77,7 @@ my $STREAM = $LEGACY ? 0 : $STREAM_OPT;
 my $MODE = { render => 1, dryrun => 1, run => 1, app => 1, map => 1, ui => 1, motd => 1 };
 sub usage ($exit = 2) {
     say STDERR "Usage: $0 [--legacy-processing|--no-stream] <render|dryrun|run|app|map|ui|motd> [<path>] [--out=svg|dot|xml] [--os=ios|android|html|tty]";
-    say STDERR "       $0 axa serve <app-dir> [--listen host:port] [--workers N]   persistent HTTP server (AXA)";
+    say STDERR "       (AXA app bundles are served by bin/axa)";
     say STDERR "       $0 proxy serve <config> [--listen host:port] [--workers N]  persistent L7 reverse proxy";
     say STDERR "    --legacy-processing   (alias for --no-stream) buffer and emit the full XML";
     say STDERR "                          after parsing (traditional Amin behaviour) instead of";
@@ -123,55 +95,11 @@ sub usage ($exit = 2) {
     exit $exit;
 }
 
-# ── AXA: web layer — persistent HTTP server for an app bundle ──────────
-# The whole boot cost (spec parse, bundle load, warm-up chain build) is
-# paid once here; every request reuses the injected spec (plan §4.8).
-if (($ARGV[0] // '') eq 'axa') {
-    shift @ARGV;
-    my $subcmd = shift(@ARGV) // usage(2);
-    $subcmd eq 'serve' or die "Unknown axa subcommand '$subcmd' (available: serve)\n";
-    my $dir = shift(@ARGV) // usage(2);
-    -d $dir or die "App path must be a directory: $dir\n";
-    require Amin::AXA::HTTP;
-    require Amin::AXA::Serve;
-    require Amin::AXA::Store::SQLite;
-    require Amin::Log::Standard;
-
-    # Sessions live off the heap.  The server preforks (SO_REUSEPORT), and a
-    # forked worker gets its own copy of any in-process hash — so an in-memory
-    # cart would diverge between requests (request A lands on worker 1, request
-    # B on worker 2 and B has never seen A's write).  The SQLite adapter closes
-    # per worker and reconnects on first use, after the fork.
-    my $db = $ENV{AXA_STORE} // "$dir/axa-store.sqlite";
-    my $store = Amin::AXA::Store::SQLite->new(path => $db);
-
-    # Boot once (plan §4.8): spec parse, bundle load, warm-up chain build.
-    # stream => 1: the response goes to the socket as elements are generated.
-    my $ctx = Amin::AXA::HTTP->boot(app_dir => $dir, store => $store, stream => 1);
-    my $serve = Amin::AXA::Serve->new(
-        ctx   => $ctx,
-        log   => Amin::Log::Standard->new(stderr => 1),
-        stream => 1,
-        # A silent connection (a browser preconnect) is dropped after this;
-        # the loop multiplexes many partially-idle connections, so it costs
-        # nothing while a client sits silent.
-        read_timeout => $READ_TIMEOUT,
-    );
-
-    # $LISTEN may be a symbolic host ('localhost') or an IPv6 literal
-    # ('[::1]:8787'); Amin::Net::Loop->bind resolves either and binds one
-    # socket per address family, so a browser that tries ::1 first is served.
-    say STDERR "[axa] serving $dir — Amin::Net::Loop, $WORKERS worker(s), store=$db, streaming";
-    say STDERR "[axa] listening on http://$LISTEN (Ctrl-C to stop)";
-    $serve->serve(listen => $LISTEN, workers => $WORKERS);
-    exit 0;
-}
-
 # ── Proxy: L7 front — persistent reverse proxy over a compiled proxy config ─
 # The front is authority-free (proxy-plan §5.12): it parses, routes and pumps,
 # and never mints or widens authority — backends re-authorize.  The config is
 # the contract and is read ONCE (§5.13): a request may never redefine a route,
-# a backend, or the listen address.  Parallels `axa serve`: boot is paid once,
+# a backend, or the listen address.  Parallels `bin/axa`: boot is paid once,
 # the compiled config is injected into every request's chain.
 if (($ARGV[0] // '') eq 'proxy') {
     shift @ARGV;

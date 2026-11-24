@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  shop-ui machine spec (the app's OWN filter declarations).
+
+  Merged machine-first by the adapter (§5.2): the bundle's entries are appended
+  to the machine's, so the bundle can only add.  The shop dialect is declared
+  here, by the app that speaks it — the server carries no app filters of its
+  own.  One filter class, element-scoped: the gate splices it in on
+  <shop:request> and <shop:action> and out again when the element closes.
+-->
+<amin:machine xmlns:amin="http://projectamin.org/ns/2026/">
+
+  <filter class="Amin::Example::Shop" position="middle"
+          element="request" namespace="urn:projectamin:example:shop" />
+
+  <filter class="Amin::Example::Shop" position="middle"
+          element="action" namespace="urn:projectamin:example:shop" />
+
+</amin:machine>

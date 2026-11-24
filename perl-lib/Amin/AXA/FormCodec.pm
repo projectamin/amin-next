@@ -10,7 +10,9 @@ use Class::Tiny;
 #
 # Values are XML-escaped on substitution: the fragment is attribute content
 # in the app's dialect, and escaping here keeps Handler::HTML the single
-# point of escaping for *output* while keeping input data inert.
+# point of escaping for *output* while keeping input data inert.  Tab and
+# line breaks are written as character references: an attribute value
+# normalises literal ones to a space, which would flatten multi-line input.
 
 sub inflate ($class, $fragment, $values) {
     $fragment =~ s/\{([A-Za-z0-9_.\-]+)\}/ _val($values, $1) /ge;
@@ -19,13 +21,14 @@ sub inflate ($class, $fragment, $values) {
 
 sub _val ($values, $key) {
     my $v = $values->{$key} // '';
-    $v =~ s/([<>&"'])/ _esc($1) /ge;
+    $v =~ s/([<>&"'\t\r\n])/ _esc($1) /ge;
     return $v;
 }
 
 sub _esc ($c) {
     { '<' => '&lt;', '>' => '&gt;', '&' => '&amp;',
-      '"' => '&quot;', "'" => '&apos;' }->{$c};
+      '"' => '&quot;', "'" => '&apos;',
+      "\t" => '&#9;', "\r" => '&#13;', "\n" => '&#10;' }->{$c};
 }
 
 1;

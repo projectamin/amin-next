@@ -51,8 +51,8 @@ die "fork failed: $!" unless defined $pid;
 if ($pid == 0) {
     open STDOUT, '>>', $stderr or exit 127;
     open STDERR, '>&', \*STDOUT or exit 127;
-    exec $^X, '-I', "$ROOT/perl-lib", "$ROOT/bin/amin",
-        'axa', 'serve', $APP, '--listen', "127.0.0.1:$port",
+    exec $^X, '-I', "$ROOT/perl-lib", "$ROOT/bin/axa",
+        $APP, '--listen', "127.0.0.1:$port",
         # A pool of 4 (SO_REUSEPORT) and a 2 s pre-request idle window: the
         # pool is real, but the loop means idle connections are never pinned.
         '--workers', 4, '--read-timeout', 2;

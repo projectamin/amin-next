@@ -35,7 +35,6 @@ use Amin::AXA::FormCodec;
 # declarations are merged machine-first, and one warm-up chain build loads
 # every spec filter class.  Chain instances stay per request (§4.9).
 
-use constant SHOP_NS  => 'urn:projectamin:example:shop';
 use constant AMIN_NS  => 'http://projectamin.org/ns/2026/';
 use constant BODY_CAP => 262_144;    # 256 KiB (M2 acceptance)
 
@@ -74,15 +73,6 @@ sub boot ($class, %opts) {
         }
         $spec->{allowed} = { $spec->{allowed}->%*, $extra->{allowed}->%* };
     }
-
-    # The bundle's own filters, merged machine-first (§5.2's shape).  Registered
-    # ONCE at boot — §4.9: nothing registers after the first request is served.
-    push $spec->{filters}->@*, (
-        { class => 'Amin::Example::Shop', meta => { position => 'middle',
-            element => 'request', namespace => SHOP_NS, permissions => '' } },
-        { class => 'Amin::Example::Shop', meta => { position => 'middle',
-            element => 'action',  namespace => SHOP_NS, permissions => '' } },
-    );
 
     # §4.8 step 3: one warm-up chain build loads all 291+ filter classes so the
     # first real request pays only ->new per filter.
@@ -333,7 +323,7 @@ sub serve_file ($class, $route, $params, $req) {
 sub render ($class, $spec, $fragment, $values, $type = 'text/html') {
     # the bundle declares the fragment, the codec only substitutes values (§4.2)
     $fragment = Amin::AXA::FormCodec->inflate($fragment, $values // {});
-    my $doc = '<amin:profile xmlns:amin="' . AMIN_NS . '" xmlns:shop="' . SHOP_NS . '">'
+    my $doc = '<amin:profile xmlns:amin="' . AMIN_NS . '">'
             . $fragment . "\n</amin:profile>";
     my $body;
     {
@@ -370,7 +360,7 @@ sub render ($class, $spec, $fragment, $values, $type = 'text/html') {
 # streaming, not a shortcut.
 sub render_stream ($class, $spec, $fragment, $values, $extra_headers = [], $type = 'text/html') {
     $fragment = Amin::AXA::FormCodec->inflate($fragment, $values // {});
-    my $doc = '<amin:profile xmlns:amin="' . AMIN_NS . '" xmlns:shop="' . SHOP_NS . '">'
+    my $doc = '<amin:profile xmlns:amin="' . AMIN_NS . '">'
             . $fragment . "\n</amin:profile>";
     my $ctype = $class->_content_type($type);
 
