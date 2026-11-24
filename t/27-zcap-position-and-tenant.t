@@ -30,6 +30,11 @@ sub build_zcap_token (%o) {
     return Amin::Test::ZCapSign::make_zcap_token(%o);
 }
 
+require Amin::Auth::ZCap;
+require Amin::Test::ZCapSign;
+plan skip_all => 'toolchain not built (bctool / libbitcache): run cargo build'
+    unless Amin::Test::ZCapSign::zcap_can_sign() && Amin::Auth::ZCap->can_verify;
+
 # Helper to extract attr values (Clark-key tolerant)
 sub attr_val ($el, $want) {
     my $A = $el->{Attributes} // {};

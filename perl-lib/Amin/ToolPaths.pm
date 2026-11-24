@@ -22,7 +22,7 @@ use experimental 'signatures';
 
 use Exporter 'import';
 our @ISA       = ('Exporter');
-our @EXPORT_OK = qw(tool_aminexec tool_bctool tool_rctool awp3_lib);
+our @EXPORT_OK = qw(tool_aminexec tool_bctool tool_rctool awp3_lib bitcache_lib);
 
 sub _project_root {
     # __FILE__ may be ABSOLUTE (()=-@INC normalization) or a bare relative
@@ -71,6 +71,30 @@ sub tool_rctool {
 # FFI::Platypus.  Cargo writes it as target/{debug,release}/libawp3.<ext>; the
 # extension is platform-dependent, so resolve the exact filename rather than a
 # bare stem.  AMIN_AWP3_LIB pins an authority-managed install.
+sub _bitcache_filename {
+    return 'bitcache.dll'      if $^O =~ /MSWin32|cygwin/i;
+    return 'libbitcache.dylib' if $^O eq 'darwin';
+    return 'libbitcache.so';
+}
+
+# The trust-layer verifier (rust/crates/bitcache cdylib, src/ffi.rs) — the
+# single implementation of ML-DSA-87 / zcap.v1 / instrument verification that
+# Perl binds.  AMIN_BITCACHE_LIB pins an authority-managed install.
+sub bitcache_lib {
+    state $l;
+    return $l if defined $l;
+    return $l = $ENV{AMIN_BITCACHE_LIB}
+        if defined $ENV{AMIN_BITCACHE_LIB} && length $ENV{AMIN_BITCACHE_LIB};
+    my $name = _bitcache_filename();
+    my $root = _project_root();
+    for my $c ("$root/target/debug/$name", "$root/target/release/$name",
+               "$root/rust/target/debug/$name", "$root/rust/target/release/$name",
+               "$root/local/lib/$name") {
+        return $l = $c if -f $c;
+    }
+    return $l = '';
+}
+
 sub _awp3_filename {
     return 'awp3.dll'      if $^O =~ /MSWin32|cygwin/i;
     return 'libawp3.dylib' if $^O eq 'darwin';

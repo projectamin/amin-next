@@ -33,6 +33,9 @@ pub enum BitcacheError {
     #[error("trust anchor missing: name={name} path={path:?}")]
     TrustAnchorMissing { name: String, path: PathBuf },
 
+    #[error("ledger chain violation: {0}")]
+    ChainViolation(String),
+
     #[error("wire bc:keyref rejected; use trust-anchor dir")]
     WireKeyrefRejected,
 }

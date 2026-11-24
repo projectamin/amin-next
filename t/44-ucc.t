@@ -14,6 +14,9 @@ use lib dirname(__FILE__) . '/../perl-lib';
 
 require Amin::Machine::Dispatcher;
 require Amin::Handler::Writer;
+require Amin::Crypto::Verify;
+require Amin::UCC::Instruments;
+require Amin::Auth::ZCap;
 require Amin::Log::Standard;
 
 my $AMIN_NS = 'http://projectamin.org/ns/2026/';
@@ -39,13 +42,36 @@ sub build_zcap_token (%o) {
     return Amin::Test::ZCapSign::make_zcap_token(%o);
 }
 
+require Amin::Test::ZCapSign;
+plan skip_all => 'toolchain not built (bctool / libbitcache): run cargo build'
+    unless Amin::Test::ZCapSign::zcap_can_sign() && Amin::Crypto::Verify::available();
+
 my $ZC = build_zcap_token();
+
+# `@@SIGN kind=… maker=… payee=… amount=…@@` expands to the attribute text of a
+# genuinely signed Art.3 instrument (ML-DSA-87, issued by bctool).
+sub expand_signed ($xml) {
+    $xml =~ s{\@\@SIGN\s+(.*?)\@\@}{
+        my %a = map { split /=/, $_, 2 } split /\s+/, $1;
+        Amin::Test::ZCapSign::instrument_attrs(%a);
+    }ge;
+    return $xml;
+}
+
+# Runs a profile whose instrument is signed by a rogue key nobody registered.
+sub run_ucc_untrusted ($inner) {
+    $inner =~ s{\@\@SIGN\s+(.*?)\@\@}{
+        my %a = map { split /=/, $_, 2 } split /\s+/, $1;
+        Amin::Test::ZCapSign::instrument_attrs(%a, untrusted => 1);
+    }ge;
+    return run_ucc($inner);
+}
 
 sub run_ucc ($inner) {
     my $xml = qq{<?xml version="1.0"?>}
         . qq{<amin:profile xmlns:amin="$AMIN_NS" xmlns:ucc="$UCC_NS">}
         . qq{<amin:zcap amin:token="$ZC"/>}
-        . $inner
+        . expand_signed($inner)
         . qq{</amin:profile>};
     return Amin::Machine::Dispatcher->run(
         source_xml => $xml,
@@ -71,7 +97,8 @@ sub run_ucc ($inner) {
         <ucc:warranty>merchantability</ucc:warranty>
       </ucc:sale>
       <ucc:instrument ucc:kind="draft" ucc:maker="buyer-co"
-                      ucc:payee="seller-co" ucc:amount="1500.00"/>
+                      ucc:payee="seller-co" ucc:amount="1500.00"
+                      @@SIGN kind=draft maker=buyer-co payee=seller-co amount=1500.00@@/>
     </ucc:lc>
   </ucc:transaction>
 TEN
@@ -153,21 +180,57 @@ TEN
         'Art.2: no contract-formed on invalid term');
 }
 
-# ── TR-UCC.5: Art.3 instrument signature path (no-crypto structural check)
-{
-    my $out = run_ucc(<<'TEN');
+# ── TR-UCC.5: Art.3 instrument signature — real ML-DSA-87, fail-closed ──
+my $TXN_HEAD = <<'TEN';
   <ucc:transaction ucc:governing-law="UCC">
     <ucc:party>a</ucc:party>
     <ucc:party>b</ucc:party>
     <ucc:subject>x</ucc:subject>
-    <ucc:instrument ucc:kind="check" ucc:maker="a" ucc:payee="b" ucc:amount="42.50"/>
+TEN
+{
+    my $out = run_ucc($TXN_HEAD . <<'TEN');
+    <ucc:instrument ucc:kind="check" ucc:maker="a" ucc:payee="b" ucc:amount="42.50"
+                    @@SIGN kind=check maker=a payee=b amount=42.50@@/>
   </ucc:transaction>
 TEN
 
     like($out, qr/ucc:kind="signature-verified"/,
-        'Art.3: structural instrument accepted, signature-verified event emitted');
+        'Art.3: signed instrument accepted, signature-verified event emitted');
     like($out, qr/ucc:alg="ML-DSA-87"/,
         'Art.3: signature-verified event records ML-DSA-87 algorithm');
+}
+
+# unsigned → rejected (previously accepted when no verifier module was present)
+{
+    my $out = run_ucc($TXN_HEAD . <<'TEN');
+    <ucc:instrument ucc:kind="check" ucc:maker="a" ucc:payee="b" ucc:amount="42.50"/>
+  </ucc:transaction>
+TEN
+    like($out, qr/ucc:exit_kind="ucc_bad_sig"/, 'Art.3: unsigned instrument is REJECTED (fail-closed)');
+    like($out, qr/instrument is unsigned/,       'Art.3: rejection says why');
+    unlike($out, qr/ucc:kind="signature-verified"/, 'Art.3: no signature-verified event for unsigned');
+}
+
+# valid signature, tampered amount → rejected
+{
+    my $inner = $TXN_HEAD . <<'TEN';
+    <ucc:instrument ucc:kind="check" ucc:maker="a" ucc:payee="b" ucc:amount="99999.00"
+                    @@SIGN kind=check maker=a payee=b amount=42.50@@/>
+  </ucc:transaction>
+TEN
+    my $out = run_ucc($inner);
+    like($out, qr/ucc:exit_kind="ucc_bad_sig"/, 'Art.3: signature over a different amount is REJECTED');
+    unlike($out, qr/ucc:kind="signature-verified"/, 'Art.3: tampered instrument not verified');
+}
+
+# valid signature, but the key is not trusted for this maker → rejected
+{
+    my $out = run_ucc_untrusted($TXN_HEAD . <<'TEN');
+    <ucc:instrument ucc:kind="check" ucc:maker="a" ucc:payee="b" ucc:amount="1.00"
+                    @@SIGN kind=check maker=a payee=b amount=1.00@@/>
+  </ucc:transaction>
+TEN
+    like($out, qr/not trusted for this maker/, 'Art.3: self-supplied key not registered for maker is REJECTED');
 }
 
 done_testing;

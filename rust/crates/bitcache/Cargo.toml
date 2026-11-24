@@ -12,6 +12,7 @@ all-features = true
 
 [dependencies]
 blake3 = { workspace = true }
+awp3   = { path = "../awp3" }
 bytes  = { workspace = true }
 thiserror = { workspace = true }
 anyhow    = { workspace = true }
@@ -22,6 +23,12 @@ clap      = { version = "4", features = ["derive"] }
 getrandom = { version = "0.2", features = ["std"] }
 rand      = "0.8"
 sha2      = "0.10"
+
+[lib]
+name       = "bitcache"
+path       = "src/lib.rs"
+# cdylib: the C ABI in src/ffi.rs that Perl binds (Amin::Crypto::Verify).
+crate-type = ["rlib", "cdylib"]
 
 [[bin]]
 name = "bctool"

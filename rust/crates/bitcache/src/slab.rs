@@ -46,6 +46,9 @@ fn slot_size(payload: usize) -> usize {
 
 /// One append-only / random-read slab file.  Locked with `flock LOCK_EX` so two
 /// aminexec instances don't double-write to the same slab.
+/// Refcount floor that marks an object as pinned against `gc`.
+const PINNED: u32 = 0x8000_0000;
+
 pub struct SlabFile {
     path:   PathBuf,
     file:   File,
@@ -185,6 +188,33 @@ impl SlabFile {
             keep
         })?;
         Ok((freed_slots, freed_bytes))
+    }
+
+    /// Pin `r` so `gc` never evicts it (ledger entries must outlive any cache
+    /// pressure).  Idempotent.  `put` of the same bytes keeps it pinned.
+    pub fn pin(&mut self, r: &ObjRef) -> Result<()> {
+        let mut e = self.index.get(r)?.ok_or_else(||
+            BitcacheError::ObjectMissing(r.as_bytes().to_vec().into_boxed_slice()))?;
+        if e.refcount < PINNED { e.refcount = PINNED; self.index.put(r, e)?; }
+        Ok(())
+    }
+
+    /// Release a pin (back to an ordinary single reference).
+    pub fn unpin(&mut self, r: &ObjRef) -> Result<()> {
+        if let Some(mut e) = self.index.get(r)? {
+            if e.refcount >= PINNED { e.refcount = 1; self.index.put(r, e)?; }
+        }
+        Ok(())
+    }
+
+    /// Test hook: make every object look ancient so `gc` has no age excuse to keep it.
+    #[cfg(test)]
+    pub(crate) fn test_age_all(&mut self) -> Result<()> {
+        self.index.force_poke_all(|_, e| e.atime = 0)
+    }
+
+    pub fn is_pinned(&self, r: &ObjRef) -> Result<bool> {
+        Ok(self.index.get(r)?.map_or(false, |e| e.refcount >= PINNED))
     }
 
     /// 1 TiB default slab capacity.  Phase 0 / 1 hardcode (Phase 2 adds

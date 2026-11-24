@@ -132,6 +132,10 @@ impl Keypair {
         let vk: Vk87 = <Sk87 as MlKeypair>::verifying_key(&sk);
         Self { name, created: rfc3339_now(), sk, vk }
     }
+    /// Generate from OS entropy (`rand::rngs::OsRng`); there is no fallback.
+    pub fn generate_os(name: String) -> Self {
+        Self::generate(&mut rand::rngs::OsRng, name)
+    }
     pub fn verifying_key_bytes(&self) -> Vec<u8> {
         self.vk.to_bytes().as_slice().to_vec()
     }
@@ -238,6 +242,30 @@ impl SignedEnvelope {
                                 format!("bc:signer mldsa87 verify: {e}")))?;
         Ok(())
     }
+}
+
+/// Raw ML-DSA-87 verification — the one verifier every caller (Rust and, via
+/// the C ABI in [`crate::ffi`], Perl) goes through.  Fail closed: any length
+/// mismatch, malformed signature or verification failure is `false`.
+pub fn mldsa87_verify(vk_bytes: &[u8], msg: &[u8], sig_bytes: &[u8]) -> bool {
+    if vk_bytes.len() != MLDSA87_VK_LEN || sig_bytes.len() != MLDSA87_SIG_LEN {
+        return false;
+    }
+    let vk: Vk87 = Vk87::decode(enc_vk_from_slice(vk_bytes));
+    let Ok(sig) = Sig87::try_from(sig_bytes) else { return false };
+    Verifier::<Sig87>::verify(&vk, msg, &sig).is_ok()
+}
+
+/// Raw ML-DSA-87 signing over `msg` (deterministic), for domain-separated
+/// payloads built by callers (node certificates, instruments).
+pub fn mldsa87_sign(kp: &Keypair, msg: &[u8]) -> Result<Vec<u8>> {
+    use ml_dsa::SignatureEncoding;
+    let sig: Sig87 = Signer::<Sig87>::try_sign(&kp.sk, msg)
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData,
+                                         format!("mldsa87 sign: {e}")))?;
+    let enc = sig.to_bytes();
+    let b: &[u8] = enc.as_ref();
+    Ok(b.to_vec())
 }
 
 // ── zcap.v1 boot-authority token (Amin::Auth::ZCap wire format 1:1) ─────

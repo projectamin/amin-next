@@ -27,24 +27,25 @@ sub build_zcap_token (%o) {
         @_,
     );
     require Amin::Test::ZCapSign;
-    if (Amin::Test::ZCapSign::zcap_can_sign()) {
-        my %s = %o;
-        # A `vk` override means the embedded anchor slot must NOT match the
-        # registered anchors (unknown_kid test): splice it post-signing.
-        $s{vk_override} = delete $s{vk} if defined $s{vk};
-        return Amin::Test::ZCapSign::zcap_signed_token(%s);
-    }
-    return Amin::Test::ZCapSign::zcap_structural_token(%o);
+    my %s = %o;
+    # A `vk` override means the embedded anchor slot must NOT match the
+    # registered anchors (unknown_kid test): splice it post-signing.
+    $s{vk_override} = delete $s{vk} if defined $s{vk};
+    return Amin::Test::ZCapSign::zcap_signed_token(%s);
 }
+
+# The verifier is the Rust one (libbitcache); the signer is bctool.  Without
+# them nothing can be verified — and nothing is accepted — so there is no
+# degraded "structural" mode to run: the suite needs the built toolchain.
+require Amin::Test::ZCapSign;
+plan skip_all => 'toolchain not built (bctool / libbitcache): run cargo build'
+    unless Amin::Test::ZCapSign::zcap_can_sign() && Amin::Auth::ZCap->can_verify;
 
 # ── Z4: bad_sig / unknown_kid / missing_enforce → fail-closed ──
 # Case A: Crypt::ML-DSA installed → actual ML-DSA-87 verify() → real pass/fail
 # Case B: modules missing → structural assertions only (still pass fail-closed markers)
 
-my $cv = Amin::Auth::ZCap->can_verify;
-my $case_a = $cv;  # set to truthy if can run actual crypto
-diag($case_a ? 't29: running CASE A — Crypt::ML-DSA present, actual crypto verify'
-             : 't29: running CASE B — CPAN ML-DSA/BLAKE3 not installed; structural token parse + fail-closed markers');
+my $case_a = 1;   # real ML-DSA-87 verification is the only mode
 
 # ── Case 1: BAD_SIG — corrupt 1 byte inside 4627B sig section → rc=-5123 ──
 {
@@ -150,6 +151,49 @@ XML
         't29-Z4-case3: status msg=missing_token_enforce present');
     unlike($out, qr/MISSING_TOKEN_LEAK_E5F6/,
         't29-Z4-case3: zero missing-token workload leak; Profile-as-Contract chain zcap signature is outer fence; unsigned = no exec');
+}
+
+# ── Case 4: structural placeholder token (no real signature) → REJECTED ──
+# The legacy no-crypto path used to accept this.  It must never verify.
+{
+    my $tok = Amin::Test::ZCapSign::zcap_structural_token(
+        tiers => ['metal-32c'], zones => ['us-east-1'], netpols => ['vpc-a']);
+    my $xml = sprintf(<<'XML', $tok);
+<?xml version="1.0"?>
+<amin:init xmlns:amin="http://projectamin.org/ns/2026/">
+  <amin:zcap amin:token="%s"/>
+  <amin:spawn amin:name="structural_wontrun" amin:tier="metal-32c" amin:zone="us-east-1" amin:redundancy="1" amin:argv="./STRUCTURAL_LEAK_MARKER_G7H8" />
+</amin:init>
+XML
+    my $out = Amin::Machine::Dispatcher->run(
+        mode => 'run', source_xml => $xml,
+        Handler => Amin::Handler::Writer->new(indent => 0),
+        Log => Amin::Log::Standard->new(stderr => 0),
+    );
+    like($out, qr/rc="-512[23]"/, 't29-case4: structural (unsigned) token → rejected, fail-closed');
+    unlike($out, qr/STRUCTURAL_LEAK_MARKER_G7H8/, 't29-case4: no workload leak for structural token');
+}
+
+# ── Case 5: no trust anchors registered → every token rejected ──
+{
+    my $tok = build_zcap_token();
+    my @saved = @{ Amin::Auth::ZCap->registered_trust_anchors };
+    Amin::Auth::ZCap->clear_trust_anchors;
+    my $xml = sprintf(<<'XML', $tok);
+<?xml version="1.0"?>
+<amin:init xmlns:amin="http://projectamin.org/ns/2026/">
+  <amin:zcap amin:token="%s"/>
+  <amin:spawn amin:name="noanchor_wontrun" amin:tier="metal-32c" amin:zone="us-east-1" amin:redundancy="1" amin:argv="./NOANCHOR_LEAK_MARKER_J9K0" />
+</amin:init>
+XML
+    my $out = Amin::Machine::Dispatcher->run(
+        mode => 'run', source_xml => $xml,
+        Handler => Amin::Handler::Writer->new(indent => 0),
+        Log => Amin::Log::Standard->new(stderr => 0),
+    );
+    Amin::Auth::ZCap->register_trust_anchor($_) for @saved;
+    like($out, qr/rc="-5122"/, 't29-case5: no anchors registered → unknown_kid, nothing trusted');
+    unlike($out, qr/NOANCHOR_LEAK_MARKER_J9K0/, 't29-case5: no workload leak without anchors');
 }
 
 done_testing;

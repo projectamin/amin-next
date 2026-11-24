@@ -25,6 +25,11 @@ libc.workspace            = true
 bsax                      = { path = "../bsax", default-features = false, features = ["std"] }
 bitcache                  = { path = "../bitcache" }
 blake3.workspace          = true
+awp3                      = { path = "../awp3" }
+getrandom                 = { version = "0.2", features = ["std"] }
 bytes.workspace           = true
 reed-solomon-16.workspace = true
 tempfile.workspace        = true
+
+[dev-dependencies]
+rand.workspace            = true

@@ -9,9 +9,27 @@ use constant {
     RC_INSTRUMENT_SIG   => -4353,
 };
 
-sub _can_verify {
-    state $cv = eval { require Amin::Crypto::ML_DSA; 1 } || 0;
-    return $cv;
+# ── Trusted makers ────────────────────────────────────────────────────────
+# A signature checked against a key the instrument itself carries proves
+# nothing: anyone can sign with a key of their own choosing.  An instrument is
+# accepted only when its VK is one the process already trusts — registered for
+# that maker here, or a mesh trust anchor (L<Amin::Auth::ZCap>).
+my %MAKER_VK;
+
+sub register_maker ($class, $maker, $vk) {
+    return unless defined $maker && length $maker && defined $vk && length $vk;
+    $MAKER_VK{$maker} = $vk;
+    return;
+}
+sub clear_makers ($class) { %MAKER_VK = (); return; }
+
+sub _vk_trusted ($maker, $vk) {
+    return 1 if defined $MAKER_VK{$maker} && $MAKER_VK{$maker} eq $vk;
+    require Amin::Auth::ZCap;
+    for my $a (Amin::Auth::ZCap->registered_trust_anchors->@*) {
+        return 1 if defined $a && $a eq $vk;
+    }
+    return 0;
 }
 
 sub element { 'instrument' }
@@ -37,15 +55,26 @@ sub on_article_close ($self, $el) {
         return;
     }
 
-    my $sig_ok = 1;
-    if (length($sig) && length($vk)) {
-        if (_can_verify()) {
-            require MIME::Base64;
-            my $raw_sig = MIME::Base64::decode_base64($sig);
-            my $raw_vk  = MIME::Base64::decode_base64($vk);
-            my $msg     = join("\0", $maker, $payee, $amount, $kind) . 'amin.ucc.art3.v1';
-            eval { $sig_ok = Amin::Crypto::ML_DSA::verify_87($raw_vk, $raw_sig, $msg); 1 }
-                or do { $sig_ok = 0 };
+    # Fail closed.  Accepted only if the signature verifies (Rust verifier,
+    # bitcache::trust::instrument_verify) under a VK we already trust.  An
+    # unsigned instrument, a missing verifier and an untrusted key are all
+    # rejections — there is no "structural" accept.
+    my $sig_ok = 0;
+    my $why    = 'ML-DSA-87 signature verification failed';
+    if (!length($sig) || !length($vk)) {
+        $why = 'instrument is unsigned';
+    } else {
+        require MIME::Base64;
+        require Amin::Crypto::Verify;
+        my $raw_sig = MIME::Base64::decode_base64($sig);
+        my $raw_vk  = MIME::Base64::decode_base64($vk);
+        if (!_vk_trusted($maker, $raw_vk)) {
+            $why = 'instrument key is not trusted for this maker';
+        } else {
+            my $rc = Amin::Crypto::Verify::instrument_verify(
+                $maker, $payee, $amount, $kind, $raw_vk, $raw_sig);
+            $sig_ok = ($rc == Amin::Crypto::Verify::RC_OK()) ? 1 : 0;
+            $why = 'verifier unavailable' if $rc == Amin::Crypto::Verify::RC_BAD_ARG();
         }
     }
 
@@ -56,7 +85,7 @@ sub on_article_close ($self, $el) {
         );
         $self->_result(kind => 'error', rc => RC_INSTRUMENT_SIG,
             exit_kind => 'ucc_bad_sig',
-            msg => 'ML-DSA-87 signature verification failed');
+            msg => $why);
         return;
     }
 

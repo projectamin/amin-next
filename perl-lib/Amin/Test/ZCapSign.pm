@@ -15,9 +15,11 @@ package Amin::Test::ZCapSign;
 #   3. support `vk_override` — splice a foreign VK over the embedded anchor
 #      slot after signing (used to exercise unknown_kid, which fails before
 #      any signature verification);
-#   4. fall back to the legacy structural placeholder token when no bctool
-#      binary is available (mirrors the "no crypto module" Case B used by
-#      t/29) so suites keep a deterministic degraded path.
+#   4. sign UCC Art.3 instruments (`instrument_attrs`) and register the maker
+#      key with Amin::UCC::Instruments;
+#   5. keep the legacy structural placeholder token (`zcap_structural_token`)
+#      ONLY as a negative fixture: the trust layer is fail-closed, so a
+#      structural token must be REJECTED — it is never an acceptable fallback.
 # ═══════════════════════════════════════════════════════════════════════════
 
 use v5.38;
@@ -29,7 +31,7 @@ use Exporter 'import';
 our @ISA       = ('Exporter');
 our @EXPORT_OK = qw(
     zcap_can_sign zcap_signed_token zcap_structural_token
-    zcap_signer_keypair make_zcap_token
+    zcap_signer_keypair make_zcap_token instrument_attrs
 );
 
 # ── locate bctool ───────────────────────────────────────────────────────────
@@ -153,8 +155,35 @@ sub zcap_structural_token (%o) {
     return MIME::Base64::encode_base64($bytes, '');
 }
 
+# Always a genuinely signed token.  No bctool ⇒ the suite cannot run: callers
+# gate on zcap_can_sign() (skip_all) instead of degrading to a token the
+# verifier would (correctly) reject.
 sub make_zcap_token (%o) {
-    return zcap_can_sign() ? zcap_signed_token(%o) : zcap_structural_token(%o);
+    return zcap_signed_token(%o);
+}
+
+# Attribute text (`ucc:sig="…" ucc:vk="…"`) for a signed Art.3 instrument.  The
+# signing key is the per-process test key, registered as `maker`'s key.
+sub instrument_attrs (%o) {
+    my $bctool = _bctool_path() or die "instrument signer: no bctool";
+    my $key;
+    if ($o{untrusted}) {
+        # A throw-away key nobody registered: neither a maker key nor an anchor.
+        require File::Temp;
+        my $dir = File::Temp::tempdir(CLEANUP => 1);
+        my $sk  = "$dir/rogue.sk";
+        _run_tool([ $bctool, 'genkey', '--name', 'rogue', '--sk', $sk ]);
+        $key = { sk => $sk };
+    } else {
+        $key = zcap_signer_keypair() or die "instrument signer: no bctool";
+    }
+    my %kv = %{ _kv(_run_tool([ $bctool, 'instrument-sign', '--sk', $key->{sk},
+        '--maker', $o{maker}, '--payee', $o{payee},
+        '--amount', $o{amount}, '--kind', $o{kind} ])) };
+    require Amin::UCC::Instruments;
+    Amin::UCC::Instruments->register_maker($o{maker}, $key->{vk_bytes})
+        unless $o{untrusted};
+    return sprintf('ucc:sig="%s" ucc:vk="%s"', $kv{sig}, $kv{vk});
 }
 
 1;

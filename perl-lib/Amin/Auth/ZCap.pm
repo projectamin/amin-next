@@ -50,12 +50,8 @@ sub clear_trust_anchors ($pkg_or_class) { @TRUST_ANCHORS = (); return; }
 sub BUILDARGS ($class, %o) { $o{enforce} //= 1; \%o; }
 
 sub can_verify ($class_or_self) {
-    state $cv = eval {
-        require Amin::Crypto::ML_DSA;
-        require Digest::BLAKE3;
-        1;
-    } || 0;
-    return $cv;
+    require Amin::Crypto::Verify;
+    return Amin::Crypto::Verify::available();
 }
 
 sub _memory_tier_ceiling ($tier) {
@@ -137,58 +133,31 @@ sub _parse_token_fields ($self, $bytes) {
     };
 }
 
-sub _extend_len_prefix_utf8 ($bufref, $s) {
-    use bytes;
-    my $b = $s // '';
-    $$bufref .= pack('v', length($b)) . $b;
-}
-
-sub _compute_scope_hash ($self, $parsed) {
-    use feature 'bitwise';
-    no warnings 'experimental::bitwise';
-    my $buf = '';
-    for my $t ($parsed->{tiers}->@*) { _extend_len_prefix_utf8(\$buf, $t); }
-    for my $z ($parsed->{zones}->@*) { _extend_len_prefix_utf8(\$buf, $z); }
-    for my $n ($parsed->{netpolicies}->@*) { _extend_len_prefix_utf8(\$buf, $n); }
-    $buf .= pack('C',  $parsed->{max_redundancy});
-    $buf .= pack('V',  $parsed->{vpc_quota});
-    $buf .= pack('C',  $parsed->{memory_tier});
-    $buf .= "amin.zcap.v1";
-
-    if (__PACKAGE__->can_verify) {
-        my $hasher = Digest::BLAKE3::->new();
-        $hasher->add($buf);
-        return $hasher->hexdigest();
-    } else {
-        use bytes;
-        my $fallback = "\x00" x 32;
-        for my $c (split //, $buf) { $fallback ^.= ($c x int(32/length($c)+1)) }
-        return substr($fallback,0,32);
-    }
-}
-
 sub _vk_in_anchor_list ($self, $vk, $anchors) {
     return 0 unless defined $vk && defined $anchors;
     for my $a ($anchors->@*) { return 1 if defined $a && $a eq $vk; }
     return 0;
 }
 
+# Trust decision: format → anchor → signature, all in the Rust verifier
+# (bitcache::trust::zcap_verify).  Perl still parses the fields afterwards,
+# but only to build scope sets — it never decides whether the token is
+# authentic.  Fail closed: an unavailable verifier, an empty anchor list or
+# any unexpected return code is a rejection.
 sub _verify_token ($self, $token_b64, $allow_vks) {
+    require Amin::Crypto::Verify;
     my $raw = $self->_b64_decode_token($token_b64);
     my $p = $self->_parse_token_fields($raw);
     if ($p->{error}) { return (0, $p->{error}, $p->{detail}, $p); }
     unless ($self->_vk_in_anchor_list($p->{vk}, $allow_vks || [])) {
         return (0, 'unknown_kid', 'vk not in mesh trust anchors', $p);
     }
-    my $local_hash = $self->_compute_scope_hash($p);
-    my $smsg = $local_hash . ($p->{vk} // '') . pack('Q<', $p->{ts} // 0) . ($p->{tenant_id} // '') . "amin.zcap.v1";
-    my $ok_sig = 1;
-    if (__PACKAGE__->can_verify) {
-        eval { $ok_sig = Amin::Crypto::ML_DSA::verify_87($p->{vk}, $p->{sig}, $smsg); 1 }
-            or do { $ok_sig = 0; };
-    }
-    unless ($ok_sig) { return (0, 'bad_sig', 'ml-dsa87 verify failed', $p); }
-    return (1, undef, undef, $p);
+    my $rc = Amin::Crypto::Verify::zcap_verify($raw, $allow_vks || []);
+    return (1, undef, undef, $p) if $rc == Amin::Crypto::Verify::RC_OK();
+    return (0, 'format',      'token rejected by verifier',       $p) if $rc == Amin::Crypto::Verify::RC_FORMAT();
+    return (0, 'unknown_kid', 'vk not in mesh trust anchors',     $p) if $rc == Amin::Crypto::Verify::RC_UNKNOWN_KID();
+    return (0, 'bad_sig',     'ml-dsa87 verify failed',           $p) if $rc == Amin::Crypto::Verify::RC_BAD_SIG();
+    return (0, 'bad_sig',     "verifier unavailable or error ($rc)", $p);
 }
 
 sub _scope_check ($self, $ln, $attrs) {
@@ -316,9 +285,8 @@ sub _process_doc_zcap_token_from_attr ($self, $attrs) {
     }
     my $anchors = $self->trust_anchor_vks // [];
     my @combined = ($anchors->@*, __PACKAGE__->registered_trust_anchors->@*);
-    if (@combined == 0) {
-        push @combined, "\x00" x MLDSA87_VK_LEN; # dummy all-zero test anchor
-    }
+    # No registered anchors ⇒ nothing can be trusted ⇒ every token is rejected
+    # (unknown_kid).  There is deliberately no placeholder anchor.
     my ($ok, $code, $detail, $parsed) = $self->_verify_token($token, \@combined);
     if (!$ok) {
         $self->{_doc_zcap_error_rc}   = ($code eq 'unknown_kid') ? RC_UNKNOWN_KID

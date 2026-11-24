@@ -30,10 +30,12 @@
 #![deny(clippy::pedantic)]
 #![allow(clippy::must_use_candidate, clippy::return_self_not_must_use, clippy::missing_errors_doc, clippy::missing_panics_doc)]
 
+pub mod boot_ledger;
 pub mod boot_offer;
 pub mod bootstrap;
 pub mod cas_fetch;
 pub mod fd_handoff;
+pub mod node_identity;
 pub mod stage_decoder;
 
 /// Real PID-1 entrypoint on the metal host.  Called from the binary main

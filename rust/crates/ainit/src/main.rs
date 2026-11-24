@@ -69,17 +69,43 @@ fn run_simulated_entrypoint() -> anyhow::Result<()> {
     use ainit::fd_handoff::{self, HandoffFds, HANDOFF_FD_COUNT};
 
     let tmp = tempfile::tempdir()?;
-    let hello = MeshHello::new([0x11u8; 32], 1);
-    let offer = BootOffer {
+    // A throw-away authority + node identity: the simulation exercises the
+    // real verification path (ML-DSA-87 offer + authority-certified node key),
+    // not the CI bypass.
+    let authority = bitcache::Keypair::generate_os("sim-tor".into());
+    let node = ainit::node_identity::NodeIdentity::generate()?;
+    let hello = MeshHello::new([0x11u8; 32], 1, node.vk_hash());
+    let cert = bitcache::nodecert::NodeCert {
+        node_id: "sim-node".into(),
+        node_vk_hash: node.vk_hash(),
+        boot_counter: 1,
+        scope_hash: [0u8; 32],
+        valid_from_pos: 0,
+        valid_to_pos: u64::MAX,
+    };
+    let mut offer = BootOffer {
         node_id:               "sim-node".into(),
         init_profile_ref:      "bitcache:blake3:ffff1111".into(),
         aminexec_rootfs_ref:   "bitcache:blake3:aaaa1111".into(),
         slab_dev:              PathBuf::from("/dev/nvme0n1p2"),
         zcap_token_b64:        "zcap:mldsa87:SIM-TOKEN".into(),
         offer_ts_sec:          1_700_000_000,
-        offer_signature_bytes: vec![0xAAu8; 128],
+        authority_pos:         0,
+        ledger_snapshot_ref:   String::new(),
+        node_cert:             cert.sign(&authority)?,
+        offer_signature_bytes: Vec::new(),
     };
-    offer.verify(&hello, &TrustedAnchor::DevAcceptAll, 1_700_000_100)?;
+    offer.sign(&hello, &authority)?;
+    offer.verify(&hello, &TrustedAnchor::MLDsa87(authority.verifying_key_bytes()), 1_700_000_100)?;
+
+    // Record the verified boot as the first link of this node's audit chain.
+    if let Some(slab) = std::env::var_os("AMIN_LEDGER_SLAB") {
+        let mut ledger = ainit::boot_ledger::open_for_boot(
+            std::path::Path::new(&slab), &offer, Some(&authority.verifying_key_bytes()),
+            |r| anyhow::bail!("no fetcher wired for ledger snapshot {r}"))?;
+        let (idx, e) = ainit::boot_ledger::record_boot(&mut ledger, &offer, &hello, bitcache::epoch_now())?;
+        eprintln!("ainit: boot recorded in ledger: index={idx} actor={} seq={}", e.actor, e.seq);
+    }
 
     // Build a fake init-profile BSAX via encoder for end-to-end.
     let bsax_bytes = ainit::bootstrap::encode_boot_profile("sim-node", "/dev/nvme0n1p2");
@@ -119,3 +145,4 @@ fn run_simulated_entrypoint() -> anyhow::Result<()> {
     );
     Ok(())
 }
+
