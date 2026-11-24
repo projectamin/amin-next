@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  music app: the bundle's own filter declarations, merged machine-first at boot.
+  One entry per mu: element; the gate splices the filter in while its element
+  flows.  Page is the one static filter (the skeleton).  Effects sit at `begin`
+  so their <mu:result/> reaches the page before its request does.  The set is
+  fixed at startup: a request names an action and params, never a filter.
+-->
+<amin:machine xmlns:amin="http://projectamin.org/ns/2026/">
+
+  <filter class="Amin::AI::Music::Page" position="middle" />
+
+  <filter class="Amin::AI::Music::Header" position="middle"
+          element="header" namespace="urn:projectamin:app:music"
+          permissions="music.provider.read" />
+  <filter class="Amin::AI::Music::Composer" position="middle"
+          element="composer" namespace="urn:projectamin:app:music"
+          permissions="music.take.read" />
+  <filter class="Amin::AI::Music::Settings" position="middle"
+          element="settings" namespace="urn:projectamin:app:music"
+          permissions="music.provider.read" />
+  <filter class="Amin::AI::Music::Library" position="middle"
+          element="library" namespace="urn:projectamin:app:music"
+          permissions="music.take.read" />
+  <filter class="Amin::AI::Music::Make" position="middle"
+          element="make" namespace="urn:projectamin:app:music"
+          permissions="music.take.make" />
+
+  <filter class="Amin::AI::Music::SettingsSave" position="begin"
+          element="settings-save" namespace="urn:projectamin:app:music"
+          permissions="music.provider.write" />
+
+</amin:machine>

@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  music: a music-only chat.  Style, description and lyrics in; a take out,
+  played in place.  From the amin checkout:
+
+    bin/axa examples/apps/music
+
+  Settings, takes and the provider key live in ~/.amin-music.  The xmlns:mu
+  declaration is repeated on every fragment root because Amin::AXA::App
+  serialises child nodes individually.
+-->
+<axa:app xmlns:axa="http://projectamin.org/ns/axa/1"
+         xmlns:mu="urn:projectamin:app:music"
+         id="io.projectamin.apps.music"
+         name="music">
+
+  <axa:route path="/" method="GET">
+    <mu:request xmlns:mu="urn:projectamin:app:music" take="{take}" sid="{sid}" csrf="{csrf}"/>
+  </axa:route>
+
+  <axa:route path="/settings" method="GET">
+    <mu:request xmlns:mu="urn:projectamin:app:music" panel="settings" sid="{sid}" csrf="{csrf}"/>
+  </axa:route>
+
+  <!-- A take is the bytes under ~/.amin-music/takes: one name-safe segment,
+       no traversal, so the audio element streams and seeks. -->
+  <axa:route path="/audio/:name" method="GET"
+             file="$HOME/.amin-music/takes/:name" type="audio/mpeg"/>
+
+  <axa:action name="music.make" path="/" method="POST">
+    <mu:action xmlns:mu="urn:projectamin:app:music" op="music.make"
+               style="{style}" prompt="{prompt}" lyrics="{lyrics}"
+               duration="{duration}" instrumental="{instrumental}" sid="{sid}" csrf="{csrf}"/>
+  </axa:action>
+
+  <axa:action name="settings.save" path="/" method="POST">
+    <mu:settings-save xmlns:mu="urn:projectamin:app:music"
+                      provider="{provider}" api="{api}" base="{base}"
+                      music="{music}" key="{key}" remove_key="{remove_key}"/>
+    <mu:request xmlns:mu="urn:projectamin:app:music"
+                provider="{provider}" api="{api}" base="{base}" music="{music}"
+                sid="{sid}" csrf="{csrf}"/>
+  </axa:action>
+
+</axa:app>
