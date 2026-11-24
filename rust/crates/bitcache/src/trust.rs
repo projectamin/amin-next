@@ -142,23 +142,28 @@ pub fn zcap_verify(token: &[u8], anchors: &[&[u8]]) -> Result<ZcapParsed, Reject
 
 // ── UCC Art.3 instruments ───────────────────────────────────────────────────
 
-/// Exact message a maker signs: `maker \0 payee \0 amount \0 kind ‖ "amin.ucc.art3.v1"`.
-pub fn instrument_message(maker: &str, payee: &str, amount: &str, kind: &str) -> Vec<u8> {
+/// Exact message a maker signs:
+/// `maker \0 payee \0 amount \0 kind \0 seq(8, BE) ‖ "amin.ucc.art3.v2"`.
+/// `seq` is the maker's own strictly-increasing instrument counter: it makes
+/// every signed instrument unique, so a verifier can refuse a replay.
+pub fn instrument_message(maker: &str, payee: &str, amount: &str, kind: &str, seq: u64) -> Vec<u8> {
     let mut m = Vec::new();
     for (i, f) in [maker, payee, amount, kind].iter().enumerate() {
         if i > 0 { m.push(0); }
         m.extend_from_slice(f.as_bytes());
     }
-    m.extend_from_slice(b"amin.ucc.art3.v1");
+    m.push(0);
+    m.extend_from_slice(&seq.to_be_bytes());
+    m.extend_from_slice(b"amin.ucc.art3.v2");
     m
 }
 
 /// Verify an instrument signature (raw VK / signature bytes).
-pub fn instrument_verify(maker: &str, payee: &str, amount: &str, kind: &str, vk: &[u8], sig: &[u8]) -> Result<(), Reject> {
+pub fn instrument_verify(maker: &str, payee: &str, amount: &str, kind: &str, seq: u64, vk: &[u8], sig: &[u8]) -> Result<(), Reject> {
     if vk.len() != MLDSA87_VK_LEN || sig.len() != MLDSA87_SIG_LEN {
         return Err(Reject::Format);
     }
-    if mldsa87_verify(vk, &instrument_message(maker, payee, amount, kind), sig) {
+    if mldsa87_verify(vk, &instrument_message(maker, payee, amount, kind, seq), sig) {
         Ok(())
     } else {
         Err(Reject::BadSig)
@@ -215,11 +220,12 @@ mod tests {
     #[test]
     fn instrument_roundtrip() {
         let k = kp(3);
-        let msg = instrument_message("a", "b", "42.50", "check");
+        let msg = instrument_message("a", "b", "42.50", "check", 7);
         let sig = crate::signer::mldsa87_sign(&k, &msg).unwrap();
         let vk = k.verifying_key_bytes();
-        assert!(instrument_verify("a", "b", "42.50", "check", &vk, &sig).is_ok());
-        assert_eq!(instrument_verify("a", "b", "42.51", "check", &vk, &sig), Err(Reject::BadSig));
-        assert_eq!(instrument_verify("a", "b", "42.50", "check", &vk, &sig[..10]), Err(Reject::Format));
+        assert!(instrument_verify("a", "b", "42.50", "check", 7, &vk, &sig).is_ok());
+        assert_eq!(instrument_verify("a", "b", "42.51", "check", 7, &vk, &sig), Err(Reject::BadSig));
+        assert_eq!(instrument_verify("a", "b", "42.50", "check", 8, &vk, &sig), Err(Reject::BadSig), "seq is signed");
+        assert_eq!(instrument_verify("a", "b", "42.50", "check", 7, &vk, &sig[..10]), Err(Reject::Format));
     }
 }

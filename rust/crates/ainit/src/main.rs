@@ -100,9 +100,15 @@ fn run_simulated_entrypoint() -> anyhow::Result<()> {
 
     // Record the verified boot as the first link of this node's audit chain.
     if let Some(slab) = std::env::var_os("AMIN_LEDGER_SLAB") {
+        // A joining node reads the snapshot from AMIN_SNAPSHOT_SLAB (populated
+        // by mesh replication); with none configured, joining fails closed.
+        let snap_slab = std::env::var_os("AMIN_SNAPSHOT_SLAB").map(std::path::PathBuf::from);
         let mut ledger = ainit::boot_ledger::open_for_boot(
             std::path::Path::new(&slab), &offer, Some(&authority.verifying_key_bytes()),
-            |r| anyhow::bail!("no fetcher wired for ledger snapshot {r}"))?;
+            |r| match &snap_slab {
+                Some(p) => ainit::boot_ledger::slab_fetcher(p)(r),
+                None => anyhow::bail!("no AMIN_SNAPSHOT_SLAB configured for ledger snapshot {r}"),
+            })?;
         let (idx, e) = ainit::boot_ledger::record_boot(&mut ledger, &offer, &hello, bitcache::epoch_now())?;
         eprintln!("ainit: boot recorded in ledger: index={idx} actor={} seq={}", e.actor, e.seq);
     }

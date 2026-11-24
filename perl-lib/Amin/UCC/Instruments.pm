@@ -32,6 +32,33 @@ sub _vk_trusted ($maker, $vk) {
     return 0;
 }
 
+# Per-maker high-water mark of accepted instrument seqs (one number per maker).
+# Persisted when AMIN_INSTRUMENT_STATE names a file, so a restart cannot reopen
+# the replay window; otherwise it lives for the process.
+our %LAST;
+my $loaded = '';
+sub _state_file () { $ENV{AMIN_INSTRUMENT_STATE} }
+sub _seq_accept ($maker, $seq) {
+    my $f = _state_file();
+    if (defined $f && length $f && $loaded ne $f) {
+        %LAST = ();
+        if (open my $in, '<', $f) {
+            while (<$in>) { chomp; my ($m, $s) = split /\t/, $_, 2; $LAST{$m} = $s if defined $s && $s =~ /\A\d+\z/ }
+            close $in;
+        }
+        $loaded = $f;
+    }
+    return 0 if exists $LAST{$maker} && $seq <= $LAST{$maker};
+    if (defined $f && length $f) {
+        # append-only; a failed write refuses the instrument (fail closed)
+        open my $out, '>>', $f or return 0;
+        print {$out} "$maker\t$seq\n" or return 0;
+        close $out or return 0;
+    }
+    $LAST{$maker} = $seq;
+    return 1;
+}
+
 sub element { 'instrument' }
 
 sub on_article_close ($self, $el) {
@@ -41,6 +68,7 @@ sub on_article_close ($self, $el) {
     my $amount = $self->_attr($el, 'amount') // '';
     my $sig    = $self->_attr($el, 'sig') // '';
     my $vk     = $self->_attr($el, 'vk') // '';
+    my $seq    = $self->_attr($el, 'seq') // '';
 
     unless ($KIND_ALLOW{$kind}) {
         $self->_result(kind => 'error', rc => RC_INSTRUMENT_FORM,
@@ -63,6 +91,8 @@ sub on_article_close ($self, $el) {
     my $why    = 'ML-DSA-87 signature verification failed';
     if (!length($sig) || !length($vk)) {
         $why = 'instrument is unsigned';
+    } elsif ($seq !~ /\A[0-9]{1,19}\z/) {
+        $why = 'instrument has no valid seq';
     } else {
         require MIME::Base64;
         require Amin::Crypto::Verify;
@@ -72,9 +102,16 @@ sub on_article_close ($self, $el) {
             $why = 'instrument key is not trusted for this maker';
         } else {
             my $rc = Amin::Crypto::Verify::instrument_verify(
-                $maker, $payee, $amount, $kind, $raw_vk, $raw_sig);
+                $maker, $payee, $amount, $kind, $seq, $raw_vk, $raw_sig);
             $sig_ok = ($rc == Amin::Crypto::Verify::RC_OK()) ? 1 : 0;
             $why = 'verifier unavailable' if $rc == Amin::Crypto::Verify::RC_BAD_ARG();
+            # Replay: the seq is signed, so it can be trusted.  Only a seq above
+            # everything this maker has had accepted passes; checked after the
+            # signature so unsigned junk cannot burn a maker's counter.
+            if ($sig_ok && !_seq_accept($maker, $seq)) {
+                $sig_ok = 0;
+                $why = 'instrument replay: seq not above the last accepted';
+            }
         }
     }
 

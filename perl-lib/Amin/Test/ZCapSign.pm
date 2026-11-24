@@ -177,13 +177,16 @@ sub instrument_attrs (%o) {
     } else {
         $key = zcap_signer_keypair() or die "instrument signer: no bctool";
     }
+    # each signed instrument gets its maker's next counter unless one is forced
+    our %INSTR_SEQ;
+    my $seq = defined $o{seq} ? $o{seq} : ++$INSTR_SEQ{ $o{maker} };
     my %kv = %{ _kv(_run_tool([ $bctool, 'instrument-sign', '--sk', $key->{sk},
-        '--maker', $o{maker}, '--payee', $o{payee},
+        '--maker', $o{maker}, '--seq', $seq, '--payee', $o{payee},
         '--amount', $o{amount}, '--kind', $o{kind} ])) };
     require Amin::UCC::Instruments;
     Amin::UCC::Instruments->register_maker($o{maker}, $key->{vk_bytes})
         unless $o{untrusted};
-    return sprintf('ucc:sig="%s" ucc:vk="%s"', $kv{sig}, $kv{vk});
+    return sprintf('ucc:seq="%s" ucc:sig="%s" ucc:vk="%s"', $seq, $kv{sig}, $kv{vk});
 }
 
 1;

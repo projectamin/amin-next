@@ -200,6 +200,21 @@ TEN
         'Art.3: signature-verified event records ML-DSA-87 algorithm');
 }
 
+# replay: the same signed instrument presented twice is refused the second time
+{
+    my $xml = $TXN_HEAD . <<'TEN';
+    <ucc:instrument ucc:kind="check" ucc:maker="rp" ucc:payee="b" ucc:amount="9.00"
+                    @@SIGN kind=check maker=rp payee=b amount=9.00@@/>
+  </ucc:transaction>
+TEN
+    my $signed = expand_signed($xml);
+    my $first  = run_ucc($signed);
+    like($first, qr/ucc:kind="signature-verified"/, 'Art.3: first presentation accepted');
+    my $again  = run_ucc($signed);
+    like($again, qr/ucc:exit_kind="ucc_bad_sig"/, 'Art.3: replayed instrument REJECTED');
+    like($again, qr/replay/, 'Art.3: rejection says replay');
+}
+
 # unsigned → rejected (previously accepted when no verifier module was present)
 {
     my $out = run_ucc($TXN_HEAD . <<'TEN');

@@ -22,7 +22,8 @@ use parent 'XML::SAX::Base';
 use Encode ();
 use IPC::Run qw(harness start finish);
 use Amin qw(NS);
-use Class::Tiny qw(slab_path bctool_path actor batch_max Handler Log Mode), {
+use Class::Tiny qw(slab_path bctool_path actor batch_max Handler Log Mode stream), {
+    _h => undef, _sin => sub { my $s = ''; \$s }, _sout => sub { my $s = ''; \$s }, _serr => sub { my $s = ''; \$s },
     _pending => sub { [] },
     _receipts => sub { [] },
     rules    => sub { +{ %{ _default_rules() } } },
@@ -36,6 +37,7 @@ sub _default_rules () {
     return {
         '{' . NS() . '}billing'        => { kind => 'billing',    actor_attr => 'tenant_id', subject_attr => 'pid' },
         '{' . _ucc_ns() . '}settlement' => { kind => 'settlement', subject_attr => 'kind' },
+        '{' . _ucc_ns() . '}event'      => { kind => 'ucc.event', actor_attr => 'maker', subject_attr => 'article' },
         '{' . LEDGER_NS . '}event'     => { generic => 1 },
     };
 }
@@ -109,6 +111,7 @@ sub start_element ($self, $el) {
 
 sub end_document ($self, @a) {
     $self->flush;
+    $self->close_stream;
     return $self->SUPER::end_document(@a);
 }
 
@@ -131,15 +134,20 @@ sub flush ($self) {
     my $p = $self->_pending;
     return 0 unless @$p;
     my $in = join("\n", @$p) . "\n";
-    my ($out, $err) = ('', '');
-    my $h = harness [$self->_bctool, 'ledger-append', '--slab', $self->_slab],
-        \$in, \$out, \$err;
-    eval { start $h; finish $h; 1 };
-    my $rc = $? >> 8;
-    if ($@ || $rc != 0) {
-        my $n = @$p;
-        $self->Log && $self->Log->error("[ledger] commit of $n event(s) failed rc=$rc $err");
-        die "Amin::Filter::Ledger: could not record $n audited event(s) (rc=$rc): $err\n";
+    my $out = '';
+    if ($self->stream || $ENV{AMIN_LEDGER_STREAM}) {
+        $out = $self->_stream_commit($in, scalar @$p);
+    } else {
+        my $err = '';
+        my $h = harness [$self->_bctool, 'ledger-append', '--slab', $self->_slab],
+            \$in, \$out, \$err;
+        eval { start $h; finish $h; 1 };
+        my $rc = $? >> 8;
+        if ($@ || $rc != 0) {
+            my $n = @$p;
+            $self->Log && $self->Log->error("[ledger] commit of $n event(s) failed rc=$rc $err");
+            die "Amin::Filter::Ledger: could not record $n audited event(s) (rc=$rc): $err\n";
+        }
     }
     my (%kv, $first);
     for my $l (split /\n/, $out) {
@@ -151,5 +159,43 @@ sub flush ($self) {
     @$p = ();
     return 1;
 }
+
+# One long-lived `bctool ledger-stream` process: a request is the event lines
+# plus a "." line, the reply is the append output (or `error\tmsg`) plus ".".
+# It holds the slab lock while open, so close it (end_document / DESTROY)
+# before another process opens the same ledger.
+sub _stream_commit ($self, $lines, $n) {
+    my ($sin, $sout, $serr) = ($self->_sin, $self->_sout, $self->_serr);
+    unless ($self->_h) {
+        $$sout = $$serr = $$sin = '';
+        $self->_h(start [$self->_bctool, 'ledger-stream', '--slab', $self->_slab], $sin, $sout, $serr);
+    }
+    my $h = $self->_h;
+    $$sout = '';
+    $$sin .= $lines . ".\n";
+    my $done = qr/(?:\A|\n)\.\n\z/;
+    my $ok = eval { $h->pump until $$sout =~ $done || !$h->pumpable; 1 };
+    my $reply = $$sout;
+    unless ($ok && $reply =~ $done) {
+        $self->Log && $self->Log->error("[ledger] stream died committing $n event(s): $$serr");
+        $self->_h(undef);
+        die "Amin::Filter::Ledger: ledger stream failed committing $n audited event(s): $$serr\n";
+    }
+    if ($reply =~ /^error\t(.*)$/m) {
+        $self->Log && $self->Log->error("[ledger] commit of $n event(s) refused: $1");
+        die "Amin::Filter::Ledger: could not record $n audited event(s): $1\n";
+    }
+    return $reply;
+}
+
+sub close_stream ($self) {
+    my $h = $self->_h or return;
+    ${ $self->_sin } = '';
+    eval { $h->finish; 1 };
+    $self->_h(undef);
+    return;
+}
+
+sub DESTROY ($self) { local ($@, $?); $self->close_stream if $self->_h }
 
 1;

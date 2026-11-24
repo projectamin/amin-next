@@ -85,6 +85,7 @@ pub unsafe extern "C" fn bitcache_instrument_verify(
     payee: *const u8, payee_len: usize,
     amount: *const u8, amount_len: usize,
     kind: *const u8, kind_len: usize,
+    seq: u64,
     vk: *const u8, vk_len: usize,
     sig: *const u8, sig_len: usize,
 ) -> i32 {
@@ -94,7 +95,7 @@ pub unsafe extern "C" fn bitcache_instrument_verify(
     ) else {
         return RC_BAD_ARG;
     };
-    match trust::instrument_verify(m, p, a, k, vk, sig) {
+    match trust::instrument_verify(m, p, a, k, seq, vk, sig) {
         Ok(()) => RC_OK,
         Err(r) => r.code(),
     }

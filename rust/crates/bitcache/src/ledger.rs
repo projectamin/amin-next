@@ -88,6 +88,22 @@ impl Ledger {
         // refs that hold nothing simply begin at the snapshot (e.g. a crash during join)
         let start = if all.is_empty() && start < base { write_refs(&refs_path, base, &all)?; base } else { start };
         let skip = (base - start) as usize;
+        // Finish an interrupted compaction: unpin what the intent file lists, but only if the
+        // new base really became durable, and never anything still referenced.
+        let intent_path = sidecar(path, "unpin");
+        if let Ok(b) = std::fs::read(&intent_path) {
+            if b.len() >= 8 && u64::from_le_bytes(b[..8].try_into().unwrap()) <= base {
+                let keep: HashSet<[u8; 32]> = all[skip..].iter().map(|r| *r.as_bytes()).collect();
+                for c in b[8..].chunks_exact(32) {
+                    let mut h = [0u8; 32];
+                    h.copy_from_slice(c);
+                    if !keep.contains(&h) {
+                        let _ = slab.unpin(&ObjRef(h));
+                    }
+                }
+            }
+            let _ = std::fs::remove_file(&intent_path);
+        }
         if all.len() < skip {
             return Err(BitcacheError::ChainViolation("ref file is shorter than the snapshot it follows".into()));
         }
@@ -291,14 +307,25 @@ impl Ledger {
             return Err(BitcacheError::ChainViolation("compact: checkpoint is not a prefix of this ledger".into()));
         }
         let n_drop = (s - self.base) as usize;
-        write_atomic(&sidecar(&self.path, "base"), &snap.encode())?;
-        write_refs(&self.refs_path, s, &self.list[n_drop..])?;
+        // Intent first: once the new base is durable, anything in this list is garbage even
+        // if we crash before unpinning it.  `open` finishes the job (and ignores the file if
+        // the base never advanced).
         let keep: HashSet<[u8; 32]> = self.list[n_drop..].iter().map(|r| *r.as_bytes()).collect();
+        let mut intent = s.to_le_bytes().to_vec();
         for r in &self.list[..n_drop] {
             if !keep.contains(r.as_bytes()) {
-                let _ = self.slab.unpin(r);
+                intent.extend_from_slice(r.as_bytes());
             }
         }
+        write_atomic(&sidecar(&self.path, "unpin"), &intent)?;
+        write_atomic(&sidecar(&self.path, "base"), &snap.encode())?;
+        write_refs(&self.refs_path, s, &self.list[n_drop..])?;
+        for c in intent[8..].chunks_exact(32) {
+            let mut h = [0u8; 32];
+            h.copy_from_slice(c);
+            let _ = self.slab.unpin(&ObjRef(h));
+        }
+        let _ = std::fs::remove_file(sidecar(&self.path, "unpin"));
         let path = self.path.clone();
         drop(self);
         Ok((Self::open(path)?, n_drop as u64))
@@ -596,5 +623,36 @@ mod tests {
         let ck = Checkpoint { origin: "dev-1".into(), size: l.size(), root: l.root() };
         let unsealed = checkpoint::sign(&ck, &key, &cert, &[]).unwrap();
         assert!(l.compact(&unsealed).is_err(), "no sealed state yet");
+    }
+
+    #[test]
+    fn an_interrupted_compaction_does_not_leak_pins_or_touch_live_entries() {
+        let (_auth, key, cert) = node("dev-1");
+        let d = tempfile::tempdir().unwrap();
+        let p = d.path().join("l.slab");
+        let mut l = Ledger::open(&p).unwrap();
+        for i in 0..30u32 { l.append_drafts(vec![draft("a", "billing", i)]).unwrap(); }
+        let wire = seal_and_sign(&mut l, "dev-1", &key, &cert);
+        for i in 30..35u32 { l.append_drafts(vec![draft("a", "billing", i)]).unwrap(); }
+        let dropped: Vec<ObjRef> = l.list[..31].to_vec();
+        let kept: Vec<ObjRef> = l.list[31..].to_vec();
+        // crash after the new base and the intent are durable, before refs/unpin
+        let snap = l.export_snapshot(&wire).unwrap();
+        let mut intent = 31u64.to_le_bytes().to_vec();
+        for r in &dropped { intent.extend_from_slice(r.as_bytes()); }
+        write_atomic(&sidecar(&p, "unpin"), &intent).unwrap();
+        write_atomic(&sidecar(&p, "base"), &snap.encode()).unwrap();
+        drop(l);
+        let r = Ledger::open(&p).unwrap();
+        assert!(!sidecar(&p, "unpin").exists(), "intent consumed");
+        for x in &dropped { assert!(!r.slab.is_pinned(x).unwrap(), "dropped entry unpinned"); }
+        for x in &kept { assert!(r.slab.is_pinned(x).unwrap(), "retained entry still pinned"); }
+        drop(r); // the slab is flock'd: one open handle at a time
+        // an intent whose base never advanced is ignored, not applied
+        let mut bogus = 9_999u64.to_le_bytes().to_vec();
+        bogus.extend_from_slice(kept[0].as_bytes());
+        write_atomic(&sidecar(&p, "unpin"), &bogus).unwrap();
+        let r3 = Ledger::open(&p).unwrap();
+        assert!(r3.slab.is_pinned(&kept[0]).unwrap(), "premature intent must not unpin live entries");
     }
 }

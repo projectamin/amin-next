@@ -86,6 +86,37 @@ my $h = Amin::Filter::Ledger->new(slab_path => $slab, bctool_path => $bctool, ac
 run_events($h, map { el($LNS, 'event', kind => 'tick', subject => "t$_") } 1..7);
 is([map { $_->{count} } $h->receipts], [3,3,1], 'batched 3+3+1');
 
+# long-lived writer: one bctool process across several batches, chains intact
+{
+    my $st = Amin::Filter::Ledger->new(slab_path => $slab, bctool_path => $bctool, actor => 'n', batch_max => 3, stream => 1);
+    run_events($st, map { el($LNS, 'event', kind => 'ai.action', actor => 'agent-9', subject => "s$_") } 1..7);
+    is([map { $_->{count} } $st->receipts], [3,3,1], 'stream: batched 3+3+1 on one process');
+    ok(!$st->_h, 'stream closed at end_document (slab lock released)');
+    my @sz = map { $_->{size} } $st->receipts;
+    is($sz[2] - $sz[0], 4, 'stream: receipts advance the same log');
+    my $v2 = `$bctool ledger-verify --slab $slab`; is($? >> 8, 0, 'stream: ledger-verify OK');
+    my $bad = Amin::Filter::Ledger->new(slab_path => $slab, bctool_path => $bctool, stream => 1);
+}
+
+# ucc:event + emitter helper
+{
+    require Amin::Ledger::Event;
+    my $e = Amin::Filter::Ledger->new(slab_path => $slab, bctool_path => $bctool, actor => 'node-1');
+    my $before = (split /\t/, (grep { /^size/ } split /\n/, `$bctool ledger-verify --slab $slab`)[0])[1];
+    $e->set_handler(bless { seen => [] }, 'Sink');
+    $e->start_document({});
+    $e->start_element(el($UCC, 'event', maker => 'maker-1', article => 'art-9', kind => 'filed'));
+    Amin::Ledger::Event::emit_authz($e, decision => 'deny', actor => 'agent-3', action => 'fs.write', reason => 'no cap');
+    Amin::Ledger::Event::emit_tool_call($e, agent => 'agent-3', tool => 'net.fetch', model => 'm1');
+    $e->end_document({});
+    my $n = $before;
+    my @k = map { show($n + $_) } 0..2;
+    is([map { $_->{kind} } @k], ['ucc.event','authz.deny','ai.tool_call'], 'ucc:event and emitter kinds recorded');
+    is($k[0]{actor}, 'maker-1', 'ucc:event actor = maker'); is($k[0]{subject}, 'art-9', 'ucc:event subject = article');
+    is($k[1]{'attr:reason'}, 'no cap', 'authz reason carried');
+    like(dies { Amin::Ledger::Event::emit_authz($e, decision => 'maybe') }, qr/grant or deny/, 'authz validates decision');
+}
+
 # fail closed: an unrecordable audited event aborts the stream
 my $bad = Amin::Filter::Ledger->new(slab_path => '/nonexistent-dir/x.slab', bctool_path => $bctool);
 like(dies { run_events($bad, el($LNS, 'event', kind => 'k')) }, qr/could not record 1 audited event/, 'commit failure is fatal');

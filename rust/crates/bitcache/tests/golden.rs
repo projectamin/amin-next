@@ -79,17 +79,18 @@ fn generate() -> String {
     rows.push(z("structural-placeholder-zero-anchor", -3, &structural, &[&[0u8; 2592]]));
 
     // ── instrument ─────────────────────────────────────────────────────────
-    let imsg = bitcache::trust::instrument_message("buyer-co", "seller-co", "1500.00", "draft");
+    let imsg = bitcache::trust::instrument_message("buyer-co", "seller-co", "1500.00", "draft", 41);
     let isig = mldsa87_sign(&auth, &imsg).unwrap();
-    let i = |name: &str, exp: i32, mk: &str, py: &str, am: &str, kd: &str, vk: &[u8], sg: &[u8]| {
-        format!("instrument\t{name}\t{exp}\t{mk}\t{py}\t{am}\t{kd}\t{}\t{}", b64(vk), b64(sg))
+    let i = |name: &str, exp: i32, mk: &str, py: &str, am: &str, kd: &str, sq: u64, vk: &[u8], sg: &[u8]| {
+        format!("instrument\t{name}\t{exp}\t{mk}\t{py}\t{am}\t{kd}\t{sq}\t{}\t{}", b64(vk), b64(sg))
     };
-    rows.push(i("valid", 0, "buyer-co", "seller-co", "1500.00", "draft", &avk, &isig));
-    rows.push(i("amount-tampered", -3, "buyer-co", "seller-co", "15000.00", "draft", &avk, &isig));
-    rows.push(i("payee-tampered", -3, "buyer-co", "mallory", "1500.00", "draft", &avk, &isig));
-    rows.push(i("kind-tampered", -3, "buyer-co", "seller-co", "1500.00", "check", &avk, &isig));
-    rows.push(i("wrong-key", -3, "buyer-co", "seller-co", "1500.00", "draft", &ovk, &isig));
-    rows.push(i("short-sig", -1, "buyer-co", "seller-co", "1500.00", "draft", &avk, &isig[..50]));
+    rows.push(i("valid", 0, "buyer-co", "seller-co", "1500.00", "draft", 41, &avk, &isig));
+    rows.push(i("amount-tampered", -3, "buyer-co", "seller-co", "15000.00", "draft", 41, &avk, &isig));
+    rows.push(i("payee-tampered", -3, "buyer-co", "mallory", "1500.00", "draft", 41, &avk, &isig));
+    rows.push(i("kind-tampered", -3, "buyer-co", "seller-co", "1500.00", "check", 41, &avk, &isig));
+    rows.push(i("wrong-key", -3, "buyer-co", "seller-co", "1500.00", "draft", 41, &ovk, &isig));
+    rows.push(i("short-sig", -1, "buyer-co", "seller-co", "1500.00", "draft", 41, &avk, &isig[..50]));
+    rows.push(i("seq-tampered", -3, "buyer-co", "seller-co", "1500.00", "draft", 42, &avk, &isig));
 
     // ── nodecert ───────────────────────────────────────────────────────────
     let cert = NodeCert {
@@ -359,10 +360,11 @@ fn vectors_match_the_c_abi() {
                     bitcache_zcap_verify(t.as_ptr(), t.len(), packed.as_ptr(), anchors.len())
                 }
                 "instrument" => {
-                    let (vk, sg) = (dec(f[7]), dec(f[8]));
+                    let (vk, sg) = (dec(f[8]), dec(f[9]));
+                    let sq: u64 = f[7].parse().unwrap();
                     bitcache_instrument_verify(
                         f[3].as_ptr(), f[3].len(), f[4].as_ptr(), f[4].len(), f[5].as_ptr(), f[5].len(),
-                        f[6].as_ptr(), f[6].len(), vk.as_ptr(), vk.len(), sg.as_ptr(), sg.len())
+                        f[6].as_ptr(), f[6].len(), sq, vk.as_ptr(), vk.len(), sg.as_ptr(), sg.len())
                 }
                 "nodecert" => {
                     let (c, vk) = (dec(f[3]), dec(f[4]));
@@ -475,5 +477,5 @@ fn vectors_match_the_c_abi() {
         assert_eq!(got, want, "{kind}/{name}");
         n += 1;
     }
-    assert!(n >= 98, "expected the full vector set, ran {n}");
+    assert!(n >= 99, "expected the full vector set, ran {n}");
 }

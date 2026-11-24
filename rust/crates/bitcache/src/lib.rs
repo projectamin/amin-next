@@ -27,6 +27,7 @@ pub mod entry;
 pub mod accepted;
 pub mod policy;
 pub mod iot;
+pub mod gossip;
 pub mod snapshot;
 pub mod receipt;
 pub mod mesh;

@@ -23,7 +23,7 @@ my $file = dirname(__FILE__) . '/data/trust-golden-v1.tsv';
 open my $fh, '<:raw', $file or die "open $file: $!";
 my @rows = grep { !/^#/ && length } map { chomp; $_ } <$fh>;
 close $fh;
-ok(@rows >= 98, 'golden set loaded: ' . scalar(@rows) . ' rows');
+ok(@rows >= 99, 'golden set loaded: ' . scalar(@rows) . ' rows');
 
 sub b ($s) { length($s // '') ? decode_base64($s) : '' }
 
@@ -47,8 +47,8 @@ for my $line (@rows) {
         is($ok ? 1 : 0, $want == 0 ? 1 : 0, "$label: Amin::Auth::ZCap accepts iff Rust accepts");
     }
     elsif ($kind eq 'instrument') {
-        my ($mk, $py, $am, $kd) = @f[0..3];
-        is(instrument_verify($mk, $py, $am, $kd, b($f[4]), b($f[5])), $want, "$label: Crypto::Verify");
+        my ($mk, $py, $am, $kd, $sq) = @f[0..4];
+        is(instrument_verify($mk, $py, $am, $kd, $sq, b($f[5]), b($f[6])), $want, "$label: Crypto::Verify");
     }
     elsif ($kind eq 'nodecert') {
         my ($cert, $vk, $pos, $hash_hex, $bc) = (b($f[0]), b($f[1]), $f[2], $f[3], $f[4]);

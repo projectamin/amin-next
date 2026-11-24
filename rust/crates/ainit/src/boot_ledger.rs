@@ -83,6 +83,19 @@ pub fn record_boot(ledger: &mut Ledger, offer: &BootOffer, hello: &MeshHello, ts
     Ok((first, es.remove(0)))
 }
 
+/// Fetch a ledger snapshot by its `bitcache:blake3:<hex>` ref from a local
+/// bitcache slab — the slab a mesh replica (or an installer) has populated.
+/// The bytes are untrusted here: `open_for_boot` re-checks the hash against the
+/// signed ref and the snapshot signature against the authority before use.
+pub fn slab_fetcher(slab: &Path) -> impl FnOnce(&str) -> Result<Vec<u8>> + '_ {
+    move |r: &str| {
+        let h = parse_blake3_ref(r).with_context(|| format!("malformed snapshot ref {r:?}"))?;
+        let mut s = bitcache::slab::SlabFile::open_or_create(slab)
+            .with_context(|| format!("opening snapshot slab {}", slab.display()))?;
+        s.get(&bitcache::slab::ObjRef(h)).with_context(|| format!("snapshot {r} is not in {}", slab.display()))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -199,6 +212,26 @@ mod tests {
         // and the signed join checkpoint is still provable from the new head
         let proof = l.consistency_proof(m.ck.size, l.size()).unwrap();
         assert!(bitcache::tlog::verify_consistency(m.ck.size, &m.ck.root, l.size(), &l.root(), &proof));
+    }
+
+    #[test]
+    fn a_node_joins_from_a_snapshot_held_in_a_local_slab_and_refuses_a_missing_one() {
+        let m = mesh();
+        let avk = m.authority.verifying_key_bytes();
+        let d = tempfile::tempdir().unwrap();
+        let sp = d.path().join("snaps.slab");
+        let r = {
+            let mut s = bitcache::slab::SlabFile::open_or_create(&sp).unwrap();
+            s.put(&m.snap).unwrap();
+            format!("bitcache:blake3:{}", blake3::hash(&m.snap).to_hex())
+        };
+        let (offer, _) = offer_with(&m, r, 1);
+        let l = open_for_boot(&d.path().join("n.slab"), &offer, Some(&avk), slab_fetcher(&sp)).unwrap();
+        assert_eq!((l.size(), l.base()), (m.ck.size, m.ck.size));
+        drop(l);
+        // a ref the slab doesn't hold aborts the join
+        let (offer2, _) = offer_with(&m, format!("bitcache:blake3:{}", "ab".repeat(32)), 2);
+        assert!(open_for_boot(&d.path().join("n2.slab"), &offer2, Some(&avk), slab_fetcher(&sp)).is_err());
     }
 
     #[test]

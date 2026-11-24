@@ -50,7 +50,7 @@ sub _ffi () {
             zcap       => $f->function('bitcache_zcap_verify'
                 => ['string','size_t','string','size_t'] => 'int'),
             instrument => $f->function('bitcache_instrument_verify'
-                => [('string','size_t') x 6] => 'int'),
+                => [('string','size_t') x 4, 'uint64', ('string','size_t') x 2] => 'int'),
             nodecert   => $f->function('bitcache_nodecert_verify'
                 => ['string','size_t','string','size_t','uint64','string','string'] => 'int'),
             leaf       => $f->function('bitcache_tlog_leaf_hash'
@@ -116,11 +116,12 @@ sub zcap_verify ($token_bytes, $anchors) {
 }
 
 # → RC_OK or a negative RC_*.
-sub instrument_verify ($maker, $payee, $amount, $kind, $vk, $sig) {
+sub instrument_verify ($maker, $payee, $amount, $kind, $seq, $vk, $sig) {
     my $f = _ffi() or return RC_BAD_ARG;
+    return RC_BAD_ARG unless defined $seq && $seq =~ /\A[0-9]{1,20}\z/;
     my @v = map { _bytes($_) } ($maker, $payee, $amount, $kind, $vk, $sig);
     return RC_BAD_ARG if grep { !defined } @v;
-    my @args = map { ($_, length $_) } @v;
+    my @args = ((map { ($_, length $_) } @v[0..3]), $seq + 0, (map { ($_, length $_) } @v[4,5]));
     return $f->{instrument}->(@args);
 }
 

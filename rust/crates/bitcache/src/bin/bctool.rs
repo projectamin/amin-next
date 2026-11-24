@@ -50,7 +50,7 @@ enum Cmd {
                 #[arg(long)] vpc_quota: u32,
                 #[arg(long)] memory_tier: u8 },
     /// Sign a UCC Art.3 instrument (prints `sig` and `vk`, standard base64).
-    InstrumentSign { #[arg(long)] sk: String, #[arg(long)] maker: String,
+    InstrumentSign { #[arg(long)] sk: String, #[arg(long)] maker: String, #[arg(long)] seq: u64,
                      #[arg(long)] payee: String, #[arg(long)] amount: String,
                      #[arg(long)] kind: String },
     /// Verify a zcap.v1 token (base64) against one or more anchor VKs
@@ -64,6 +64,11 @@ enum Cmd {
                     #[arg(long)] from_pos: u64, #[arg(long)] to_pos: u64 },
     /// Append entries to the ledger (`--entry` repeated, or one entry on stdin).
     TlogAppend { #[arg(long)] slab: String, #[arg(long = "entry")] entries: Vec<String> },
+    /// Long-lived writer: keeps the ledger open and serves batches on stdin/stdout so the
+    /// caller does not reopen (and rebuild the tree) per batch.  A request is event lines
+    /// (same TSV as ledger-append) ended by a line holding `.`; the reply is the
+    /// ledger-append output (or `error<TAB>message`) ended by a line holding `.`.
+    LedgerStream { #[arg(long)] slab: String },
     /// Append typed audited events.  Reads TSV from stdin, one event per line:
     /// `kind \t actor \t subject \t auth(64 hex | -) \t key=value …`
     /// with %XX escapes in every text field.  The ledger assigns per-actor
@@ -269,6 +274,32 @@ fn save_cert(path: &Option<String>, checkpoint_wire: &[u8]) {
     if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(p) { let _ = writeln!(f, "{line}"); }
 }
 
+fn parse_events(txt: &str, ts: u64) -> Result<Vec<bitcache::entry::Draft>, String> {
+    let mut drafts = Vec::new();
+    for (n, line) in txt.lines().filter(|l| !l.is_empty()).enumerate() {
+        let f: Vec<&str> = line.split('\t').collect();
+        if f.len() < 4 { return Err(format!("line {}: need kind, actor, subject, auth", n + 1)) }
+        let auth = if f[3] == "-" { None } else { Some(hex32_decode(f[3])) };
+        let mut attrs = Vec::new();
+        for kv in &f[4..] {
+            let (k, v) = kv.split_once('=').ok_or_else(|| format!("line {}: attr needs key=value", n + 1))?;
+            attrs.push((pct_decode(k), pct_decode(v)));
+        }
+        drafts.push(bitcache::entry::Draft { kind: pct_decode(f[0]), actor: pct_decode(f[1]),
+            subject: pct_decode(f[2]), auth, ts, attrs });
+    }
+    Ok(drafts)
+}
+
+fn append_report(l: &bitcache::ledger::Ledger, first: u64, es: &[bitcache::entry::Entry]) -> String {
+    let mut o = String::new();
+    for (i, e) in es.iter().enumerate() {
+        o.push_str(&format!("entry\t{}\t{}\t{}\t{}\n", first + i as u64, e.actor, e.seq, hex32_encode(&e.id().unwrap())));
+    }
+    o.push_str(&format!("size\t{}\nroot\t{}\n", l.size(), hex32_encode(&l.root())));
+    o
+}
+
 fn master32(tok: &str) -> [u8; 32] {
     let b = read_file_or_b64(tok, "master key");
     <[u8; 32]>::try_from(b.as_slice()).unwrap_or_else(|_| die(2, "master key must be exactly 32 bytes"))
@@ -395,12 +426,12 @@ fn main() {
             println!("sighex\t{}", grant.scope_hash_hex());
         }
 
-        Cmd::InstrumentSign { sk, maker, payee, amount, kind } => {
+        Cmd::InstrumentSign { sk, maker, seq, payee, amount, kind } => {
             let sk_bytes = std::fs::read(&sk)
                 .unwrap_or_else(|e| die(30, format!("open sk {sk}: {e}")));
             let kp = Keypair::from_sk_bytes(&sk_bytes)
                 .unwrap_or_else(|e| die(31, format!("parse sk: {e}")));
-            let msg = bitcache::trust::instrument_message(&maker, &payee, &amount, &kind);
+            let msg = bitcache::trust::instrument_message(&maker, &payee, &amount, &kind, seq);
             let sig = bitcache::mldsa87_sign(&kp, &msg)
                 .unwrap_or_else(|e| die(34, format!("instrument-sign: {e}")));
             println!("sig\t{}", base64_encode(&sig));
@@ -443,26 +474,38 @@ fn main() {
         Cmd::LedgerAppend { slab } => {
             let mut txt = String::new();
             std::io::stdin().read_to_string(&mut txt).unwrap_or_else(|e| die(10, format!("read stdin: {e}")));
-            let ts = bitcache::epoch_now();
-            let mut drafts = Vec::new();
-            for (n, line) in txt.lines().filter(|l| !l.is_empty()).enumerate() {
-                let f: Vec<&str> = line.split('\t').collect();
-                if f.len() < 4 { die(5, format!("line {}: need kind, actor, subject, auth", n + 1)) }
-                let auth = if f[3] == "-" { None } else { Some(hex32_decode(f[3])) };
-                let attrs = f[4..].iter().map(|kv| {
-                    let (k, v) = kv.split_once('=').unwrap_or_else(|| die(5, format!("line {}: attr needs key=value", n + 1)));
-                    (pct_decode(k), pct_decode(v))
-                }).collect();
-                drafts.push(bitcache::entry::Draft { kind: pct_decode(f[0]), actor: pct_decode(f[1]),
-                    subject: pct_decode(f[2]), auth, ts, attrs });
-            }
+            let drafts = parse_events(&txt, bitcache::epoch_now()).unwrap_or_else(|e| die(5, e));
             if drafts.is_empty() { die(5, "no events on stdin") }
             let mut l = open_ledger(&slab);
             let (first, es) = l.append_drafts(drafts).unwrap_or_else(|e| die(12, format!("ledger append: {e}")));
-            for (i, e) in es.iter().enumerate() {
-                println!("entry\t{}\t{}\t{}\t{}", first + i as u64, e.actor, e.seq, hex32_encode(&e.id().unwrap()));
+            print!("{}", append_report(&l, first, &es));
+        }
+
+        Cmd::LedgerStream { slab } => {
+            use std::io::{BufRead, Write};
+            let mut l = open_ledger(&slab);
+            let stdin = std::io::stdin();
+            let mut out = std::io::stdout();
+            let mut batch = String::new();
+            for line in stdin.lock().lines() {
+                let line = line.unwrap_or_else(|e| die(10, format!("read stdin: {e}")));
+                if line != "." {
+                    batch.push_str(&line);
+                    batch.push('\n');
+                    continue;
+                }
+                let reply = match parse_events(&batch, bitcache::epoch_now()) {
+                    Ok(d) if d.is_empty() => "error\tno events in request\n".to_string(),
+                    Ok(d) => match l.append_drafts(d) {
+                        Ok((first, es)) => append_report(&l, first, &es),
+                        Err(e) => format!("error\tledger append: {}\n", e.to_string().replace(['\n', '\t'], " ")),
+                    },
+                    Err(e) => format!("error\t{}\n", e.replace(['\n', '\t'], " ")),
+                };
+                batch.clear();
+                let _ = write!(out, "{reply}.\n");
+                let _ = out.flush();
             }
-            println!("size\t{}\nroot\t{}", l.size(), hex32_encode(&l.root()));
         }
 
         Cmd::LedgerShow { slab, index } => {
