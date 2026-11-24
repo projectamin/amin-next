@@ -40,11 +40,12 @@ sub csrf_of ($html) {
 }
 
 # ── Part A: the adapter core, in-process ────────────────────────────────
-# Boot against a COPY of the spec, then delete it: every request below must
-# still work, proving the spec is resolved ONCE at boot and injected per
-# request — a request that re-read machine_spec.xml would fail (§4.8).
+# Boot against a COPY of the app's explicit machine spec, then delete it:
+# every request below must still work, proving the spec is resolved ONCE at
+# boot and injected per request — a request that re-read it would fail (§4.8).
+# The spec explicitly includes amin-core; AXA does no auto-discovery/merge.
 my $spec_copy = "$tmp/machine_spec.xml";
-copy("$ROOT/perl-lib/Amin/Machine/machine_spec.xml", $spec_copy) or die "copy: $!";
+copy("$APP/machine_spec.xml", $spec_copy) or die "copy: $!";
 my $ctx = Amin::AXA::HTTP->boot(app_dir => $APP, machine_spec_path => $spec_copy);
 unlink $spec_copy or die "unlink spec copy: $!";
 ok(!-e $spec_copy, 'spec copy deleted after boot — requests cannot re-read it');
@@ -224,8 +225,8 @@ if ($pid == 0) {
     open STDOUT, '>>', "$tmp/serve.stderr" or exit 127;
     open STDERR, '>&', \*STDOUT or exit 127;
     local $ENV{AXA_STORE} = "$tmp/store.sqlite";
-    exec $^X, '-I', "$ROOT/perl-lib", "$ROOT/bin/amin",
-        'axa', 'serve', $APP, '--listen', "127.0.0.1:$port", '--workers', 1;
+    exec $^X, '-I', "$ROOT/perl-lib", "$ROOT/bin/axa",
+        $APP, '--listen', "127.0.0.1:$port", '--workers', 1;
     exit 127;
 }
 END { kill 'TERM', $pid if $pid }

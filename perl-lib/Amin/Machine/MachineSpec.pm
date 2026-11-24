@@ -78,55 +78,127 @@ sub _candidates ($self) {
 }
 
 sub _parse ($self, $xml) {
-    my $result = {
-        allowed   => undef,
-        filters   => [],
-        handler   => undef,
-        log       => undef,
-        generator => undef,
-        name      => undef,
-        ui_dialects => {},
-        map_dialects => {},
-        # Raw spec-declared BSAX vocabulary band names (document order).  The
-        # codec drops core names and assigns band NAME_IDs — see
-        # Amin::{Handler,Generator}::BSAX.
-        vocab     => [],
-    };
-    my $degrade = sub {
-        $result->{allowed} = $self->{_from_bitcache} ? {} : $self->_allow_all_registered;
-        return $result;
-    };
-    return $degrade->() if !defined $xml || !length $xml;
-
-    # The machine spec is XML too, so read it with the machine's SAX driver
-    # (LibXML when the host has it, pure Perl otherwise) instead of hard-
-    # requiring a C XML library a cross-built node does not carry.  The
-    # stream stays event-by-event — same collector, no DOM.
-    require Amin::Generator::XML;
-    my $c = Amin::Machine::MachineSpec::Collector->new;
-    my $ok = eval { Amin::Generator::XML->new(Handler => $c)->parse_string($xml); 1 };
-    return $degrade->() unless $ok;
-
-    my %allowed;
-    $allowed{$_->{class}} = 1 for $c->{filters}->@*;
-    $result->{filters} = $c->{filters};
-    $result->{vocab}   = $c->{vocab_names};
-    $result->{allowed} = (scalar keys %allowed) ? \%allowed
-        : ($self->{_from_bitcache} ? {} : $self->_allow_all_registered);
-
-    # ui: render targets are contract facts too: which dialect class serves a
-    # profile-declared target (ios/android).  The Dispatcher reads this to build
-    # the shared render context the ui: element filters inject as `Render`.
-    $result->{ui_dialects} = $c->{ui_dialects};
-    # map: render targets follow the same rule: --out=svg|dot selects a
-    # spec-declared dialect the Dispatcher injects into Map::Topology.
-    $result->{map_dialects} = $c->{map_dialects};
-
-    for my $tag (qw(handler log generator)) {
-        $result->{$tag} = $c->{$tag} if $c->{$tag};
-    }
-    $result->{name} = $c->{name} if defined $c->{name};
+    my $result = $self->_parse_collect($xml, $self->{_spec_path}, {});
+    die "MachineSpec parse error: missing <amin:machine name=...> or <amin:name>...</amin:name>"
+        unless defined $result->{name} && length $result->{name};
     return $result;
+}
+
+# Collect one spec document.  <amin:include> is resolved explicitly at parse
+# time (no runtime discovery): path= resolves relative to the including spec,
+# spec="amin-core" resolves to the stock Amin machine spec.  Includes are merged
+# in document order; later declarations win for name/handler/log/generator and
+# dialect targets, while filters/vocab are appended.  $seen prevents cycles.
+sub _parse_collect ($self, $xml, $base_path, $seen) {
+    my ($ok, $c, $err) = (0, undef, '');
+    eval {
+        $c = Amin::Machine::MachineSpec::Collector->new;
+        require XML::SAX::ParserFactory;
+        XML::SAX::ParserFactory->parser(Handler => $c)->parse_string($xml);
+        $ok = 1;
+        1;
+    } or do { $err = $@ || 'unknown parse error' };
+    die "MachineSpec parse error: $err" unless $ok;
+
+    my $result = {
+        filters      => [],
+        allowed      => {},
+        filtermap    => {},
+        handler      => undef,
+        log          => undef,
+        generator    => undef,
+        name         => undef,
+        ui_dialects  => {},
+        map_dialects => {},
+        vocab_names  => [],
+    };
+
+    my $base_dir = defined $base_path && length $base_path
+        ? do { require File::Basename; File::Basename::dirname($base_path) }
+        : undef;
+
+    for my $inc (@{ $c->{includes} // [] }) {
+        my $inc_path = $self->_resolve_include($inc, $base_dir);
+        my $canon = $self->_canon_path($inc_path);
+        die "MachineSpec parse error: include cycle: $inc_path" if $seen->{$canon};
+        local $seen->{$canon} = 1;
+        my $ixml = $self->_slurp($inc_path);
+        my $child = $self->_parse_collect($ixml, $inc_path, $seen);
+        $self->_merge_spec($result, $child);
+    }
+
+    my $local = {
+        filters      => $c->{filters},
+        allowed      => $self->_name2spec_from_filters($c->{filters}),
+        filtermap    => {},
+        handler      => $c->{handler},
+        log          => $c->{log},
+        generator    => $c->{generator},
+        name         => $c->{name},
+        ui_dialects  => $c->{ui_dialects},
+        map_dialects => $c->{map_dialects},
+        vocab_names  => $c->{vocab_names} // [],
+    };
+    $self->_merge_spec($result, $local);
+    $result->{allowed} = $self->_name2spec_from_filters($result->{filters});
+    return $result;
+}
+
+sub _merge_spec ($self, $dst, $src) {
+    push @{ $dst->{filters} }, @{ $src->{filters} // [] };
+    push @{ $dst->{vocab_names} }, @{ $src->{vocab_names} // [] };
+    $dst->{ui_dialects}  = { %{ $dst->{ui_dialects}  // {} }, %{ $src->{ui_dialects}  // {} } };
+    $dst->{map_dialects} = { %{ $dst->{map_dialects} // {} }, %{ $src->{map_dialects} // {} } };
+    for my $k (qw(handler log generator name)) {
+        $dst->{$k} = $src->{$k} if defined $src->{$k};
+    }
+    return $dst;
+}
+
+sub _name2spec_from_filters ($self, $filters) {
+    my %allowed;
+    for my $f (@{ $filters // [] }) {
+        my $class = $f->{class} // next;
+        $allowed{$class} = $f->{meta} // {};
+    }
+    return \%allowed;
+}
+
+sub _resolve_include ($self, $inc, $base_dir) {
+    my $spec = $inc->{spec} // '';
+    if ($spec eq 'amin-core') {
+        require File::Basename;
+        require Cwd;
+        my $here = File::Basename::dirname(Cwd::abs_path(__FILE__));
+        return "$here/machine_spec.xml";
+    }
+    my $path = $inc->{path} // $inc->{file} // $inc->{src} // '';
+    die "MachineSpec parse error: <amin:include> requires path=... or spec=\"amin-core\"\n"
+        unless length $path;
+    die "MachineSpec parse error: include path must be local\n"
+        if $path =~ m{\A[A-Za-z][A-Za-z0-9+.-]*://} && $path !~ m{\Afile://}i;
+    if ($path =~ m{\Afile://(?:localhost)?(/.*)\z}i) {
+        $path = $1;
+        $path =~ s/%([0-9A-Fa-f]{2})/chr hex $1/ge;
+    }
+    if ($path !~ m{\A/} && defined $base_dir) {
+        $path = "$base_dir/$path";
+    }
+    require Cwd;
+    my $abs = Cwd::abs_path($path);
+    die "MachineSpec parse error: include not found: $path\n" unless defined $abs && -f $abs;
+    return $abs;
+}
+
+sub _canon_path ($self, $path) {
+    require Cwd;
+    return Cwd::abs_path($path) // $path;
+}
+
+sub _slurp ($self, $path) {
+    open my $fh, '<:raw', $path or die "MachineSpec parse error: cannot read $path: $!\n";
+    local $/;
+    return <$fh>;
 }
 
 sub _allow_all_registered ($self) {
@@ -151,6 +223,7 @@ use v5.38; use warnings;
 sub new ($class) {
     bless {
         filters => [], ui_dialects => {}, map_dialects => {}, name => undef,
+        includes => [],
         _in_name => 0, _name_text => '',
         # BSAX dynamic vocabulary band: LocalNames the spec declares in document
         # order — every element-scoped `<filter element=…>` plus any explicit
@@ -202,7 +275,7 @@ sub start_element ($self, $el) {
         push $self->{filters}->@*, { class => $class, meta => \%meta };
         # An element-scoped filter declares a LocalName the machine's BSAX
         # vocabulary must cover — harvested in document order (first-seen wins).
-        push $self->{vocab_names}->@*, $a{element}
+        push @{ $self->{vocab_names} }, $a{element}
             if defined $a{element} && length $a{element};
     }
     elsif ($name eq 'ui-dialect' || $name eq 'map-dialect') {
@@ -211,6 +284,10 @@ sub start_element ($self, $el) {
             my $key = $name eq 'ui-dialect' ? 'ui_dialects' : 'map_dialects';
             $self->{$key}{$t} = { class => $c };
         }
+    }
+    elsif ($name eq 'include') {
+        my %inc = %a;
+        push @{ $self->{includes} }, \%inc if %inc;
     }
     elsif (($name eq 'handler' || $name eq 'log' || $name eq 'generator')
            && !defined $self->{$name}) {

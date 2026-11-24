@@ -16,9 +16,9 @@ binmode STDERR, ':encoding(UTF-8)';
 our $VERSION = '3.0.0-bootstrap';
 
 # axa: serve an AXA app bundle.  The bundle is a directory holding axa.xml (the
-# routes and actions) and, optionally, machine_spec.xml (the bundle's own
-# filters) and filters/ (their code).  Everything the server needs comes from
-# the bundle and the machine spec; there is nothing else to pass.
+# routes and actions), machine_spec.xml (the explicit Amin+app filter contract),
+# and optionally filters/ (their code).  AXA loads only the explicit machine spec;
+# it does not auto-discover or merge specs.
 
 # Default to `localhost` (both loopback families), not a bare IPv4 literal:
 # localhost resolves ::1 first, so a v4-only listener stalls browsers.
@@ -34,8 +34,10 @@ Usage: $0 [options] [<app>]
                         a file:// URL to it.  A path to a file inside the bundle
                         (e.g. its machine_spec.xml) names the bundle too.
 
-  -m, --machine-spec F  the machine's own spec (path or file:// URL); the bundle's
-                        machine_spec.xml is merged after it.  Default: the stock machine.
+  -m, --machine-spec F  explicit machine spec (path or file:// URL).  Default:
+                        <app>/machine_spec.xml.  The spec should declare required
+                        Amin core filters (e.g. <amin:include spec="amin-core"/>)
+                        and app filters.
   -I, --inc DIR         prepend DIR to \@INC (repeatable).  <app>/filters is added
                         automatically when it exists.
   -l, --listen H:P      bind address (default $LISTEN)
@@ -97,9 +99,12 @@ my $store = Amin::AXA::Store::SQLite->new(path => $db);
 
 # Boot once (plan §4.8): spec parse, bundle load, warm-up chain build.
 # stream => 1: the response goes to the socket as elements are generated.
+my $spec_path = $MACHINE_SPEC // "$dir/machine_spec.xml";
+-f $spec_path or die "No machine spec found: $spec_path\n"
+    . "Pass --machine-spec explicitly, or add machine_spec.xml to the app bundle.\n";
 my $ctx = Amin::AXA::HTTP->boot(
     app_dir => $dir, store => $store, stream => 1,
-    (defined $MACHINE_SPEC ? (machine_spec_path => $MACHINE_SPEC) : ()),
+    machine_spec_path => $spec_path,
 );
 my $serve = Amin::AXA::Serve->new(
     ctx    => $ctx,

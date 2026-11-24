@@ -1,14 +1,12 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
-  shop-ui machine spec (the app's OWN filter declarations).
+  shop-ui machine spec (explicit app contract).
 
-  Merged machine-first by the adapter (§5.2): the bundle's entries are appended
-  to the machine's, so the bundle can only add.  The shop dialect is declared
-  here, by the app that speaks it — the server carries no app filters of its
-  own.  One filter class, element-scoped: the gate splices it in on
-  <shop:request> and <shop:action> and out again when the element closes.
+  AXA loads only this spec.  It includes the stock Amin core filters and then
+  declares the app's own filters.  No auto-discovery or runtime merge.
 -->
-<amin:machine xmlns:amin="http://projectamin.org/ns/2026/">
+<amin:machine xmlns:amin="http://projectamin.org/ns/2026/" name="shop-ui">
+  <amin:include spec="amin-core" />
 
   <filter class="Amin::Example::Shop" position="middle"
           element="request" namespace="urn:projectamin:example:shop" />

@@ -31,9 +31,9 @@ use Amin::AXA::FormCodec;
 #
 # Boot does the expensive things once (§4.8): the machine spec is resolved a
 # single time and carried in the returned context (never a path — a request
-# that re-reads machine_spec.xml is a bug), the bundle's own filter
-# declarations are merged machine-first, and one warm-up chain build loads
-# every spec filter class.  Chain instances stay per request (§4.9).
+# that re-reads machine_spec.xml is a bug).  The spec is explicit: AXA does not
+# auto-discover or merge bundle specs.  One warm-up chain build loads every
+# declared filter class.  Chain instances stay per request (§4.9).
 
 use constant AMIN_NS  => 'http://projectamin.org/ns/2026/';
 use constant BODY_CAP => 262_144;    # 256 KiB (M2 acceptance)
@@ -52,26 +52,15 @@ sub boot ($class, %opts) {
     # workers.  Anything with get/set/delete/session_ids works.
     Amin::AXA::Store->set_default($opts{store} // Amin::AXA::Store->new);
 
-    my $spec = $opts{machine_spec} // Amin::Machine::MachineSpec->new(
-        (exists $opts{machine_spec_path} ? (path => $opts{machine_spec_path}) : ()),
-    )->spec;
-
-    # The bundle's OWN filters, declared in its machine_spec.xml (app-bundle
-    # contract).  Merged machine-first (§5.2): the bundle's entries are appended,
-    # so a bundle cannot remove, reorder, or shadow a machine filter.  A bundle
-    # may not declare a `permanent` filter — that region is the machine's alone,
-    # and app code there would sit outside the trust boundary — so it is refused
-    # at load rather than silently skipped (§5.2).  `allowed` is the union, so a
-    # runtime-registered bundle class is still admitted.
-    my $bundle_spec = "$opts{app_dir}/machine_spec.xml";
-    if (-f $bundle_spec) {
-        my $extra = Amin::Machine::MachineSpec->new(path => $bundle_spec)->spec;
-        for my $f ($extra->{filters}->@*) {
-            die "axa: app bundle may not declare a permanent filter: $f->{class}\n"
-                if ($f->{meta}{position} // '') eq 'permanent';
-            push $spec->{filters}->@*, $f;
-        }
-        $spec->{allowed} = { $spec->{allowed}->%*, $extra->{allowed}->%* };
+    # The machine spec is explicit: callers pass a resolved spec or a spec
+    # path.  AXA does not auto-discover or merge a bundle machine_spec.xml;
+    # app bundles must declare the Amin core and app filters they need in the
+    # spec they pass in (explicit <amin:include spec="amin-core"/> is fine).
+    my $spec = $opts{machine_spec};
+    if (!$spec) {
+        my $spec_path = $opts{machine_spec_path}
+            // die "axa: machine_spec or machine_spec_path required\n";
+        $spec = Amin::Machine::MachineSpec->new(path => $spec_path)->spec;
     }
 
     # §4.8 step 3: one warm-up chain build loads all 291+ filter classes so the

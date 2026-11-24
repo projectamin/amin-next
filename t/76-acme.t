@@ -164,7 +164,7 @@ path("$dir/machine_spec.xml")->spew_utf8(<<~"XML");
     </amin:machine>
     XML
 
-my $ctx = Amin::AXA::HTTP->boot(app_dir => $dir);
+my $ctx = Amin::AXA::HTTP->boot(app_dir => $dir, machine_spec_path => "$ROOT/examples/apps/shop-ui/machine_spec.xml");
 my $req = {
     method => 'GET', path => '/.well-known/acme-challenge/tok123', query => undef,
     version => '1.1', headers => [['Host' => 'localhost']], header => { host => 'localhost' },
