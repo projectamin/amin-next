@@ -28,20 +28,26 @@ sub new ($class, %o) {
     return bless { %o }, $class;
 }
 
-# Parse a bitcache:// URI into {hash, signer_name, signer_ts, signer_vk,
-# signer_sig}.  A URI whose scheme/authority/hash does not match leaves the
-# reference unaddressed (the caller then treats it as a plain path).
+# Parse a bitcache/bc URI into {hash, signer_name, signer_ts, signer_vk,
+# signer_sig}.  Accepted forms:
+#   bitcache://blake3/<64hex>?signer=...&ts=...&vk=...&sig=...
+#   bc://blake3/<64hex>?...
+# A URI whose scheme/authority/hash does not match leaves the reference
+# unaddressed (the caller then treats it as a plain path).
 sub parse ($self, $uri = undef) {
     $uri //= $self->{uri};
     unless (defined $uri && length $uri) {
         my $p = $self->{path};
-        $uri = $p if defined $p && $p =~ m{^bitcache://};
+        $uri = $p if defined $p && $p =~ m{^(?:bitcache|bc)://}i;
     }
     return $self unless defined $uri && length $uri;
+    # Normalize short form bc:// to bitcache:// for URI parsing.
+    my $norm = $uri;
+    $norm =~ s{^bc://}{bitcache://}i;
 
     require URI;
     require URI::Escape;
-    my $u = eval { URI->new($uri) };
+    my $u = eval { URI->new($norm) };
     return $self unless $u && defined $u->scheme && $u->scheme eq 'bitcache';
     return $self unless ($u->authority // '') eq 'blake3';
 
@@ -133,11 +139,10 @@ sub resolve ($self) {
     return $$raw;
 }
 
-# Is this string a bitcache:// reference at all?  Lets a caller decide between
-# "resolve from the CAS" and "read a local path" before constructing anything.
-# A plain predicate, deliberately callable before a Reference exists.
+# Is this string a bitcache/bc reference at all?  Lets a caller decide between
+# "resolve from the CAS" and "read/fetch a path/URL" before constructing.
 sub is_reference ($s) {
-    return defined $s && $s =~ m{^bitcache://};
+    return defined $s && $s =~ m{^(?:bitcache|bc)://}i;
 }
 
 1;
