@@ -3,6 +3,7 @@ use v5.38; use warnings; use utf8;
 use experimental 'signatures';
 use File::Basename qw(dirname);
 use Cwd qw(abs_path);
+use Encode qw(decode);
 
 sub new ($class, %o) {
     bless { %o }, $class;
@@ -51,7 +52,15 @@ sub _load ($self) {
         $self->{_from_bitcache} = 1;
         my $bytes = $ref->resolve;
         return undef unless defined $bytes && length $bytes;
-        return $bytes;
+        return decode('UTF-8', $bytes);
+    }
+    # Explicit URI/path form on $self->{path} or $self->{uri}: file://, http(s)://,
+    # bitcache/bc:// handled above.  file:// is read as a local file; http(s)://
+    # is fetched.  This keeps -u/URI semantics consistent across amin/axa/rust.
+    for my $candidate ($self->_uri_candidates) {
+        next unless defined $candidate && length $candidate;
+        my $bytes = $self->_load_uri($candidate);
+        return $bytes if defined $bytes && length $bytes;
     }
     for my $candidate ($self->_candidates) {
         next unless defined $candidate && length $candidate;
@@ -66,10 +75,58 @@ sub _load ($self) {
     return undef;
 }
 
+sub _uri_candidates ($self) {
+    my @c;
+    for my $v ($self->{uri}, $self->{path}) {
+        next unless defined $v && length $v;
+        push @c, $v if $v =~ m{\A(?:file|https?|bitcache|bc)://}i;
+    }
+    return @c;
+}
+
+# Load bytes from an explicit URI.  file:// reads locally.  http(s):// fetches
+# via HTTP::Tiny (core in modern Perl; fail-closed on errors).  bitcache/bc://
+# should have been handled by the addressed-reference path; we still accept it
+# here for callers that pass it as uri/path without signer params.
+sub _load_uri ($self, $uri) { return _load_uri_static($uri) }
+
+# Static/class URI loader so other callers (bin/amin -u, axa, tests) can
+# resolve file://, http(s)://, and bitcache/bc:// consistently.
+sub _load_uri_static ($uri) {
+    return undef unless defined $uri && length $uri;
+    if ($uri =~ m{\A(?:bitcache|bc)://}i) {
+        my $ref = Amin::Bitcache::Reference->new(uri => $uri)->parse;
+        if ($ref->addressed) {
+            my $b = $ref->resolve;
+            return (defined $b && length $b) ? decode('UTF-8', $b) : undef;
+        }
+        return undef;
+    }
+    if ($uri =~ m{\Afile://(?:localhost)?(/.*)\z}i) {
+        my $p = $1;
+        $p =~ s/%([0-9A-Fa-f]{2})/chr hex $1/ge;
+        open my $fh, '<:raw', $p or return undef;
+        local $/; my $b = <$fh>; close $fh;
+        return defined $b ? decode('UTF-8', $b) : undef;
+    }
+    if ($uri =~ m{\Ahttps?://}i) {
+        my $bytes = eval {
+            require HTTP::Tiny;
+            my $res = HTTP::Tiny->new(timeout => 20, verify_SSL => 1)->get($uri);
+            ($res && $res->{success}) ? $res->{content} : undef;
+        };
+        return (defined $bytes && length $bytes) ? decode('UTF-8', $bytes) : undef;
+    }
+    return undef;
+}
+
 sub _candidates ($self) {
     my @c;
-    push @c, $self->{path} if $self->{path};
-    push @c, $ENV{AMIN_MACHINE_SPEC} if $ENV{AMIN_MACHINE_SPEC};
+    for my $v ($self->{path}, $self->{uri}) {
+        next unless defined $v && length $v;
+        push @c, $v unless $v =~ m{\A(?:file|https?|bitcache|bc)://}i;
+    }
+    push @c, $ENV{AMIN_MACHINE_SPEC} if $ENV{AMIN_MACHINE_SPEC} && $ENV{AMIN_MACHINE_SPEC} !~ m{\A(?:file|https?|bitcache|bc)://}i;
     push @c, '/etc/amin/machine_spec.xml';
     push @c, ($ENV{HOME} // '') . '/.amin/machine_spec.xml' if $ENV{HOME};
     my $bundled = abs_path(dirname(__FILE__) . '/machine_spec.xml');
@@ -78,6 +135,14 @@ sub _candidates ($self) {
 }
 
 sub _parse ($self, $xml) {
+    # No spec loaded (e.g. bitcache resolve/verify failed) -> degrade closed:
+    # no allowlist, no filters, unnamed. Caller sees an empty contract.
+    return {
+        filters => [], allowed => {}, filtermap => {},
+        handler => undef, log => undef, generator => undef, name => undef,
+        ui_dialects => {}, map_dialects => {}, vocab_names => [],
+    } unless defined $xml && length $xml;
+
     my $result = $self->_parse_collect($xml, $self->{_spec_path}, {});
     die "MachineSpec parse error: missing <amin:machine name=...> or <amin:name>...</amin:name>"
         unless defined $result->{name} && length $result->{name};
@@ -94,7 +159,15 @@ sub _parse_collect ($self, $xml, $base_path, $seen) {
     eval {
         $c = Amin::Machine::MachineSpec::Collector->new;
         require XML::SAX::ParserFactory;
-        XML::SAX::ParserFactory->parser(Handler => $c)->parse_string($xml);
+        my $p = XML::SAX::ParserFactory->parser(Handler => $c);
+        # Ensure bytes/string form acceptable to parser: encode back to UTF-8 bytes
+        # if it contains wide chars, since some SAX parsers choke on upgraded strings.
+        my $xml_bytes = $xml;
+        if (utf8::is_utf8($xml_bytes)) {
+            require Encode;
+            $xml_bytes = Encode::encode('UTF-8', $xml_bytes);
+        }
+        $p->parse_string($xml_bytes);
         $ok = 1;
         1;
     } or do { $err = $@ || 'unknown parse error' };
@@ -198,7 +271,9 @@ sub _canon_path ($self, $path) {
 sub _slurp ($self, $path) {
     open my $fh, '<:raw', $path or die "MachineSpec parse error: cannot read $path: $!\n";
     local $/;
-    return <$fh>;
+    my $b = <$fh>;
+    close $fh;
+    return defined $b ? decode('UTF-8', $b) : $b;
 }
 
 sub _allow_all_registered ($self) {
