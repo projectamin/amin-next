@@ -214,6 +214,17 @@ impl ContentHandler for DocDriver<'_> {
                 "action" => shop.action(&a)?,
                 _ => {}
             }
+        } else if uri == crate::UI_NS {
+            // A fragment may be canonical `ui:` IR: project it exactly as the
+            // Perl fleet's element filters do (the HtmlTarget owns the mapping).
+            let mut a: Vec<(&str, &str)> = Vec::with_capacity(atts.length());
+            for i in 0..atts.length() {
+                let ln = atts.local_name(i);
+                if !ln.is_empty() {
+                    a.push((ln, atts.value(i)));
+                }
+            }
+            self.out.start(local, &a)?;
         } else if uri == AMIN_NS && local == "acme-challenge" {
             // The key authorization is a pure function of the account key, so
             // the responder holds no per-challenge state.
@@ -231,7 +242,10 @@ impl ContentHandler for DocDriver<'_> {
         self.out.text(ch)
     }
 
-    fn end_element(&mut self, _uri: &str, _local: &str, _q: &str) -> Result<(), SaxError> {
+    fn end_element(&mut self, uri: &str, local: &str, _q: &str) -> Result<(), SaxError> {
+        if uri == crate::UI_NS {
+            self.out.end(local)?;
+        }
         Ok(())
     }
 }

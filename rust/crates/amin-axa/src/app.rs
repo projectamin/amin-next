@@ -349,6 +349,10 @@ struct Builder {
     capture: Option<Capture>,
     pending_route: Option<(String, String, Option<String>)>,
     pending_action: Option<(String, String, String, Option<String>)>,
+    /// Namespace declarations for the element about to start (SAX delivers
+    /// them as prefix mappings, never as attributes), re-emitted onto that
+    /// element so a captured fragment still binds the dialects it declares.
+    prefixes: Vec<(String, String)>,
 }
 
 /// One frame of a fragment capture: an element's qualified name, its
@@ -377,10 +381,21 @@ impl Capture {
         }
     }
 
-    fn push(&mut self, qname: &str, atts: &dyn Attributes) {
+    /// Declarations for the next element are captured here and written onto
+    /// it, in document order, when its `start_element` arrives.
+    fn push(&mut self, qname: &str, atts: &dyn Attributes, decls: &[(String, String)]) {
         let mut attrs = String::new();
+        for (prefix, uri) in decls {
+            attrs.push_str(if prefix.is_empty() { " xmlns=\"" } else { " xmlns:" });
+            if !prefix.is_empty() {
+                attrs.push_str(prefix);
+                attrs.push_str("=\"");
+            }
+            attrs.push_str(&escape_attr(uri));
+            attrs.push('"');
+        }
         for i in 0..atts.length() {
-            let n = atts.local_name(i);
+            let n = atts.q_name(i);
             if n.is_empty() {
                 continue;
             }
@@ -448,6 +463,11 @@ fn escape_attr(s: &str) -> String {
 }
 
 impl ContentHandler for Builder {
+    fn start_prefix_mapping(&mut self, prefix: &str, uri: &str) -> Result<(), SaxError> {
+        self.prefixes.push((prefix.to_string(), uri.to_string()));
+        Ok(())
+    }
+
     fn start_element(
         &mut self,
         uri: &str,
@@ -465,6 +485,7 @@ impl ContentHandler for Builder {
             }
             2 => match local {
                 "route" => {
+                    self.prefixes.clear(); // declared on the route, not the fragment
                     let path = atts.value_of_local("path").unwrap_or("").to_string();
                     if path.is_empty() {
                         return Err(declaration_error("axa:route missing path"));
@@ -478,6 +499,7 @@ impl ContentHandler for Builder {
                     self.capture = Some(Capture::new());
                 }
                 "action" => {
+                    self.prefixes.clear();
                     let name = atts.value_of_local("name").unwrap_or("").to_string();
                     let path = atts.value_of_local("path").unwrap_or("").to_string();
                     if name.is_empty() {
@@ -502,7 +524,8 @@ impl ContentHandler for Builder {
             },
             _ => {
                 if let Some(cap) = self.capture.as_mut() {
-                    cap.push(q, atts);
+                    let decls = std::mem::take(&mut self.prefixes);
+                    cap.push(q, atts, &decls);
                 }
             }
         }
@@ -560,7 +583,7 @@ fn declaration_error(msg: &str) -> SaxError {
 
 #[cfg(test)]
 mod tests {
-    use super::{App, Route};
+    use super::{App, Builder, Route};
 
     #[test]
     fn match_path_exact_has_no_captures() {
@@ -592,6 +615,28 @@ mod tests {
         assert_eq!(m.get("x").map(String::as_str), Some("1"));
         assert_eq!(m.get("y").map(String::as_str), Some("2"));
         assert_eq!(m.len(), 2);
+    }
+
+    #[test]
+    fn fragment_capture_keeps_declared_namespaces_and_qualified_names() {
+        // Namespace declarations arrive as prefix mappings, never attributes;
+        // the capture must re-emit them or a fragment in a dialect the
+        // envelope does not declare (ui:, an app's own) fails to parse.
+        let xml = r#"<?xml version="1.0"?>
+<axa:app xmlns:axa="http://projectamin.org/ns/axa/1" id="x" name="x">
+  <axa:route path="/" method="GET">
+    <ui:app xmlns:ui="http://projectamin.org/ns/ui/1" title="T" theme="soft-studio">
+      <ui:text title="hi">hello</ui:text>
+    </ui:app>
+  </axa:route>
+</axa:app>"#;
+        let mut b = Builder::default();
+        amin_sax::parse(xml, &mut b).expect("declaration parses");
+        assert_eq!(b.routes.len(), 1);
+        let frag = &b.routes[0].fragment;
+        assert!(frag.contains(r#"xmlns:ui="http://projectamin.org/ns/ui/1""#), "{frag}");
+        assert!(frag.contains(r#"theme="soft-studio""#), "{frag}");
+        assert!(frag.contains("<ui:text"), "{frag}");
     }
 
     #[test]

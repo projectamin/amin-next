@@ -1,16 +1,3 @@
-package Amin::UI::Target::HTML::Material;
-use v5.38; use warnings; use utf8;
-
-# The HTML target's default look: Material 3 baseline, written against the
-# semantic ui: kinds (card, toolbar, button, field, ...) and never against an
-# app.  An app emits no CSS to get it.  Every selector is wrapped in :where(),
-# so the sheet has zero specificity and any app stylesheet (ui:style) wins
-# without a fight.  Colour is the Material role set as custom properties,
-# light by default and dark under prefers-color-scheme; a later ui:theme kind
-# would only override these properties.  Web only: the Compose target is
-# already Material and the SwiftUI target uses system styling.
-
-our $CSS = <<'CSS';
 :root{color-scheme:light dark;
 --md-primary:#6750a4;--md-on-primary:#fff;--md-primary-container:#eaddff;--md-on-primary-container:#21005d;
 --md-secondary-container:#e8def8;--md-on-secondary-container:#1d192b;
@@ -30,7 +17,7 @@ our $CSS = <<'CSS';
 --md-outline:#938f99;--md-outline-variant:#49454f;--md-error:#f2b8b5}}
 :where(*){box-sizing:border-box}
 :where(body){margin:0;background:var(--md-background);color:var(--md-on-background);font:14px/1.5 var(--md-font)}
-:where(p){margin:0;white-space:pre-wrap;overflow-wrap:anywhere}
+:where(p){margin:0;white-space:normal;overflow-wrap:anywhere}
 :where(h2){margin:0;font:500 14px/1.4 var(--md-font);color:var(--md-on-surface-variant);letter-spacing:.01em}
 :where(section){display:flex;flex-direction:column;gap:12px}
 :where(a){color:var(--md-primary)}
@@ -73,6 +60,5 @@ our $CSS = <<'CSS';
 :where(th,td){padding:8px 12px;text-align:left;border-bottom:1px solid var(--md-outline-variant)}
 :where(dialog){background:var(--md-surface-container-high);color:var(--md-on-surface);border:0;border-radius:28px;padding:24px}
 :where(ul){margin:0;padding-left:20px}
-CSS
-
-1;
+:where(canvas.vis){display:block;width:100%;height:176px;border-radius:var(--md-radius-m);background:var(--md-surface-container)}
+:where(article canvas.vis){height:132px;margin-top:4px}

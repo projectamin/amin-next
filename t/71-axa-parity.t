@@ -348,7 +348,88 @@ subtest 'a text/plain path-template route is byte-identical' => sub {
     is $r->{body}, $p->{body}, 'the 404 body is byte-identical';
 };
 
-# ── 9. the ACME HTTP-01 responder is byte-identical (proxy-plan §5.5) ───────
+# ── 9. a ui: route fragment renders identically, theme included ─────────────
+# A route may carry canonical `ui:` IR directly; both fronts project it through
+# the same target.  The sheet is shared source (the Rust target embeds the
+# Perl target's themes/*.css), so the themed page is the parity contract: any
+# reflow of a theme on one side fails here, not in a user's browser.
+subtest 'a themed ui: route fragment is byte-identical' => sub {
+    my $tdir = tempdir(CLEANUP => 1);
+    path("$tdir/axa.xml")->spew_utf8(<<~'XML');
+        <?xml version="1.0" encoding="UTF-8"?>
+        <axa:app xmlns:axa="http://projectamin.org/ns/axa/1"
+                 id="io.projectamin.test.theme" name="theme">
+          <axa:route path="/studio" method="GET">
+            <ui:app xmlns:ui="http://projectamin.org/ns/ui/1" title="Studio" theme="soft-studio">
+              <ui:vstack title="lane">
+                <ui:text title="hello">hello</ui:text>
+                <ui:visualizer mode="vortex" id="hero"/>
+              </ui:vstack>
+            </ui:app>
+          </axa:route>
+          <axa:route path="/falls-back" method="GET">
+            <ui:app xmlns:ui="http://projectamin.org/ns/ui/1" title="Bogus" theme="not-a-theme">
+              <ui:text title="hi">hi</ui:text>
+            </ui:app>
+          </axa:route>
+        </axa:app>
+        XML
+    path("$tdir/machine_spec.xml")->spew_utf8(<<~'XML');
+        <?xml version="1.0" encoding="UTF-8"?>
+        <amin:machine xmlns:amin="http://projectamin.org/ns/2026/" name="theme">
+          <amin:include spec="amin-core" />
+        </amin:machine>
+        XML
+
+    my $pp = free_port();
+    my $rp = free_port();
+    my $pf = fork();
+    die "fork failed: $!" unless defined $pf;
+    if ($pf == 0) {
+        open STDOUT, '>>', "$tdir/perl.stderr" or exit 127;
+        open STDERR, '>&', \*STDOUT or exit 127;
+        exec $^X, '-I', "$ROOT/perl-lib", "$ROOT/bin/axa",
+            $tdir, '--listen', "127.0.0.1:$pp", '--workers', 1;
+        exit 127;
+    }
+    my $rf = fork();
+    die "fork failed: $!" unless defined $rf;
+    if ($rf == 0) {
+        open STDOUT, '>>', "$tdir/rust.stderr" or exit 127;
+        open STDERR, '>&', \*STDOUT or exit 127;
+        exec $RUST, '--app', $tdir, '--listen', "127.0.0.1:$rp";
+        exit 127;
+    }
+
+    my $up = wait_listen($pp) && wait_listen($rp);
+    ok($up, "theme fronts up (perl :$pp, rust :$rp)")
+        or do {
+            kill 'TERM', $pf, $rf;
+            waitpid $_, 0 for $pf, $rf;
+            diag('perl front log: ' . (-f "$tdir/perl.stderr" ? path("$tdir/perl.stderr")->slurp : '(none)'));
+            diag('rust front log: ' . (-f "$tdir/rust.stderr" ? path("$tdir/rust.stderr")->slurp : '(none)'));
+            return;
+        };
+
+    for my $case (
+        ['soft-studio', '/studio',     qr/--nz-signal:/],
+        ['fallback',    '/falls-back', qr/--md-primary:#6750a4/],
+    ) {
+        my ($label, $path, $want) = @$case;
+        my $p = page($pp, "GET $path HTTP/1.1\r\nHost: localhost\r\n\r\n");
+        my $r = page($rp, "GET $path HTTP/1.1\r\nHost: localhost\r\n\r\n");
+        is $p->{status}, 200, "perl 200 ($label)";
+        is $r->{status}, 200, "rust 200 ($label)";
+        like $p->{body}, $want, "perl selected the right sheet ($label)";
+        is $r->{body}, $p->{body}, "the themed page is byte-identical ($label)";
+        is scalar(() = $p->{body} =~ /<style>/g), 1, "exactly one <style> ($label)";
+    }
+
+    kill 'TERM', $pf, $rf;
+    waitpid $_, 0 for $pf, $rf;
+};
+
+# ── 10. the ACME HTTP-01 responder is byte-identical (proxy-plan §5.5) ──────
 # ACME is an app-level filter, not a proxy concern: the bundle's own
 # machine_spec.xml declares it, and the CA fetches
 # `/.well-known/acme-challenge/<token>` expecting the RFC 8555 key

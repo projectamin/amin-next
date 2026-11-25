@@ -158,10 +158,10 @@ sub _deliver ($self, $h) {
 }
 
 # ── shared IR accessors / folding ──────────────────────────────────────────
-# A `ui:` attribute value (unnamespaced; the closed-view vocab has fifteen:
-# title spacing points for-each bind url action method min max placeholder
-# selected header bars mode) or '' when absent.  Attribute keys are Clark
-# notation, exactly as the canonical IR carries them.
+# A `ui:` attribute value (unnamespaced; the closed-view vocab has sixteen:
+# title theme spacing points for-each bind url action method min max
+# placeholder selected header bars mode) or '' when absent.  Attribute keys
+# are Clark notation, exactly as the canonical IR carries them.
 sub attr ($self, $a, $name) {
     my $x = $a->{"{}${name}"} // return '';
     return $x->{Value} // '';
@@ -198,6 +198,14 @@ sub eq_bars ($self, $a) {
 }
 sub eq_mode ($self, $a) {
     return $self->attr($a, 'mode') eq 'wave' ? 'wave' : 'bars';
+}
+
+# ui:visualizer shape: the curated modes ARE the contract (the target owns the
+# shader), so a mode it does not know is the default, never an error.
+our %VIS_MODE = map {; $_ => 1 } qw(plasma ripple vortex);
+sub vis_mode ($self, $a) {
+    my $m = $self->attr($a, 'mode');
+    return $VIS_MODE{$m} ? $m : 'plasma';
 }
 
 1;

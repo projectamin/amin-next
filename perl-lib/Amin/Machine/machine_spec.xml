@@ -471,6 +471,12 @@
   <filter class="Amin::Filter::UI::Element::Equalizer" position="late" element="equalizer" namespace="http://projectamin.org/ns/ui/1" target="ios" />
   <filter class="Amin::Filter::UI::Element::Equalizer" position="late" element="equalizer" namespace="http://projectamin.org/ns/ui/1" target="android" />
   <filter class="Amin::Filter::UI::Element::Equalizer" position="late" element="equalizer" namespace="http://projectamin.org/ns/ui/1" target="html" />
+  <!-- ui:visualizer — a curated animated field.  The app names a mode only;
+       the target owns the shader (HTML: one pooled WebGL program for every
+       canvas, including swapped-in ones).  One filter per kind per target. -->
+  <filter class="Amin::Filter::UI::Element::Visualizer" position="late" element="visualizer" namespace="http://projectamin.org/ns/ui/1" target="ios" />
+  <filter class="Amin::Filter::UI::Element::Visualizer" position="late" element="visualizer" namespace="http://projectamin.org/ns/ui/1" target="android" />
+  <filter class="Amin::Filter::UI::Element::Visualizer" position="late" element="visualizer" namespace="http://projectamin.org/ns/ui/1" target="html" />
   <filter class="Amin::AI::Graph" position="late" namespace="http://projectamin.org/ns/ai/1" />
   <!-- document generation.  Element-scoped `late` candidate: spliced only
        while an amin:document flows.  The grammar is platform vocabulary, so it

@@ -223,4 +223,93 @@ is(scalar(() = $pqh =~ /data-bars="32"/g), 2, 'missing/triple-digit bars clamp t
 is(scalar(() = $pqh =~ /data-bars="64"/g), 1, 'the upper bound is accepted');
 is(scalar(() = $pqh =~ /data-mode="bars"/g), 3, 'unknown/missing mode is bars');
 
+# ═══════════════════════════════════════════════════════════════════════════
+# 7. ui:app@theme selects the target's look.  The sheet is shared with the
+#    Rust target (include_str! of these same files), `:where()`-only so an
+#    app's ui:style still wins, and one <style> per page; an absent or
+#    unknown theme gets the default look, never an error.
+# ═══════════════════════════════════════════════════════════════════════════
+sub themed {
+    my ($theme) = @_;
+    my $f = Path::Tiny->tempfile(SUFFIX => '.xml');
+    my $attr = defined $theme ? qq{ theme="$theme"} : '';
+    $f->spew_utf8(<<~"XML");
+    <?xml version="1.0" encoding="UTF-8"?>
+    <amin:profile xmlns:amin="http://projectamin.org/ns/2026/"
+                  xmlns:ui="http://projectamin.org/ns/ui/1"
+                  amin:id="io.projectamin.test.theme" amin:version="0.1.0">
+      <ui:app title="Themed"$attr>
+        <ui:text title="hi"/>
+      </ui:app>
+    </amin:profile>
+    XML
+    my $label = defined $theme ? $theme : '(default)';
+    my ($out, $rc) = run_bin($amin, 'ui', "$f", '--os=html');
+    is($rc, 0, "theme fixture ($label) renders");
+    return $out;
+}
+
+my $plain = themed(undef);
+like($plain, qr/--md-primary:#6750a4/, 'no theme → the default sheet');
+unlike($plain, qr/--nz-signal/, 'the default sheet is not the studio one');
+is(scalar(() = $plain =~ /<style>/g), 1, 'exactly one <style> per page');
+
+my $soft = themed('soft-studio');
+like($soft, qr/--nz-signal:/, 'theme="soft-studio" → the studio sheet');
+unlike($soft, qr/--md-primary/, 'the studio sheet replaces (not stacks on) the default');
+is(scalar(() = $soft =~ /<style>/g), 1, 'still exactly one <style>');
+like($soft, qr{nz-rise}, 'the studio sheet carries its entrance motion');
+is(eval { XML::LibXML->load_xml(string => $soft) ? 1 : 0 }, 1,
+    'themed page is well-formed XML/XHTML (the sheet is inline-safe)');
+
+my $bogus = themed('no-such-theme');
+like($bogus, qr/--md-primary:#6750a4/, 'an unknown theme falls back to the default look');
+unlike($bogus, qr/--nz-signal/, 'an unknown theme never half-applies');
+
+like(themed('../../etc/passwd'), qr/--md-primary:/, 'a non-sheet theme name is defaulted, not opened');
+
+# ═══════════════════════════════════════════════════════════════════════════
+# 8. ui:visualizer — the app names a curated mode; the target owns the shader.
+#    One non-executable base64 payload (raw GLSL could carry '<') and one
+#    runtime per page paint every canvas through one pooled WebGL context.
+# ═══════════════════════════════════════════════════════════════════════════
+use MIME::Base64 qw(decode_base64);
+
+my $vis = Path::Tiny->tempfile(SUFFIX => '.xml');
+$vis->spew_utf8(<<'XML');
+<?xml version="1.0" encoding="UTF-8"?>
+<amin:profile xmlns:amin="http://projectamin.org/ns/2026/"
+              xmlns:ui="http://projectamin.org/ns/ui/1"
+              amin:id="io.projectamin.test.visualizer" amin:version="0.1.0">
+  <ui:app title="Visualizer" theme="soft-studio">
+    <ui:visualizer mode="ripple" id="hero"/>
+    <ui:visualizer mode="vortex"/>
+    <ui:visualizer mode="nope"/>
+    <ui:visualizer/>
+  </ui:app>
+</amin:profile>
+XML
+my ($vh, $rc8) = run_bin($amin, 'ui', "$vis", '--os=html');
+is($rc8, 0, 'visualizer fixture renders');
+is(scalar(() = $vh =~ /<canvas\b[^>]*\bdata-axa-vis="1"/g), 4,
+    'every ui:visualizer becomes a canvas');
+like($vh, qr{<canvas\b[^>]*\bclass="vis"[^>]*\bdata-mode="ripple"[^>]*\bid="hero"},
+    'the curated mode and ui:id ride through');
+is(scalar(() = $vh =~ /data-mode="plasma"/g), 2,
+    'unknown and missing modes fall back to plasma');
+is(scalar(() = $vh =~ /data-axa-vis-shader="1"/g), 1,
+    'the shader payload is emitted once per page');
+is(scalar(() = $vh =~ /<script>/g), 1, 'the visualizer runtime is emitted once');
+my ($b64) = $vh =~ /data-axa-vis-shader="1"[^>]*>\s*([A-Za-z0-9+\/=]+)\s*<\/script>/;
+ok(defined $b64 && length $b64, 'the shader payload is base64 text');
+
+# The authoring source is the .glsl file; the payload is its base64.  This is
+# the drift check: edit the shader, regenerate the payload, or fail here.
+my $glsl = path($ROOT, 'perl-lib/Amin/UI/Target/HTML/shaders/visualizer.glsl')->slurp;
+is(decode_base64($b64 // ''), $glsl, 'the payload decodes to the authored shader');
+my $rt = path($ROOT, 'perl-lib/Amin/UI/Target/HTML/runtimes/visualizer.js')->slurp;
+unlike($rt, qr/[<&]/, 'the runtime is XML-safe (script text carries no raw < or &)');
+is(eval { XML::LibXML->load_xml(string => $vh) ? 1 : 0 }, 1,
+    'visualizer page is well-formed XML/XHTML');
+
 done_testing;

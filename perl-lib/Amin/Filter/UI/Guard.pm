@@ -18,7 +18,7 @@ use Class::Tiny qw(Handler Log Mode Name Element);
 
 our $UI_NS = 'http://projectamin.org/ns/ui/1';
 
-# Closed-world vocabulary — the 38 element LocalNames in the ui: region.
+# Closed-world vocabulary — the 39 element LocalNames in the ui: region.
 # Stated here (not read from the codec) because a filter is code and must state
 # the contract it enforces; the codec's table is the mirror, not the source.
 my %KIND = map {; $_ => 1 } qw(
@@ -26,7 +26,7 @@ my %KIND = map {; $_ => 1 } qw(
     progress alert sheet toolbar searchable item label text markdown badge
     sparkline button navigate image asyncimage swap audio
     form field select option table tr cell style
-    player equalizer
+    player equalizer visualizer
 );
 
 sub start_element ($self, $e) {

@@ -73,7 +73,7 @@ sub _action ($self, $a) {
 
 sub _page ($self, $notice, $err, $panel, $draft, $live = undef) {
     my %ctx = ( csrf => $self->_csrf );
-    $self->_ui_start('app', title => 'music');
+    $self->_ui_start('app', title => 'music', theme => 'soft-studio');
     $self->_app('header');
     $self->_ui_start('scene');
     $self->_ui_start('column');

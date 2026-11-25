@@ -10,8 +10,9 @@ package Amin::UI::Target::HTML;
 
 use v5.38; use warnings; use utf8; use experimental 'signatures';
 use parent 'Amin::UI::Target::Base';
-use Amin::UI::Target::HTML::Material;
+use Amin::UI::Target::HTML::Theme;
 use Amin::UI::Target::HTML::Player;
+use Amin::UI::Target::HTML::Visualizer;
 
 use constant XHTML => 'http://www.w3.org/1999/xhtml';
 
@@ -254,8 +255,9 @@ sub open ($self, $k, $a, $h) {
         $self->_inline($h, 'title', $title);
         $self->_start($h, 'meta', name => 'viewport', content => 'width=device-width,initial-scale=1');
         $self->_end($h, 'meta');
-        # the target's default look; zero specificity, so an app's ui:style wins
-        $self->_inline($h, 'style', $Amin::UI::Target::HTML::Material::CSS);
+        # The theme named by ui:app (default look when absent or unknown); zero
+        # specificity, so an app's ui:style still wins.
+        $self->_inline($h, 'style', Amin::UI::Target::HTML::Theme->css($self->attr($a, 'theme')));
         $self->_end($h, 'head');
         $self->_start($h, 'body');
         $f->{closes} = ['body', 'html'];
@@ -314,6 +316,28 @@ sub open ($self, $k, $a, $h) {
             'data-bars'     => $self->eq_bars($a),
             'data-mode'     => $self->eq_mode($a),
             'aria-hidden'   => 'true', @id);
+        $f->{closes} = ['canvas'];
+        $f->{leaf}   = 1;
+    }
+    elsif ($k eq 'visualizer') {
+        # The target owns the shader: the app names a curated mode only.  The
+        # program rides once per page as a non-executable base64 payload (raw
+        # GLSL could carry '<'), followed by the runtime that paints every
+        # [data-axa-vis] canvas — including ones a later swap inserts — through
+        # one pooled WebGL context.
+        unless ($self->{_vis_runtime}) {
+            $self->{_vis_runtime} = 1;
+            $self->_start($h, 'script',
+                type => 'application/octet-stream', 'data-axa-vis-shader' => '1');
+            $self->_text($h, $Amin::UI::Target::HTML::Visualizer::SHADER);
+            $self->_end($h, 'script');
+            $self->_inline($h, 'script', $Amin::UI::Target::HTML::Visualizer::RUNTIME);
+        }
+        $self->_start($h, 'canvas',
+            class         => 'vis',
+            'data-axa-vis' => '1',
+            'data-mode'   => $self->vis_mode($a),
+            'aria-hidden' => 'true', @id);
         $f->{closes} = ['canvas'];
         $f->{leaf}   = 1;
     }

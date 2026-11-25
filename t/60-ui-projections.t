@@ -35,7 +35,7 @@ my @KINDS = qw(
     progress alert sheet toolbar searchable item label text markdown badge
     sparkline button navigate image asyncimage swap audio
     form field select option table tr cell style
-    player equalizer
+    player equalizer visualizer
 );
 
 # Minimal SAX sink: records raw events so assertions read the fleet's real
@@ -226,14 +226,14 @@ subtest 'E: machine_spec declares the ui: filter family' => sub {
         'E2: the retired SwiftUIView stub is gone');
 
     my @el = grep { $_->{class} =~ /^Amin::Filter::UI::Element::/ } @all;
-    is(scalar @el, 114, 'E3: one element filter per kind per target (38 × 3)');
-    is([sort map { $_->{meta}{position} // '' } @el], [('late') x 114],
+    is(scalar @el, 117, 'E3: one element filter per kind per target (39 × 3)');
+    is([sort map { $_->{meta}{position} // '' } @el], [('late') x 117],
         'E4: every element filter sits at the late position');
     is([sort keys %{ { map { ($_->{meta}{target} // '') => 1 } @el } }], ['android', 'html', 'ios'],
         'E5: every element filter is target-scoped (ios / android / html only)');
 
     my @ios_kinds = sort map { $_->{meta}{element} } grep { ($_->{meta}{target} // '') eq 'ios' } @el;
-    is(scalar @ios_kinds, 38, 'E6: 38 ios candidates');
+    is(scalar @ios_kinds, 39, 'E6: 39 ios candidates');
     is(\@ios_kinds, [sort @KINDS], 'E7: the candidates cover the closed-world ui: vocabulary');
 
     my @guard = grep { $_->{class} eq 'Amin::Filter::UI::Guard' } @all;

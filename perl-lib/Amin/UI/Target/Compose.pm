@@ -129,6 +129,8 @@ sub _leaf ($self, $k, $pad, $a, $text) {
     return $pad . "AxaEqualizer(bars = " . $self->eq_bars($a)
                  . ", mode = " . $self->lit($self->eq_mode($a)) . ")"
                                                                if $k eq 'equalizer';
+    return $pad . "AxaVisualizer(mode = " . $self->lit($self->vis_mode($a)) . ")"
+                                                               if $k eq 'visualizer';
     return $pad . "Sparkline(points = $points)"                if $k eq 'sparkline';
     return $pad . "/* ui:searchable */"                        if $k eq 'searchable';
     return $pad . $self->_field($a)                            if $k eq 'field';

@@ -115,6 +115,8 @@ sub _leaf ($self, $k, $pad, $a, $text) {
     return $pad . "AxaEqualizer(bars: " . $self->eq_bars($a)
                  . ", mode: " . $self->lit($self->eq_mode($a)) . ")"
                                                                if $k eq 'equalizer';
+    return $pad . "AxaVisualizer(mode: " . $self->lit($self->vis_mode($a)) . ")"
+                                                               if $k eq 'visualizer';
     return $pad . "SparklineView(values: $points)"             if $k eq 'sparkline';
     return $pad . ".searchable(text: \$query)"                 if $k eq 'searchable';
     return $pad . "Text(" . $self->lit($text) . ").badge(" . (length $points ? $points : 1) . ")"
