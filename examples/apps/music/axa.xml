@@ -30,16 +30,15 @@
   <axa:action name="music.make" path="/" method="POST">
     <mu:action xmlns:mu="urn:projectamin:app:music" op="music.make"
                style="{style}" prompt="{prompt}" lyrics="{lyrics}"
-               duration="{duration}" instrumental="{instrumental}" sid="{sid}" csrf="{csrf}"/>
+               duration="{duration}" instrumental="{instrumental}" model="{model}"
+               sid="{sid}" csrf="{csrf}"/>
   </axa:action>
 
   <axa:action name="settings.save" path="/" method="POST">
     <mu:settings-save xmlns:mu="urn:projectamin:app:music"
-                      provider="{provider}" api="{api}" base="{base}"
-                      music="{music}" key="{key}" remove_key="{remove_key}"/>
+                      provider="{provider}" key="{key}" remove_key="{remove_key}"/>
     <mu:request xmlns:mu="urn:projectamin:app:music"
-                provider="{provider}" api="{api}" base="{base}" music="{music}"
-                sid="{sid}" csrf="{csrf}"/>
+                provider="{provider}" sid="{sid}" csrf="{csrf}"/>
   </axa:action>
 
 </axa:app>

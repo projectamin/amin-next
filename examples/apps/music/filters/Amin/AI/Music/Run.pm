@@ -56,15 +56,28 @@ sub make ($class, %f) {
     my $instr = ($f{instrumental} // '') =~ /\A(?:1|on|true|yes)\z/i ? 1 : 0;
 
     my $p = Amin::AI::Music::Store->provider;
-    return { err => 'Set a provider with a music model in API first.' } unless length $p->{music};
+    return { err => 'Set a provider in API first.' } unless length $p->{id};
     my $key = Amin::AI::Music::Store->key;
+    return { err => 'Add a key in API first.' }
+        if !length $key && ($p->{api} // '') ne 'stub';
+
+    # The posted model must be one discovery found for this provider; if the
+    # composer posted none, fall back to the saved selection.
+    my $cat = Amin::AI::Music::Store->catalog;
+    my @known = map { $_->{id} } @{ $cat->{models} // [] };
+    my $model = _norm($f{model});
+    $model = $p->{music} // '' unless length $model;
+    return { err => 'Choose a music model.' } unless length $model;
+    if (@known && !grep { $_ eq $model } @known) {
+        return { err => 'That model is not in the discovered catalog; pick one in the composer.' };
+    }
 
     my $dir = Amin::AI::Music::Store->takes_dir;
     make_path($dir) unless -d $dir;
     my $out = "$dir/" . time . '.bin';
     $out = "$dir/" . time . "-$$.bin" if -e $out;
 
-    my $xml = _xml(%v, p => $p, key => $key, out => $out, duration => $dur, instrumental => $instr);
+    my $xml = _xml(%v, model => $model, p => $p, key => $key, out => $out, duration => $dur, instrumental => $instr);
     my $run = _dispatch($xml, $f{on_update});
     my $res = $run->{error} ? { error => $run->{error} } : _result($run->{sink});
     # a refusal can echo what it was sent; the key never leaves this sub
@@ -75,8 +88,9 @@ sub make ($class, %f) {
         $res->{path} = $named if $named ne $res->{path} && !-e $named && rename $res->{path}, $named;
     }
     my $file = basename($res->{path});
-    Amin::AI::Music::Store->add_take(file => $file, mime => $res->{mime}, model => $p->{music}, %v);
-    return { ok => 1, file => $file, audio => "/audio/$file", mime => $res->{mime}, model => $p->{music} };
+    Amin::AI::Music::Store->add_take(file => $file, mime => $res->{mime}, model => $model, %v);
+    Amin::AI::Music::Store->remember_model($model);
+    return { ok => 1, file => $file, audio => "/audio/$file", mime => $res->{mime}, model => $model };
 }
 
 sub _xml (%v) {
@@ -90,7 +104,7 @@ sub _xml (%v) {
     return qq{<?xml version="1.0" encoding="UTF-8"?>\n}
         . '<amin:profile xmlns:amin="' . AMIN_NS . '" xmlns:ai="' . AI_NS . qq{">\n}
         . "  <ai:provider $pa>\n"
-        . '    <ai:model id="amin-music" upstream="' . _esc($p->{music}) . qq{" kind="music">\n}
+        . '    <ai:model id="amin-music" upstream="' . _esc($v{model}) . qq{" kind="music">\n}
         . "      <ai:music $ma>\n$kids      </ai:music>\n"
         . "    </ai:model>\n  </ai:provider>\n</amin:profile>\n";
 }

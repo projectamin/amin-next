@@ -48,10 +48,11 @@ sub _route ($self, $a) {
     my ($notice, $err);
     if (%$r) { $r->{ok} ? ($notice = $r->{notice}) : ($err = $r->{err} // 'Action failed.') }
     my $panel = length($r->{panel} // '') ? $r->{panel} : ($a->{panel} // '');
-    my %draft = map { $_ => ($a->{$_} // '') } qw(style prompt lyrics duration instrumental provider api base music);
-    # reuse: a take's inputs go back into the form
+    my %draft = map { $_ => ($a->{$_} // '') } qw(style prompt lyrics duration instrumental provider model);
+    # reuse: a take's inputs go back into the form (and its model if still known)
     if (length($a->{take} // '') && (my $t = Amin::AI::Music::Store->take($a->{take}))) {
         @draft{qw(style prompt lyrics)} = @$t{qw(style prompt lyrics)};
+        $draft{model} = $t->{model} // '';
     }
     $self->_page($notice, $err, $panel eq 'settings' ? 'settings' : '', \%draft);
     return;
@@ -62,7 +63,7 @@ sub _route ($self, $a) {
 sub _action ($self, $a) {
     my $op = $a->{op} // '';
     if ($op eq 'music.make') {
-        $self->_page(undef, undef, '', { map { $_ => ($a->{$_} // '') } qw(style prompt lyrics duration instrumental) }, $a);
+        $self->_page(undef, undef, '', { map { $_ => ($a->{$_} // '') } qw(style prompt lyrics duration instrumental model) }, $a);
     }
     else {
         $self->_page(undef, "Unknown action '$op'.", '', {});
@@ -77,10 +78,11 @@ sub _page ($self, $notice, $err, $panel, $draft, $live = undef) {
     $self->_ui_start('scene');
     $self->_ui_start('column');
     $self->_flash($notice, $err);
-    $self->_app('settings', %ctx, map { $_ => ($draft->{$_} // '') } qw(provider api base music)) if $panel eq 'settings';
-    $self->_app('composer', %ctx, map { $_ => ($draft->{$_} // '') } qw(style prompt lyrics duration));
+    $self->_app('settings', %ctx, provider => ($draft->{provider} // '')) if $panel eq 'settings';
+    $self->_app('composer', %ctx,
+        map { $_ => ($draft->{$_} // '') } qw(style prompt lyrics duration model));
     $self->_ui_start('vstack', id => 'live-lane');
-    $self->_app('make', %ctx, map { $_ => ($live->{$_} // '') } qw(style prompt lyrics duration instrumental)) if $live;
+    $self->_app('make', %ctx, map { $_ => ($live->{$_} // '') } qw(style prompt lyrics duration instrumental model)) if $live;
     $self->_ui_end('vstack');
     $self->_app('library');
     $self->_ui_end('column');

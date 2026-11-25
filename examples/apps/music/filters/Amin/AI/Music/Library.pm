@@ -25,7 +25,7 @@ sub render ($self, $a) {
         $self->_get_form('/', sub { $self->_button('reuse') }, take => $t->{file});
         $self->_ui_end('hstack');
         $self->_text($what);
-        $self->_audio('/audio/' . $t->{file}, $what);
+        $self->_player('/audio/' . $t->{file}, $what);
         $self->_ui_end('card');
     }
     $self->_ui_end('section');

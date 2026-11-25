@@ -120,6 +120,23 @@ sub _row ($self, $label, $name, $value, %o) {
     return;
 }
 
+# A picker posting one value.  $choices is [ [value, label], … ]; $value is the
+# current selection.  The option's text is its label.
+sub _select ($self, $name, $value, $choices, %o) {
+    my %at = (name => $name);
+    $at{$_} = $o{$_} for grep { defined $o{$_} } qw(id);
+    $self->_ui_start('select', %at);
+    for my $c (@$choices) {
+        my ($v, $label) = @$c;
+        $self->_ui_start('option', value => $v,
+            defined $value && length $value && "$value" eq "$v" ? (selected => '1') : ());
+        $self->_ui_text($label);
+        $self->_ui_end('option');
+    }
+    $self->_ui_end('select');
+    return;
+}
+
 sub _csrf ($self) { $self->{_csrf} // '' }
 sub _p ($name) { 'axa.param.' . $name }
 

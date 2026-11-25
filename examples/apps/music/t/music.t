@@ -15,11 +15,14 @@ require Amin::AI::Music::Store;
 require Amin::AI::Music::Run;
 require Amin::AI::Music::Page;
 require Amin::AI::Music::SettingsSave;
+require Amin::AI::Music::Catalog;
 for my $c (qw(Header Composer Settings Library Make)) { require "Amin/AI/Music/$c.pm" }
 my $Store = 'Amin::AI::Music::Store';
 my $MU = 'urn:projectamin:app:music';
 my $AI = 'http://projectamin.org/ns/ai/1';
 my $BC = 'http://projectamin.org/ns/bc/';
+
+sub slurp { open my $fh, '<:raw', shift or return ''; local $/; my $s = <$fh>; $s // '' }
 
 {
     package Rec;
@@ -36,29 +39,57 @@ sub run { my ($class, $name, %at) = @_;
     my $rec = Rec->new; my $f = $class->new(Handler => $rec, Element => $name);
     $f->start_element(ev($MU, $name, %at)); $f->end_element(ev($MU, $name)); return $rec }
 
-# ── settings: validation, key kept apart ──
-like $Store->save_provider(provider => 'dx', api => 'deepinfra', music => '')->{err}, qr/Music model/, 'a music model is required';
-like $Store->save_provider(provider => 'dx', api => 'deepinfra', music => 'm', base => 'ftp://x')->{err}, qr/http/, 'base must be http(s)';
-ok $Store->save_provider(provider => 'dx', api => 'deepinfra', base => 'https://api.example/v1', music => 'ace', key => 'sk-SECRET')->{ok}, 'provider saves';
+# ── settings: a provider preset and a key, nothing else ──
+is $Store->save_provider(provider => '')->{err}, 'Choose a provider.', 'a provider is required';
+like $Store->save_provider(provider => 'nope')->{err}, qr/Unknown provider/, 'an unknown provider is refused';
+ok $Store->save_provider(provider => 'deepinfra', key => 'sk-SECRET')->{ok}, 'provider saves';
 my $p = $Store->provider;
-is_deeply [ @$p{qw(id api music key_set)} ], [ 'dx', 'deepinfra', 'ace', 1 ], 'provider reads back';
+is_deeply [ @$p{qw(id api base music key_set)} ],
+    [ 'deepinfra', 'deepinfra', 'https://api.deepinfra.com', '', 1 ],
+    'the preset supplies api and base';
 ok !exists $p->{key}, 'provider() never returns the key';
 is((stat "$home/.amin-music/provider.xml")[2] & 07777, 0600, 'provider.xml is private');
-ok $Store->save_provider(provider => 'dx', api => 'deepinfra', music => 'ace2')->{ok}, 'a blank key keeps the stored one';
+ok $Store->save_provider(provider => 'deepinfra')->{ok}, 'a blank key keeps the stored one';
 is $Store->key, 'sk-SECRET', '... and it is still there';
-$Store->save_provider(provider => 'dx', api => 'deepinfra', music => 'ace2', remove_key => '1');
+$Store->save_provider(provider => 'deepinfra', remove_key => '1');
 is $Store->key, '', 'remove_key deletes it';
-$Store->save_provider(provider => 'dx', api => 'deepinfra', base => 'https://api.example/v1', music => 'ace', key => 'sk-SECRET');
+$Store->save_provider(provider => 'deepinfra', key => 'sk-SECRET');
+
+# ── the catalog comes from discovery, and is names only ──
+ok $Store->save_catalog({ provider => 'deepinfra', base => 'https://api.deepinfra.com',
+    models => [ { id => 'ace-step', name => 'ACE-Step' }, { id => 'lyria', name => 'Lyria' } ] })->{ok},
+    'a discovered catalog caches';
+my $cat = $Store->catalog;
+is scalar @{ $cat->{models} }, 2, 'both music models are read back';
+is $cat->{models}[0]{id}, 'ace-step', '... in order';
+like slurp("$home/.amin-music/catalog.xml"), qr/<ai:catalog[^>]*count="2"/, 'the cache records the count';
+unlike slurp("$home/.amin-music/catalog.xml"), qr/sk-SECRET/, '... and never the key';
 
 # ── elements never render the key ──
 for my $pair ([Header => 'header'], [Composer => 'composer'], [Settings => 'settings'], [Library => 'library']) {
     my $rec = run("Amin::AI::Music::$pair->[0]", $pair->[1], csrf => 'tok');
     unlike $rec->all, qr/sk-SECRET/, "mu:$pair->[1] never renders the provider key";
 }
-like run('Amin::AI::Music::Header', 'header')->all, qr/dx · key set/, 'header says a key is set';
+like run('Amin::AI::Music::Header', 'header')->all, qr/deepinfra · key set/, 'header says a key is set';
 
-# ── composer: multi-line lyrics field, csrf, draft ──
-my $c = run('Amin::AI::Music::Composer', 'composer', csrf => 'tok', style => 'lo-fi', lyrics => "a\nb");
+# ── settings offers presets, never asks for api/base/model ──
+{
+    my $set = run('Amin::AI::Music::Settings', 'settings', csrf => 'tok');
+    my ($ps) = $set->starts('select');
+    is $ps->[2]{name}, 'axa.param.provider', 'the provider is a picker';
+    is_deeply [ map { $_->[2]{value} } $set->starts('option') ],
+        [qw(deepinfra openai openrouter stub)], 'the known providers are offered';
+    my ($sel) = grep { $_->[2]{selected} } $set->starts('option');
+    is $sel->[2]{value}, 'deepinfra', 'the saved provider is selected';
+    my %sf = map { ($_->[2]{name} // '') => $_->[2] } $set->starts('field');
+    ok exists $sf{'axa.param.key'}, 'the key is a field';
+    ok !exists $sf{'axa.param.api'} && !exists $sf{'axa.param.base'} && !exists $sf{'axa.param.music'},
+        'api, base and the model are not typed here';
+    like $set->all, qr/2 music models discovered/, 'the card reports the discovered catalog';
+}
+
+# ── composer: model picker, multi-line lyrics, csrf, draft ──
+my $c = run('Amin::AI::Music::Composer', 'composer', csrf => 'tok', style => 'lo-fi', lyrics => "a\nb", model => 'lyria');
 my %f = map { ($_->[2]{name} // '') => $_->[2] } $c->starts('field');
 is $f{'axa.csrf'}{value}, 'tok', 'the form carries the csrf';
 is $f{'axa.action'}{value}, 'music.make', '... and posts music.make';
@@ -66,6 +97,21 @@ is $f{'axa.param.lyrics'}{type}, 'multiline', 'lyrics is a multi-line field';
 is $f{'axa.param.lyrics'}{value}, "a\nb", '... and keeps line breaks';
 is $f{'axa.param.style'}{value}, 'lo-fi', 'a draft fills the form';
 ok exists $f{'axa.param.instrumental'} && exists $f{'axa.param.duration'}, 'instrumental and duration are offered';
+{
+    my ($ms) = $c->starts('select');
+    is $ms->[2]{name}, 'axa.param.model', 'the model picker posts axa.param.model';
+    is_deeply [ map { $_->[2]{value} } $c->starts('option') ], [qw(ace-step lyria)],
+        'the catalog fills the picker';
+    my ($sel) = grep { $_->[2]{selected} } $c->starts('option');
+    is $sel->[2]{value}, 'lyria', 'the draft model is selected';
+}
+{
+    $Store->drop_catalog;
+    my $none = run('Amin::AI::Music::Composer', 'composer', csrf => 'tok');
+    is scalar($none->starts('select')), 0, 'no picker until discovery has found models';
+    $Store->save_catalog({ provider => 'deepinfra', base => 'https://api.deepinfra.com',
+        models => [ { id => 'ace-step', name => 'ACE-Step' }, { id => 'lyria', name => 'Lyria' } ] });
+}
 
 # ── making a take ──
 my ($seen_mode, $seen_xml);
@@ -88,15 +134,20 @@ sub fake_audio {
 like(Amin::AI::Music::Run->make()->{err}, qr/style, a description or lyrics/, 'an empty brief is refused');
 like(Amin::AI::Music::Run->make(prompt => 'x', duration => '3')->{err}, qr/Duration/, 'a silly duration is refused');
 like(Amin::AI::Music::Run->make(lyrics => 'x' x 20000)->{err}, qr/limited to/, 'lyrics are bounded');
+like(Amin::AI::Music::Run->make(prompt => 'x')->{err}, qr/Choose a music model/, 'a model is required');
+like(Amin::AI::Music::Run->make(prompt => 'x', model => 'gpt-4o-mini')->{err},
+    qr/not in the discovered catalog/, 'a model outside the catalog is refused before the hop');
 
 my @u;
 {
     local $Amin::AI::Music::Run::DISPATCH = fake_audio(1);
     my $r = Amin::AI::Music::Run->make(style => 'lo-fi', prompt => 'rain & "tin"', lyrics => "[verse]\nline <1>",
-        duration => '45', instrumental => '', on_update => sub { push @u, $_[0] });
+        duration => '45', instrumental => '', model => 'ace-step', on_update => sub { push @u, $_[0] });
     ok $r->{ok}, 'a take is made';
+    is $r->{model}, 'ace-step', 'the take names the chosen model';
     is $seen_mode, 'run', 'in run mode, so the file is written';
     like $r->{audio}, qr{\A/audio/[\w.-]+\.wav\z}, 'named by its real format, served from /audio';
+    like $seen_xml, qr{upstream="ace-step"}, 'the chosen model becomes ai:model upstream';
     like $seen_xml, qr{<ai:style>lo-fi</ai:style>}, 'style travels as ai:style';
     like $seen_xml, qr{<ai:prompt>rain &amp; &quot;tin&quot;</ai:prompt>}, 'the description is escaped';
     like $seen_xml, qr{<ai:lyrics>\[verse\]\nline &lt;1&gt;</ai:lyrics>}, 'lyrics keep their line breaks';
@@ -104,11 +155,13 @@ my @u;
     unlike $seen_xml, qr/instrumental/, 'instrumental is off unless asked';
     like $seen_xml, qr{key="sk-SECRET"}, 'the key is in the hop profile only';
     is $u[0]{bytes}, 262144, 'progress reaches the caller as it arrives';
+    is $Store->provider->{music}, 'ace-step', 'the used model is remembered';
 }
 {
     local $Amin::AI::Music::Run::DISPATCH = fake_audio(0);
     Amin::AI::Music::Run->make(prompt => 'a tune', instrumental => 'on');
     like $seen_xml, qr{instrumental="true"}, 'instrumental is passed';
+    like $seen_xml, qr{upstream="ace-step"}, 'with no model posted, the remembered one is used';
     unlike $seen_xml, qr/<ai:lyrics>/, 'no lyrics element when there are none';
 }
 {
@@ -133,20 +186,28 @@ is $takes->[0]{prompt}, 'a tune', 'newest first';
 my ($old) = grep { $_->{style} eq 'lo-fi' } @$takes;
 is $old->{lyrics}, "[verse]\nline <1>", 'lyrics round-trip with line breaks';
 is $old->{prompt}, 'rain & "tin"', 'the description round-trips';
+is $old->{model}, 'ace-step', 'the take records the model that made it';
 ok !defined $Store->take('../etc/passwd'), 'take() refuses a path';
 my $lib = run('Amin::AI::Music::Library', 'library');
 is scalar($lib->starts('audio')), 2, 'every take has a player';
+is scalar($lib->starts('player')), 2, '... the neutral player construct';
+is scalar($lib->starts('equalizer')), 2, '... with its equalizer';
 like $lib->all, qr{src,/audio/}, '... served from /audio';
 like $lib->all, qr/reuse/, '... and a reuse link';
 
 # ── Make paints into the lane ──
 {
     local $Amin::AI::Music::Run::DISPATCH = fake_audio(1);
-    my $m = run('Amin::AI::Music::Make', 'make', prompt => 'again', style => 'jazz', csrf => 'tok');
+    my $m = run('Amin::AI::Music::Make', 'make', prompt => 'again', style => 'jazz',
+        model => 'lyria', csrf => 'tok');
     my @swaps = map { $_->[2]{for} . ':' . $_->[2]{mode} } $m->starts('swap');
     is_deeply \@swaps, ['live-lane:append', 'live-status:text', 'live-card:replace'], 'lane, progress, then the finished card';
     like $m->all, qr/receiving audio · 256 KB/, 'progress is painted while the take is made';
+    like $seen_xml, qr/upstream="lyria"/, 'the card takes the model chosen in the composer';
+    like $m->all, qr/lyria/, '... and labels the finished take with it';
     is scalar($m->starts('audio')), 1, 'the finished take has a player';
+    is scalar($m->starts('player')), 1, '... wrapped in the neutral player construct';
+    is scalar($m->starts('equalizer')), 1, '... with its equalizer';
 }
 {
     local $Amin::AI::Music::Run::DISPATCH = sub { die "no route\n" };
@@ -178,11 +239,40 @@ like $lib->all, qr/reuse/, '... and a reuse link';
 }
 {
     my $rec = Rec->new; my $pg = Amin::AI::Music::Page->new(Handler => $rec);
-    $pg->start_element(ev($MU, 'action', op => 'music.make', prompt => 'go', csrf => 'tok'));
+    $pg->start_element(ev($MU, 'action', op => 'music.make', prompt => 'go', model => 'lyria', csrf => 'tok'));
     $pg->end_element(ev($MU, 'action'));
     my ($m) = $rec->starts('make');
     is $m->[2]{prompt}, 'go', 'a make action places mu:make in the live lane';
+    is $m->[2]{model}, 'lyria', '... with the model the composer chose';
     unlike $rec->all, qr/sk-SECRET/, 'the page stream never carries the key';
+}
+
+# ── saving settings discovers models through the machine ──
+{
+    my ($seen_mode, $seen_xml);
+    local $Amin::AI::Music::Catalog::DISPATCH = sub {
+        my ($mode, $xml, $h) = @_;
+        ($seen_mode, $seen_xml) = ($mode, $xml);
+        $h->start_element(ev($AI, 'catalog', provider => 'openai',
+            base => 'https://api.openai.com/v1', count => '1'));
+        $h->start_element(ev($AI, 'model', id => 'lyria', name => 'Lyria',
+            upstream => 'lyria', kind => 'music'));
+        $h->end_element(ev($AI, 'model'));
+        $h->end_element(ev($AI, 'catalog'));
+    };
+    my $rec = run('Amin::AI::Music::SettingsSave', 'settings-save',
+        provider => 'openai', key => 'sk-NEW');
+    is $seen_mode, 'render', 'discovery is read-only, so render mode';
+    like $seen_xml, qr/key="sk-NEW"/, 'the key rides only in the discovery profile';
+    like $seen_xml, qr{<ai:models/>}, 'the profile asks the machine for models';
+    my ($res) = $rec->starts('result');
+    is $res->[2]{ok}, 1, 'the save reports ok';
+    like $res->[2]{notice}, qr/Found 1 music model/, '... and how many were found';
+    my $cat = $Store->catalog;
+    is $cat->{provider}, 'openai', 'the catalog records the provider';
+    is $cat->{models}[0]{id}, 'lyria', '... and the discovered model';
+    unlike slurp("$home/.amin-music/catalog.xml"), qr/sk-NEW/, 'the cache never carries the key';
+    unlike $rec->all, qr/sk-NEW/, 'the result never carries the key';
 }
 
 # ── the spec is the whole filter surface ──

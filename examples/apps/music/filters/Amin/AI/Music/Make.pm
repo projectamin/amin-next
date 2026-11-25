@@ -52,7 +52,7 @@ sub render ($self, $a) {
         $self->_label($res->{model} // 'music');
         $self->_ui_end('hstack');
         $self->_text($summary);
-        $self->_audio($res->{audio}, $summary);
+        $self->_player($res->{audio}, $summary);
         $self->_ui_end('card');
     });
     return;
