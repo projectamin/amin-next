@@ -121,7 +121,9 @@ sub wait_listen ($port) {
         my $s = IO::Socket::INET->new(
             PeerAddr => '127.0.0.1', PeerPort => $port, Proto => 'tcp', Timeout => 1,
         );
-        return 1 if $s;
+        # IO::Socket::INET 1.52 with Timeout hands back a socket for a refused
+        # connect, so the handle alone is not proof of a listener.
+        return 1 if $s && $s->connected;
         sleep 0.1;
     }
     return 0;

@@ -64,7 +64,11 @@ sub wait_listen ($port, $tries = 150) {
         my $s = IO::Socket::INET->new(
             PeerAddr => '127.0.0.1', PeerPort => $port, Proto => 'tcp', Timeout => 1,
         );
-        return 1 if $s;
+        # IO::Socket::INET 1.52 with Timeout hands back a socket even when the
+        # non-blocking connect was refused (SO_ERROR=ECONNREFUSED), so the
+        # handle alone is not proof of a listener: a refused socket is not
+        # `connected`.
+        return 1 if $s && $s->connected;
         sleep 0.1;
     }
     return 0;
@@ -81,6 +85,7 @@ sub send_raw ($port, $raw, $timeout = 6) {
     my $s = IO::Socket::INET->new(
         PeerAddr => '127.0.0.1', PeerPort => $port, Proto => 'tcp', Timeout => $timeout,
     ) or return undef;
+    return undef unless $s->connected;
     print $s $raw;
     my $resp = '';
     while (1) {

@@ -211,7 +211,10 @@ sub drain ($loop, $s, $want, $timeout = 5) {
     ok $conn->{gated}, 'the connection is gated';
 
     syswrite($client, 'owned');
-    for (1 .. 50) { last if $ready; $loop->tick(20) }
+    # Wait for the readable bit itself: a writable/-out event can fire first
+    # (the gate is re-armed with the connection's full mask), so stopping at
+    # the first event would race the platform's poll ordering.
+    for (1 .. 50) { last if $saw_in; $loop->tick(20) }
 
     ok $ready, 'the owner callback received the poll event';
     ok $saw_in, 'the event carried the readable bit';

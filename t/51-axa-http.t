@@ -235,7 +235,9 @@ my $ready;
 for (1 .. 150) {
     $ready = IO::Socket::INET->new(
         PeerAddr => '127.0.0.1', PeerPort => $port, Proto => 'tcp', Timeout => 1);
-    last if $ready;
+    # IO::Socket::INET 1.52 with Timeout hands back a socket for a refused
+    # connect, so the handle alone is not proof of a listener.
+    last if $ready && $ready->connected;
     sleep 0.1;
 }
 ok($ready, "origin listening on 127.0.0.1:$port")
@@ -247,6 +249,7 @@ sub raw ($text) {
     my $s = IO::Socket::INET->new(
         PeerAddr => '127.0.0.1', PeerPort => $port, Proto => 'tcp', Timeout => 5)
         or return '';
+    return '' unless $s->connected;
     print $s $text;
     $s->blocking(0);
     my $buf = '';

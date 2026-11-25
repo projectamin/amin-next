@@ -132,7 +132,9 @@ sub wait_listen ($port) {
         my $s = IO::Socket::INET->new(
             PeerAddr => '127.0.0.1', PeerPort => $port, Proto => 'tcp', Timeout => 1,
         );
-        return 1 if $s;
+        # IO::Socket::INET 1.52 with Timeout hands back a socket for a refused
+        # connect, so the handle alone is not proof of a listener.
+        return 1 if $s && $s->connected;
         sleep 0.1;
     }
     return 0;
@@ -143,6 +145,7 @@ sub status_line_of ($port, $path = '/') {
     my $s = IO::Socket::INET->new(
         PeerAddr => '127.0.0.1', PeerPort => $port, Proto => 'tcp', Timeout => 5,
     ) or return undef;
+    return undef unless $s->connected;
     print $s "GET $path HTTP/1.1\r\nHost: only.example\r\nConnection: close\r\n\r\n";
     my $resp = '';
     while (1) {

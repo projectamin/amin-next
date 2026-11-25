@@ -42,7 +42,9 @@ for (1 .. 150) {
     $sock = IO::Socket::INET->new(
         PeerAddr => '127.0.0.1', PeerPort => $port, Proto => 'tcp', Timeout => 1,
     );
-    last if $sock;
+    # IO::Socket::INET 1.52 with Timeout hands back a socket for a refused
+    # connect, so the handle alone is not proof of a listener.
+    last if $sock && $sock->connected;
     sleep 0.1;
 }
 ok($sock, "listener accepts connections on 127.0.0.1:$port")
