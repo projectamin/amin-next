@@ -98,6 +98,10 @@ is $f{'axa.param.lyrics'}{value}, "a\nb", '... and keeps line breaks';
 is $f{'axa.param.style'}{value}, 'lo-fi', 'a draft fills the form';
 ok exists $f{'axa.param.instrumental'} && exists $f{'axa.param.duration'}, 'instrumental and duration are offered';
 {
+    my ($vis) = $c->starts('visualizer');
+    is $vis->[2]{mode}, 'plasma', 'the composer carries an ambient visualizer';
+}
+{
     my ($ms) = $c->starts('select');
     is $ms->[2]{name}, 'axa.param.model', 'the model picker posts axa.param.model';
     is_deeply [ map { $_->[2]{value} } $c->starts('option') ], [qw(ace-step lyria)],
@@ -192,6 +196,9 @@ my $lib = run('Amin::AI::Music::Library', 'library');
 is scalar($lib->starts('audio')), 2, 'every take has a player';
 is scalar($lib->starts('player')), 2, '... the neutral player construct';
 is scalar($lib->starts('equalizer')), 2, '... with its equalizer';
+is scalar($lib->starts('visualizer')), 2, '... and an audio-reactive field';
+is_deeply [ map { $_->[2]{mode} } $lib->starts('visualizer') ], ['ripple', 'ripple'],
+    'every library player asks for the ripple mode';
 like $lib->all, qr{src,/audio/}, '... served from /audio';
 like $lib->all, qr/reuse/, '... and a reuse link';
 
@@ -208,6 +215,8 @@ like $lib->all, qr/reuse/, '... and a reuse link';
     is scalar($m->starts('audio')), 1, 'the finished take has a player';
     is scalar($m->starts('player')), 1, '... wrapped in the neutral player construct';
     is scalar($m->starts('equalizer')), 1, '... with its equalizer';
+    is_deeply [ map { $_->[2]{mode} } $m->starts('visualizer') ], ['vortex', 'ripple'],
+        'the waiting lane swirls, then the finished take ripples';
 }
 {
     local $Amin::AI::Music::Run::DISPATCH = sub { die "no route\n" };

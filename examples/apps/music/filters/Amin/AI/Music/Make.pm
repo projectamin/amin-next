@@ -29,6 +29,7 @@ sub render ($self, $a) {
         $self->_ui_start('text', id => 'live-status');
         $self->_ui_text('waiting for the model');
         $self->_ui_end('text');
+        $self->_ui_void('visualizer', mode => 'vortex');
         $self->_ui_end('card');
     });
 
@@ -52,7 +53,7 @@ sub render ($self, $a) {
         $self->_label($res->{model} // 'music');
         $self->_ui_end('hstack');
         $self->_text($summary);
-        $self->_player($res->{audio}, $summary);
+        $self->_player($res->{audio}, $summary, vis => 'ripple');
         $self->_ui_end('card');
     });
     return;

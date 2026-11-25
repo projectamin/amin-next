@@ -19,6 +19,7 @@ sub render ($self, $a) {
     my $sel = length($a->{model} // '') ? $a->{model} : $p->{music};
 
     $self->_ui_start('card');
+    $self->_ui_void('visualizer', mode => 'plasma');
     $self->_form('music.make', sub {
         if (@models) {
             $self->_ui_start('vstack');

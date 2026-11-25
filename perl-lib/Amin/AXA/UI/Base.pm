@@ -79,10 +79,13 @@ sub _audio ($self, $src, $title = '') {
 # The neutral AV construct: a player container holding its transport and a
 # meter.  What that becomes is the render target's business (HTML owns a Web
 # Audio runtime; the native targets emit player and bar views), so an app
-# states the intent once and no app code knows the platform.
+# states the intent once and no app code knows the platform.  `vis` names a
+# curated visualizer mode; the target owns the shader and binds it to this
+# player's audio.
 sub _player ($self, $src, $title = '', %o) {
     return unless defined $src && length $src;
     $self->_ui_start('player', title => _short($title, 80));
+    $self->_ui_void('visualizer', mode => $o{vis}) if defined $o{vis} && length $o{vis};
     $self->_audio($src, $title);
     $self->_ui_void('equalizer',
         bars => ($o{bars} // 32),
