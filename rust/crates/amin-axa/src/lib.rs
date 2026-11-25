@@ -16,7 +16,7 @@
 //! |-----------------------------------|-----------------------------|
 //! | `Amin::Handler::HTML`             | [`serializer::HtmlSerializer`] |
 //! | `Amin::UI::Target::HTML`          | [`ui_target::HtmlTarget`]   |
-//! | `Amin::Filter::UI::Guard`         | [`ui_target::is_known_kind`] |
+//! | `Amin::Filter::UI::Guard`         | the spec's `vocab` band (`bsax::vocab::Vocab`) — not repeated in the target |
 //! | `Amin::Example::Shop`             | [`shop::Shop`]              |
 //! | `Amin::AXA::FormCodec`            | [`formcodec::inflate`]      |
 //! | `Amin::AXA::App`                  | [`app::App`]                |

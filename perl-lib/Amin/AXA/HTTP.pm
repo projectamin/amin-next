@@ -46,6 +46,14 @@ sub boot ($class, %opts) {
     die "axa: app_dir required\n" unless $opts{app_dir};
     my $app = Amin::AXA::App->load($opts{app_dir});
     Amin::AXA::App->set_default($app);
+    # The bundle's own filter code lives beside its declarations.  bin/axa
+    # already puts $dir/filters on @INC; an embedding that calls boot() must
+    # get the same view of the bundle or the spec's app filters fail to load.
+    if (-d "$opts{app_dir}/filters") {
+        require Cwd;
+        my $filters = Cwd::abs_path("$opts{app_dir}/filters");
+        unshift @INC, $filters unless grep { $_ eq $filters } @INC;
+    }
     # The store is injected, never chosen here: the serve path hands in an
     # off-heap adapter (Amin::AXA::Store::SQLite), because a forked worker gets
     # its own copy of any in-process hash and the cart would diverge between
