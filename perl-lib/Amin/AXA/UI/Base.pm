@@ -76,6 +76,21 @@ sub _audio ($self, $src, $title = '') {
     return;
 }
 
+# The neutral AV construct: a player container holding its transport and a
+# meter.  What that becomes is the render target's business (HTML owns a Web
+# Audio runtime; the native targets emit player and bar views), so an app
+# states the intent once and no app code knows the platform.
+sub _player ($self, $src, $title = '', %o) {
+    return unless defined $src && length $src;
+    $self->_ui_start('player', title => _short($title, 80));
+    $self->_audio($src, $title);
+    $self->_ui_void('equalizer',
+        bars => ($o{bars} // 32),
+        mode => ($o{mode} // 'bars'));
+    $self->_ui_end('player');
+    return;
+}
+
 sub _swap ($self, $mode, $for, $body) {
     $self->_ui_start('swap', for => $for, mode => $mode);
     $body->();

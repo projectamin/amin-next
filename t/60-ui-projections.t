@@ -35,6 +35,7 @@ my @KINDS = qw(
     progress alert sheet toolbar searchable item label text markdown badge
     sparkline button navigate image asyncimage swap audio
     form field select option table tr cell style
+    player equalizer
 );
 
 # Minimal SAX sink: records raw events so assertions read the fleet's real
@@ -225,14 +226,14 @@ subtest 'E: machine_spec declares the ui: filter family' => sub {
         'E2: the retired SwiftUIView stub is gone');
 
     my @el = grep { $_->{class} =~ /^Amin::Filter::UI::Element::/ } @all;
-    is(scalar @el, 108, 'E3: one element filter per kind per target (36 × 3)');
-    is([sort map { $_->{meta}{position} // '' } @el], [('late') x 108],
+    is(scalar @el, 114, 'E3: one element filter per kind per target (38 × 3)');
+    is([sort map { $_->{meta}{position} // '' } @el], [('late') x 114],
         'E4: every element filter sits at the late position');
     is([sort keys %{ { map { ($_->{meta}{target} // '') => 1 } @el } }], ['android', 'html', 'ios'],
         'E5: every element filter is target-scoped (ios / android / html only)');
 
     my @ios_kinds = sort map { $_->{meta}{element} } grep { ($_->{meta}{target} // '') eq 'ios' } @el;
-    is(scalar @ios_kinds, 36, 'E6: 36 ios candidates');
+    is(scalar @ios_kinds, 38, 'E6: 38 ios candidates');
     is(\@ios_kinds, [sort @KINDS], 'E7: the candidates cover the closed-world ui: vocabulary');
 
     my @guard = grep { $_->{class} eq 'Amin::Filter::UI::Guard' } @all;
@@ -282,6 +283,37 @@ subtest 'G: an html host projects the IR to XHTML events' => sub {
         'G5: additive — the ui: subtree is still emitted in full');
     is($cap->stream_of('ui-swiftui'), '', 'G6: the ios dialect is not spliced');
     is($cap->stream_of('ui-compose'), '', 'G7: the android dialect is not spliced');
+};
+
+# ═══════════════════════════════════════════════════════════════════════════
+# H. ui:player / ui:equalizer project to native player constructs — the
+#    transport is the player's, not a bare text placeholder.
+# ═══════════════════════════════════════════════════════════════════════════
+subtest 'H: the neutral AV construct projects on both native targets' => sub {
+    my $xml = doc('<ui:player title="take">'
+        . '<ui:audio src="/audio/take.mp3" title="take"/>'
+        . '<ui:equalizer bars="24" mode="wave"/>'
+        . '</ui:player>');
+    my $log = Amin::Log::Standard->new(stderr => 0);
+
+    my $sc = UICapture->new;
+    drive(fleet('ios', $sc, $log), $xml);
+    my $sw = $sc->stream_of('ui-swiftui');
+    like($sw, qr/AxaAudioTransport\(url: URL\(string: "\/audio\/take\.mp3"\)!\)/,
+        'H1: ui:audio inside ui:player → the native transport');
+    like($sw, qr/AxaEqualizer\(bars: 24, mode: "wave"\)/,
+        'H2: ui:equalizer bars/mode reach the native meter');
+    is([$sc->ui_names], ['ui:player', 'ui:audio', 'ui:equalizer'],
+        'H3: additive — the whole AV subtree is still emitted');
+
+    my $cc = UICapture->new;
+    drive(fleet('android', $cc, $log), $xml);
+    my $kt = $cc->stream_of('ui-compose');
+    like($kt, qr/AxaAudioPlayer \{/,          'H4: ui:player → a Compose player');
+    like($kt, qr/AxaAudioTransport\(url = "\/audio\/take\.mp3"\)/,
+        'H5: ui:audio inside ui:player → the native transport');
+    like($kt, qr/AxaEqualizer\(bars = 24, mode = "wave"\)/,
+        'H6: ui:equalizer bars/mode reach the Compose meter');
 };
 
 done_testing;

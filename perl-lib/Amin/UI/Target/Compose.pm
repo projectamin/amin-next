@@ -74,6 +74,9 @@ sub _cont ($self, $k, $pad, $pad1, $a) {
     return { head => "$pad" . "AxaSwap(target = " . $self->lit($self->attr($a, 'for'))
                      . ", mode = " . $self->lit($self->attr($a, 'mode') || 'replace') . ")" }
                                                        if $k eq 'swap';
+    # the neutral AV container: a native player composable owns its transport
+    # and meter children, the same way the HTML target's runtime does
+    return { head => "$pad" . "AxaAudioPlayer" }       if $k eq 'player';
     return undef;
 }
 
@@ -105,6 +108,9 @@ sub _leaf ($self, $k, $pad, $a, $text) {
     my $title  = $self->attr($a, 'title');
     my $url    = $self->attr($a, 'url');
     my $points = $self->attr($a, 'points');
+    my $src    = length $self->attr($a, 'src') ? $self->attr($a, 'src') : $title;
+    my $parent = $self->stack->[-1];
+    my $in_player = ($parent && ($parent->{kind} // '') eq 'player') ? 1 : 0;
 
     return $pad . "Text(" . $self->lit($text) . ")"            if $k eq 'text';
     return $pad . "Text(" . $self->lit($text) . ") // ui:markdown"
@@ -116,8 +122,13 @@ sub _leaf ($self, $k, $pad, $a, $text) {
                                                                if $k eq 'image';
     return $pad . "AsyncImage(model = " . $self->lit($url) . ", contentDescription = null)"
                                                                if $k eq 'asyncimage';
-    return $pad . "Text(" . $self->lit(length $self->attr($a, 'src') ? $self->attr($a, 'src') : $title)
-                 . ") // ui:audio"                              if $k eq 'audio';
+    # inside ui:player the transport is the native player's own control
+    return $pad . "AxaAudioTransport(url = " . $self->lit($src) . ")"
+                                                               if $k eq 'audio' && $in_player;
+    return $pad . "Text(" . $self->lit($src) . ") // ui:audio" if $k eq 'audio';
+    return $pad . "AxaEqualizer(bars = " . $self->eq_bars($a)
+                 . ", mode = " . $self->lit($self->eq_mode($a)) . ")"
+                                                               if $k eq 'equalizer';
     return $pad . "Sparkline(points = $points)"                if $k eq 'sparkline';
     return $pad . "/* ui:searchable */"                        if $k eq 'searchable';
     return $pad . $self->_field($a)                            if $k eq 'field';

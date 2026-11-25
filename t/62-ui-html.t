@@ -7,7 +7,7 @@
 #                            rides along additively but never reaches the page, and
 #                            no markup is ever built from a string (§4.5).
 #
-# One IR, one more dialect: the same 25-element filter fleet + one Target::HTML.
+# One IR, one more dialect: the same 38-element filter fleet + one Target::HTML.
 use v5.38; use warnings; use utf8;
 use Test2::V0;
 use File::Basename qw(dirname);
@@ -163,5 +163,64 @@ like($auh, qr{</audio>}, 'ui:audio stays open (it is not a void element)');
 unlike($auh, qr/<ui:/, 'no ui: element reaches the page');
 is(eval { XML::LibXML->load_xml(string => $auh) ? 1 : 0 }, 1,
     'audio page is well-formed XML/XHTML');
+
+# ═══════════════════════════════════════════════════════════════════════════
+# 6. ui:player / ui:equalizer — the neutral AV construct becomes one figure
+#    whose runtime owns the meter, emitted once per page.
+# ═══════════════════════════════════════════════════════════════════════════
+my $pl = Path::Tiny->tempfile(SUFFIX => '.xml');
+$pl->spew_utf8(<<'XML');
+<?xml version="1.0" encoding="UTF-8"?>
+<amin:profile xmlns:amin="http://projectamin.org/ns/2026/"
+              xmlns:ui="http://projectamin.org/ns/ui/1"
+              amin:id="io.projectamin.test.player" amin:version="0.1.0">
+  <ui:app title="Player">
+    <ui:player title="take" id="live-player">
+      <ui:audio src="/audio/take.mp3" title="take"/>
+      <ui:equalizer bars="24" mode="wave" id="live-eq"/>
+    </ui:player>
+  </ui:app>
+</amin:profile>
+XML
+
+my ($plh, $rc6) = run_bin($amin, 'ui', "$pl", '--os=html');
+is($rc6, 0, 'player fixture renders');
+like($plh, qr{<figure\b[^>]*\bclass="player"[^>]*\bdata-axa-player="1"},
+    'ui:player → a player figure');
+like($plh, qr{<figure\b[^>]*\baria-label="take"}, 'the player carries its title');
+like($plh, qr{<figure\b[^>]*\bid="live-player"}, 'ui:id rides through onto the figure');
+like($plh, qr{<audio\b[^>]*\bsrc="/audio/take\.mp3"}, 'the transport is a child of the player');
+like($plh, qr{<canvas\b[^>]*\bdata-axa-eq="1"[^>]*\bdata-bars="24"[^>]*\bdata-mode="wave"},
+    'ui:equalizer → a canvas carrying its shape');
+like($plh, qr{<canvas\b[^>]*\bid="live-eq"}, 'ui:id rides through onto the meter');
+like($plh, qr{<canvas\b[^>]*\baria-hidden="true"}, 'the meter is decorative to assistive tech');
+like($plh,
+    qr{<figure\b[^>]*data-axa-player="1".*?<audio\b.*?</audio>.*?<canvas\b[^>]*data-axa-eq="1".*?</figure>}s,
+    'transport and meter nest inside the player figure');
+is(scalar(() = $plh =~ /<script>/g), 1, 'the player runtime is emitted once per page');
+unlike($plh, qr/<ui:/, 'no ui: element reaches the page');
+is(eval { XML::LibXML->load_xml(string => $plh) ? 1 : 0 }, 1,
+    'player page is well-formed XML/XHTML (the inline runtime is XML-safe)');
+
+# The meter's shape is clamped like Target::Base::eq_bars: two digits and
+# 2..=64, else 32; an unknown mode falls back to bars (Rust mirrors this).
+my $pq = Path::Tiny->tempfile(SUFFIX => '.xml');
+$pq->spew_utf8(<<'XML');
+<?xml version="1.0" encoding="UTF-8"?>
+<amin:profile xmlns:amin="http://projectamin.org/ns/2026/"
+              xmlns:ui="http://projectamin.org/ns/ui/1"
+              amin:id="io.projectamin.test.eq-defaults" amin:version="0.1.0">
+  <ui:app title="Meters">
+    <ui:equalizer/>
+    <ui:equalizer bars="007" mode="pulse"/>
+    <ui:equalizer bars="64"/>
+  </ui:app>
+</amin:profile>
+XML
+my ($pqh, $rc7) = run_bin($amin, 'ui', "$pq", '--os=html');
+is($rc7, 0, 'meter-defaults fixture renders');
+is(scalar(() = $pqh =~ /data-bars="32"/g), 2, 'missing/triple-digit bars clamp to 32');
+is(scalar(() = $pqh =~ /data-bars="64"/g), 1, 'the upper bound is accepted');
+is(scalar(() = $pqh =~ /data-mode="bars"/g), 3, 'unknown/missing mode is bars');
 
 done_testing;

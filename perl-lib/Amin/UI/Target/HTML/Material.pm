@@ -64,6 +64,9 @@ our $CSS = <<'CSS';
 :where(nav button,article>.hstack button){background:transparent;color:var(--md-primary);padding:6px 12px}
 :where(nav button:hover,article>.hstack button:hover){background:var(--md-secondary-container);filter:none}
 :where(audio){width:100%}
+:where(figure.player){display:flex;flex-direction:column;gap:10px;margin:0;padding:12px 14px;background:var(--md-surface-container-high);border-radius:var(--md-radius-m)}
+:where(figure.player audio){margin:0}
+:where(figure.player canvas){display:block;width:100%;height:44px;--axa-eq:var(--md-primary)}
 :where(progress){width:100%;accent-color:var(--md-primary)}
 :where(div[role=alert]){padding:12px 16px;border-radius:var(--md-radius-s);background:var(--md-surface-container-high);color:var(--md-error);border:1px solid var(--md-error)}
 :where(table){border-collapse:collapse;width:100%}

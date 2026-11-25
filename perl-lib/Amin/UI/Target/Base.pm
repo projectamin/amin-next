@@ -27,11 +27,11 @@ use Class::Tiny { sink => undef, buf => '' }, { stack => sub { [] } };
 # downstream target can pick its projection out of the stream by channel.
 use constant AMIN_NS => 'http://projectamin.org/ns/2026/';
 
-# The 23 container kinds.  Every other kind in the 36-element ui: vocabulary is
+# The 24 container kinds.  Every other kind in the 38-element ui: vocabulary is
 # a leaf whose whole expression is produced on close().
 our %CONTAINER = map {; $_ => 1 } qw(
     app scene list row column hstack vstack stack grid section card
-    button navigate toolbar sheet alert item swap
+    button navigate toolbar sheet alert item swap player
     form select table tr cell
 );
 
@@ -158,10 +158,10 @@ sub _deliver ($self, $h) {
 }
 
 # ── shared IR accessors / folding ──────────────────────────────────────────
-# A `ui:` attribute value (unnamespaced; the closed-view vocab has thirteen:
+# A `ui:` attribute value (unnamespaced; the closed-view vocab has fifteen:
 # title spacing points for-each bind url action method min max placeholder
-# selected header) or '' when absent.  Attribute keys are Clark notation,
-# exactly as the canonical IR carries them.
+# selected header bars mode) or '' when absent.  Attribute keys are Clark
+# notation, exactly as the canonical IR carries them.
 sub attr ($self, $a, $name) {
     my $x = $a->{"{}${name}"} // return '';
     return $x->{Value} // '';
@@ -187,6 +187,17 @@ sub lit ($self, $s) {
     $t =~ s/\n/\\n/g;
     $t =~ s/\r/\\r/g;
     return qq{"$t"};
+}
+
+# ui:equalizer shape, clamped to what every target can draw: 2..64 bars,
+# `bars` or `wave`.  Owned here so the web runtime and the native projections
+# cannot disagree about the shape the profile asked for.
+sub eq_bars ($self, $a) {
+    my $n = $self->attr($a, 'bars');
+    return ($n =~ /\A\d{1,2}\z/ && $n >= 2 && $n <= 64) ? $n + 0 : 32;
+}
+sub eq_mode ($self, $a) {
+    return $self->attr($a, 'mode') eq 'wave' ? 'wave' : 'bars';
 }
 
 1;

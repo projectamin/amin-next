@@ -11,6 +11,7 @@ package Amin::UI::Target::HTML;
 use v5.38; use warnings; use utf8; use experimental 'signatures';
 use parent 'Amin::UI::Target::Base';
 use Amin::UI::Target::HTML::Material;
+use Amin::UI::Target::HTML::Player;
 
 use constant XHTML => 'http://www.w3.org/1999/xhtml';
 
@@ -290,6 +291,31 @@ sub open ($self, $k, $a, $h) {
         push @at, loop => 'loop' if length $self->attr($a, 'loop');
         $self->_start($h, 'audio', @at, @id);
         $f->{closes} = ['audio'];
+    }
+    elsif ($k eq 'player') {
+        # The neutral AV container.  The target owns the client runtime, so an
+        # app emits IR only; the script is emitted once, before the first
+        # player, and binds every [data-axa-player] figure (including ones a
+        # later ui:swap inserts).
+        unless ($self->{_player_runtime}) {
+            $self->{_player_runtime} = 1;
+            $self->_inline($h, 'script', $Amin::UI::Target::HTML::Player::RUNTIME);
+        }
+        my @at = (class => 'player', 'data-axa-player' => '1');
+        push @at, 'aria-label' => $title if length $title;
+        $self->_start($h, 'figure', @at, @id);
+        $f->{closes} = ['figure'];
+    }
+    elsif ($k eq 'equalizer') {
+        # A leaf: an empty canvas the player runtime paints from the analyser
+        # of the transport it sits beside.  No content, no fallback text.
+        $self->_start($h, 'canvas',
+            'data-axa-eq'   => '1',
+            'data-bars'     => $self->eq_bars($a),
+            'data-mode'     => $self->eq_mode($a),
+            'aria-hidden'   => 'true', @id);
+        $f->{closes} = ['canvas'];
+        $f->{leaf}   = 1;
     }
     elsif ($k eq 'searchable') {
         $self->_start($h, 'input', type => 'search', @id);

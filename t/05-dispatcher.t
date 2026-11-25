@@ -38,8 +38,8 @@ is($late->[1], 'Amin::Filter::UI::Guard',
 is($late->[-2], 'Amin::AI::Graph', 'spec late idx -2 = AI::Graph');
 is($late->[-1], 'Amin::Content::Document',
     'spec late idx -1 = Content::Document (appended after the ui: region)');
-is(scalar($late->@*), 112,
-    'spec late = Map::Topology + UI::Guard + 36×3 ui: element filters + AI::Graph'
+is(scalar($late->@*), 118,
+    'spec late = Map::Topology + UI::Guard + 38×3 ui: element filters + AI::Graph'
     . ' + Content::Document');
 {
     my @el = @$late[2 .. $#$late - 2];
@@ -50,9 +50,9 @@ is(scalar($late->@*), 112,
         next unless $f->{class} =~ /^Amin::Filter::UI::Element::/;
         $target{ $f->{meta}{target} // '' }++;
     }
-    is($target{ios}, 36, 'late declares 36 ios element candidates');
-    is($target{android}, 36, 'late declares 36 android element candidates');
-    is($target{html}, 36, 'late declares 36 html element candidates');
+    is($target{ios}, 38, 'late declares 38 ios element candidates');
+    is($target{android}, 38, 'late declares 38 android element candidates');
+    is($target{html}, 38, 'late declares 38 html element candidates');
     is(scalar(keys %target), 3,
         'ui: element filters are target-scoped only (ios/android/html) — a neutral host splices none');
 }
