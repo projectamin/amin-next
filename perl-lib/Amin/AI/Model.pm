@@ -23,8 +23,8 @@ use Amin::AI::ModelRegistry;
 # This filter owns the scope stack: it pushes on ai:provider / ai:model
 # start_element and pops on the matching end_element, so current_binding()
 # returns the innermost scope.  The action filters (Gate / Inference / Music /
-# Embed / Memory) simply read it — they never look for a model attribute on
-# their own element.
+# Models / Embed / Memory) simply read it — they never look for a model
+# attribute on their own element.
 #
 # The profile is the definition; this filter does not rewrite it.  A request
 # that carries base/key/upstream is refused (an ai:result kind=error is added)
@@ -47,7 +47,7 @@ my %HOP_ON_MODEL = map { $_ => 1 }
 
 # Action elements: the leaves that consume a binding.  Each start clears the
 # per-action inject latch so a denied sibling never poisons the next action.
-my %ACTION = map { $_ => 1 } qw(request embed music query);
+my %ACTION = map { $_ => 1 } qw(request embed music models query);
 
 {
     my @STACK;          # lexical scopes: { kind, binding, denied, reason }

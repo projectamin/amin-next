@@ -215,4 +215,86 @@ TEN
     like($out, qr/\[stub:amin-chat-7b\]/, 'TR-MU.6: unrelated chat path unchanged');
 }
 
+# ── TR-MU.7: model discovery: provider catalog filtered to music ────────
+{
+    my $ua = FakeProviderUA->new(payload => <<'JSON');
+{"data":[
+  {"id":"gpt-4o-mini","owned_by":"openai"},
+  {"id":"text-embedding-3-small","owned_by":"openai"},
+  {"id":"google/gemini-4-carbon","owned_by":"google",
+   "architecture":{"modality":"text+image+file+audio+video->text",
+                   "input_modalities":["text","image","file","audio","video"],
+                   "output_modalities":["text"]}},
+  {"id":"openai/gpt-audio","owned_by":"openai",
+   "architecture":{"modality":"text+audio->text+audio",
+                   "output_modalities":["text","audio"]}},
+  {"id":"google/lyria-3-pro-preview","architecture":{"output_modalities":["audio"]}},
+  {"id":"acestep-v15-xl-sft","owned_by":"deepinfra"},
+  {"id":"suno-v4","capabilities":{"music":true}}
+]}
+JSON
+    local $Amin::AI::Provider::Base::UA = $ua;
+    my $out = run_ai(<<'TEN');
+  <ai:provider id="openai" api="openai" base="https://api.example/v1" key="sk-secret-models">
+    <ai:model id="amin-models" kind="models">
+      <ai:models/>
+    </ai:model>
+  </ai:provider>
+TEN
+    like($ua->{last}{url}, qr{/v1/models$}, 'TR-MU.7: discovery GETs {base}/models');
+    is($ua->{last}{headers}{Authorization}, 'Bearer sk-secret-models',
+        'TR-MU.7: discovery carries the provider key');
+    like($out, qr/<ai:catalog[^>]*ai:count="3"/, 'TR-MU.7: catalog counts only music models');
+    like($out, qr/<ai:model(?=[^>]*ai:id="google\/lyria-3-pro-preview")(?=[^>]*ai:kind="music")[^>]*>/,
+        'TR-MU.7: audio output modality is music-capable');
+    like($out, qr/<ai:model(?=[^>]*ai:id="acestep-v15-xl-sft")(?=[^>]*ai:kind="music")[^>]*>/,
+        'TR-MU.7: a music id from the catalog is kept');
+    like($out, qr/<ai:model(?=[^>]*ai:id="suno-v4")[^>]*>/,
+        'TR-MU.7: an explicit music capability is kept');
+    unlike($out, qr/gpt-4o-mini|text-embedding-3-small/,
+        'TR-MU.7: chat and embedding models are filtered out');
+    unlike($out, qr/google\/gemini-4-carbon/,
+        'TR-MU.7: an audio-input model that emits only text is filtered out');
+    unlike($out, qr/openai\/gpt-audio/,
+        'TR-MU.7: a conversational audio model is not a music model');
+    unlike($out, qr/<ai:model[^>]*sk-secret-models/,
+        'TR-MU.7: the key never rides on a catalog model');
+    like($out, qr/<ai:catalog[^>]*ai:provider="openai"/,
+        'TR-MU.7: the catalog names its provider');
+}
+
+# ── TR-MU.8: discovery failure is a provider error, key redacted ────────
+{
+    my $ua = FakeProviderUA->new(fail => {
+        success => 0, status => 401, reason => 'Unauthorized',
+        content => '{"error":{"message":"bad key sk-secret-models"}}',
+    });
+    local $Amin::AI::Provider::Base::UA = $ua;
+    my $out = run_ai(<<'TEN');
+  <ai:provider id="openai" api="openai" base="https://api.example/v1" key="sk-secret-models">
+    <ai:model id="amin-models" kind="models">
+      <ai:models/>
+    </ai:model>
+  </ai:provider>
+TEN
+    like($out, qr/<ai:result[^>]*ai:kind="error"/, 'TR-MU.8: discovery failure is an error result');
+    like($out, qr/ai:rc="-6147"/, 'TR-MU.8: rc=-6147 (AI_PROVIDER_ERROR)');
+    unlike($out, qr/ai:msg="[^"]*sk-secret-models/,
+        'TR-MU.8: the key is redacted from the error');
+}
+
+# ── TR-MU.9: the offline stub still yields a music catalog ──────────────
+{
+    my $out = run_ai(<<'TEN');
+  <ai:provider id="stub" api="stub">
+    <ai:model id="amin-models" kind="models">
+      <ai:models/>
+    </ai:model>
+  </ai:provider>
+TEN
+    like($out, qr/<ai:catalog[^>]*ai:count="1"/, 'TR-MU.9: stub discovery finds one model');
+    like($out, qr/<ai:model(?=[^>]*ai:id="stub-music")(?=[^>]*ai:kind="music")[^>]*>/,
+        'TR-MU.9: the stub model is music-capable');
+}
+
 done_testing();

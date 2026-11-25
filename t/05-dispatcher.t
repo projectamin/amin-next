@@ -71,13 +71,14 @@ is($by_pos{middle}[3]{class},  'Amin::Command::Autoconf',  'spec middle idx 3 = 
 is($by_pos{middle}[4]{class},  'Amin::Command::Automake',  'spec middle idx 4 = Automake');
 is($by_pos{middle}[5]{class},  'Amin::Command::Autoreconf','spec middle idx 5 = Autoreconf');
 my $last = $#{$by_pos{middle}};
-is($by_pos{middle}[$last-12]{class}, 'Amin::Command::Exec',    'spec middle idx -13 = Exec');
-is($by_pos{middle}[$last-11]{class}, 'Amin::Command::Spawn',   'spec middle idx -12 = Spawn');
-is($by_pos{middle}[$last-10]{class}, 'Amin::Command::Signal',  'spec middle idx -11 = Signal');
-is($by_pos{middle}[$last-9]{class},  'Amin::Sandbox',          'spec middle idx -10 = Sandbox (AC-NF-1 ordering)');
-is($by_pos{middle}[$last-8]{class},  'Amin::Net::Fabric',      'spec middle idx -9 = Net::Fabric');
-is($by_pos{middle}[$last-7]{class},  'Amin::AI::Inference',    'spec middle idx -8 = AI::Inference');
-is($by_pos{middle}[$last-6]{class},  'Amin::AI::Music',        'spec middle idx -7 = AI::Music (Suno-like generation)');
+is($by_pos{middle}[$last-13]{class}, 'Amin::Command::Exec',    'spec middle idx -14 = Exec');
+is($by_pos{middle}[$last-12]{class}, 'Amin::Command::Spawn',   'spec middle idx -13 = Spawn');
+is($by_pos{middle}[$last-11]{class}, 'Amin::Command::Signal',  'spec middle idx -12 = Signal');
+is($by_pos{middle}[$last-10]{class}, 'Amin::Sandbox',          'spec middle idx -11 = Sandbox (AC-NF-1 ordering)');
+is($by_pos{middle}[$last-9]{class},  'Amin::Net::Fabric',      'spec middle idx -10 = Net::Fabric');
+is($by_pos{middle}[$last-8]{class},  'Amin::AI::Inference',    'spec middle idx -9 = AI::Inference');
+is($by_pos{middle}[$last-7]{class},  'Amin::AI::Music',        'spec middle idx -8 = AI::Music (Suno-like generation)');
+is($by_pos{middle}[$last-6]{class},  'Amin::AI::Models',       'spec middle idx -7 = AI::Models (discovery: provider catalog)');
 is($by_pos{middle}[$last-5]{class},  'Amin::AI::Embed',        'spec middle idx -6 = AI::Embed (RAG memory ingest)');
 is($by_pos{middle}[$last-4]{class},  'Amin::AI::Memory',       'spec middle idx -5 = AI::Memory (RAG retrieval)');
 is($by_pos{middle}[$last-3]{class},  'Amin::Filter::Crypto::RatchetOpen',
@@ -88,8 +89,8 @@ is($by_pos{middle}[$last-1]{class},  'Amin::Filter::Crypto::Prekey',
     'spec middle idx -2 = sec::Prekey (responder role; element=prekey)');
 is($by_pos{middle}[$last]{class},   'Amin::Filter::Storage::Bitcache',
     'spec middle idx -1 = Bitcache (innermost of middle array; spec-declared)');
-is(scalar($by_pos{middle}->@*), 283,
-    'spec middle position count = 283 (268 commands incl. Download + UCC::Sales/UCC::Instruments + Exec/Spawn/Signal + Sandbox/Net + AI::Inference/Music/Embed/Memory + sec::RatchetOpen/sec::Prekey×2 + Bitcache)');
+is(scalar($by_pos{middle}->@*), 284,
+    'spec middle position count = 284 (268 commands incl. Download + UCC::Sales/UCC::Instruments + Exec/Spawn/Signal + Sandbox/Net + AI::Inference/Music/Models/Embed/Memory + sec::RatchetOpen/sec::Prekey×2 + Bitcache)');
 
 is($by_pos{begin}[0]{class}, 'Amin::Auth::ZCap',
     'spec begin idx 0 = Auth::ZCap (outermost, fires first auth boundary)');

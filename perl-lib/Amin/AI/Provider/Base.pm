@@ -61,6 +61,16 @@ sub terminal ($self, $job) {
 sub submit ($self, $req) { return { state => 'error', msg => ref($self) . ' has no submit' } }
 sub poll   ($self, $job) { return $job }
 
+# Where the provider's model list lives relative to base.  The OpenAI-compatible
+# shape is {base}/models; an adapter whose base is not /v1 overrides this.
+sub models_path ($self) { 'models' }
+
+# Discovery hop: the model catalog as { ok => 1, obj => … } (or ok => 0, msg).
+# The filter never branches on provider shape beyond this.
+sub list_models ($self) {
+    return $self->get_json($self->join_url($self->{base} // '', $self->models_path));
+}
+
 # Seconds the driving filter waits between polls; providers override (the
 # offline stub returns 0 so tests never sleep).
 sub poll_delay ($self) { 1 }

@@ -11,4 +11,8 @@ use parent 'Amin::AI::Provider::AsyncHttp';
 sub submit_path ($self) { 'v1/inference/%s' }
 sub poll_path   ($self) { 'v1/inference/%s/%s' }
 
+# The task API base is https://api.deepinfra.com; its model list is exposed on
+# the OpenAI-compatible surface.
+sub models_path  ($self) { 'v1/openai/models' }
+
 1;

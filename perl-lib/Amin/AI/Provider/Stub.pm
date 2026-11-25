@@ -16,6 +16,14 @@ sub submit ($self, $req) {
 sub has_hop   ($self) { 1 }
 sub poll_delay ($self) { 0 }
 
+# Offline discovery: one deterministic music model so the settings→models flow
+# works with no network, exactly as submit/poll does.
+sub list_models ($self) {
+    return { ok => 1, obj => { data => [
+        { id => 'stub-music', name => 'Stub Music', kind => 'music' },
+    ] } };
+}
+
 sub poll ($self, $job) {
     my $p = ($job->{progress} // 0) + 50;
     return { %$job, progress => $p } if $p < 100;
