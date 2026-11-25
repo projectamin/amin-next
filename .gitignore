@@ -34,7 +34,9 @@ cover_db/
 # ── Rust / Cargo specific ──────────────────────────────────────────
 # Cargo workspace build artifacts (CARGO_TARGET_DIR=$ROOT/target per .mise.toml)
 /target/
-**/target/
+# Scoped to the Rust tree: a bare **/target/ also matches perl-lib/Amin/UI/Target/
+# on case-insensitive filesystems (macOS), silently hiding new target modules.
+rust/**/target/
 # Cargo.lock for libraries; we pin binaries so keep it!  (Explicitly NOT gitignored)
 # Uncomment next line if this becomes a pure-library workspace only:
 # /rust/target/Cargo.lock
